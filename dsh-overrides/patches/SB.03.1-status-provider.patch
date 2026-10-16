@@ -1,0 +1,43 @@
+# Goal:      строка provider-роута в /status
+# Family:    SB.03
+# Status:    live
+# Files:     lib/types/screens/Chat.js, lib/types/i18n.js, lib/types/i18n.d.ts
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-12, W3
+
+--- a/lib/types/screens/Chat.js	2026-09-12 02:05:44.051171526 +0300
++++ b/lib/types/screens/Chat.js	2026-09-12 02:05:56.693588002 +0300
+@@ -1574,6 +1574,9 @@
+                     : Math.max(0, Math.min(100, Math.round((channel.tokens.input / channel.contextWindow) * 100)));
+                 const lines = [
+                     `${t('status-model', { model: channel.model })}${channel.reasoningEffort ? ` · ${capitalize(channel.reasoningEffort)} effort` : ''}`,
++                    // dsh-overrides 16: show which provider route (bg/cli/...)
++                    // the session is on; channel.provider already tracks it.
++                    ...(channel.provider !== '' ? [t('status-provider', { provider: channel.provider })] : []),
+                     `${t('status-state', { state: channel.working ? t('status-working') : t('status-idle') })}`,
+                     `${t('status-session', { id: channel.agentId })}`,
+                     `${t('status-dir', { cwd: channel.displayCwd })}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
+--- a/lib/types/i18n.js	2026-09-12 02:05:44.052171559 +0300
++++ b/lib/types/i18n.js	2026-09-12 02:05:56.694588035 +0300
+@@ -260,6 +260,7 @@
+     'theme-switched-saved': { zh: '主题已切换：{{name}}（已保存）', en: 'Theme switched: {{name}} (saved)' },
+     'theme-unknown': { zh: '未知主题「{{name}}」· /theme 查看全部', en: 'Unknown theme "{{name}}" · /theme to view all' },
+     'status-model': { zh: '模型   {{model}}', en: 'Model   {{model}}' },
++    'status-provider': { zh: '提供商   {{provider}}', en: 'Provider   {{provider}}' },
+     'status-working': { zh: '工作中', en: 'working' },
+     'status-idle': { zh: '空闲', en: 'idle' },
+     'status-state': { zh: '状态   {{state}}', en: 'Status   {{state}}' },
+--- a/lib/types/i18n.d.ts	2026-09-12
++++ b/lib/types/i18n.d.ts	2026-09-12 02:05:56.695588068 +0300
+@@ -836,6 +836,10 @@
+         readonly zh: "模型   {{model}}";
+         readonly en: "Model   {{model}}";
+     };
++    readonly 'status-provider': {
++        readonly zh: "提供商   {{provider}}";
++        readonly en: "Provider   {{provider}}";
++    };
+     readonly 'status-working': {
+         readonly zh: "工作中";
+         readonly en: "working";

@@ -1,0 +1,231 @@
+# dsh-footer-gap.yaml — SOC verify suite for footer-gap (patch 45 verification)
+# TG-DSH-TUI-LAYOUT-FIX-20260917 node 2: Colab RED/GREEN evidence for patch 45
+# (StatusLine.js powerline-row height:1+overflow:hidden + wrap:truncate on
+# 3 separators). Detector: last_row_nonempty (last line of pane has content
+# = gapBelow=0; empty = gap). Full statusBar (compact:false, all fields on)
+# triggers powerline overflow — without patch 45 the row hard-wraps to 2-4
+# lines, producing empty whitespace at screen bottom (the gap).
+# Inline mode (fullscreen:false), fake-model (zero real tokens).
+# Widths: 120×40 (gap=1 without patch) and 80×24 (gap=3 without patch).
+program: dsh-footer-gap
+lane: colab
+vars:
+  sess: dsh-fgap
+  frames: /root/dsh-fgap-frames
+  work: /root/dsh-fgap
+  mode: /root/dsh-fgap-frames/mode
+  pin: /tmp/dsh-pin-trace.log
+
+setup:
+  - id: dirs_init
+    run: 'mkdir -p $frames $work $mode && rm -rf $frames/* $work/* $mode/* && echo DIRS_OK'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: sess_kill
+    run: 'tmux kill-session -t $sess 2>/dev/null; true'
+    timeout: 180
+    ignore_error: true
+    idempotent: true
+    retry: 2
+  - id: sess_new
+    run: 'tmux kill-session -t $sess 2>/dev/null; true; tmux new-session -d -s $sess -x 120 -y 40'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: term_overrides
+    run: 'tmux set -as terminal-overrides ",xterm-256color:Tc"'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # Full statusBar (all fields on, compact false) — triggers powerline row
+  # overflow at 120/80 cols. This is the user config from the local probe
+  # (reports/footer-gap-20260917/footer-gap-probe.mjs USER_STATUS_BAR).
+  - id: parity_settings
+    run: |
+      cp /root/.dsh/settings.yaml /root/.dsh/settings.yaml.fgap-backup 2>/dev/null || true
+      awk '/^dsh-tui:/{s=1} s==1 && /^[^[:space:]#]/ && !/^dsh-tui:/{s=0} s==0{print}' /root/.dsh/settings.yaml > /root/.dsh/settings.yaml.new
+      cat >> /root/.dsh/settings.yaml.new <<'TUIEOF'
+      dsh-tui:
+        statusBar:
+          tokens: true
+          compact: false
+          contextBar: true
+          mode: true
+          tps: true
+          trajectory: true
+          shortcutHint: true
+          activity: true
+          cache: true
+          gitBranch: true
+          spending: true
+          compactProgress: true
+          compactThresholdRatio: 0.4768
+          sessionTitle: false
+          sessionId: false
+          cwd: true
+          ctxBarMode: percent-only
+        fullscreen: false
+        minimal: false
+        toolBackground: subtle
+        appearance:
+          powerline: full
+          theme: tokyonight-moon
+          inputBorder: "#7aa2f7"
+          animations: full
+      TUIEOF
+      mv /root/.dsh/settings.yaml.new /root/.dsh/settings.yaml
+      cp /root/.dsh/settings.yaml $mode/settings-parity.txt
+      grep -n 'fullscreen' /root/.dsh/settings.yaml > $mode/settings-fullscreen.txt 2>/dev/null || echo 'NO_FULLSCREEN_KEY' > $mode/settings-fullscreen.txt
+      echo PARITY_APPLIED
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: parity_marker
+    run: |
+      mkdir -p /root/.dsh-tui
+      if [ ! -f /root/.dsh-tui/migrations.json ]; then
+        printf '{\n  "fullscreen-factory-default": "2026-08-29T00:00:00.000Z"\n}\n' > /root/.dsh-tui/migrations.json
+      fi
+      test -f /root/.dsh-tui/migrations.json && echo MARKER_PRESENT
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # Boot dsh TUI with fake-model (zero real tokens). Pin-trace for diagnostics.
+  # Self-healing boot: kill+relaunch up to 3 attempts (flaky agent-bootstrap).
+  - id: boot_launch
+    run: |
+      dsh_launch() {
+        rm -f $pin
+        tmux send-keys -t $sess "FAKE_LLM_KEY=fake-local-key DSH_TUI_PIN_TRACE=1 dsh --profile $(cat /root/.dsh-live-target) 2/root/dsh-fgap-boot.err" Enter
+      }
+      boot_poll() {
+        for i in $(seq 1 $1); do
+          tmux capture-pane -p -t $sess > $mode/boot.txt
+          if grep -qE '❯|for shortcuts' $mode/boot.txt; then return 0; fi
+          sleep 1
+        done
+        return 1
+      }
+      dsh_launch
+      for attempt in 1 2 3; do
+        if boot_poll 60; then echo "BOOT_READY (attempt $attempt)"; exit 0; fi
+        echo "BOOT_RETRY attempt=$attempt: hung TUI, kill + relaunch"
+        tmux send-keys -t $sess C-c 2>/dev/null || true
+        sleep 1
+        pkill -f '/usr/local/bin/dsh --profile' 2>/dev/null || true
+        sleep 2
+        tmux send-keys -t $sess reset Enter 2>/dev/null || true
+        sleep 1
+        dsh_launch
+      done
+      echo NOT_READY
+      exit 1
+    timeout: 320
+    idempotent: true
+    retry: 2
+  # Warmup: first turn consumes SCENARIO marker (fake-llm default = short).
+  # After warmup: non-empty history, status bar visible with powerline row.
+  - id: warmup_short
+    run: |
+      tmux capture-pane -p -t $sess | { grep -c '●' > $work/warmup-base.txt || true; }; true
+      tmux send-keys -t $sess "SCENARIO:short привет, ответь кратко" Enter
+      base=$(cat $work/warmup-base.txt)
+      for w in $(seq 1 45); do
+        tmux capture-pane -p -t $sess > $work/warmup-done.txt
+        n=$(grep -c '●' $work/warmup-done.txt || true)
+        [ "$n" -gt "$base" ] && { echo WARMUP_DONE; exit 0; }
+        sleep 2
+      done
+      echo WARMUP_TIMEOUT
+      exit 1
+    timeout: 180
+    idempotent: true
+    retry: 2
+
+tests:
+  # Footer-gap detector at 120×40 (inline mode).
+  # last_row_nonempty: last line of pane has non-whitespace content = 1 (PASS).
+  # Without patch 45: powerline row wraps to 2 lines → last line empty → 0 (FAIL).
+  # With patch 45: row clamped to height:1 → last line has content → 1 (PASS).
+  - name: footer_gap_120_inline
+    steps:
+      - run: |
+          tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; sleep 0.5
+          tmux resize-window -t $sess -x 120 -y 40; sleep 1.5
+          tmux capture-pane -p -t $sess > $frames/fgap-120-inline.txt
+          LAST_LINE=$(tmux capture-pane -p -t $sess | tail -1)
+          if echo "$LAST_LINE" | grep -q '[^[:space:]]'; then
+            echo "DETECTOR footer_gap_120_inline: last_row_nonempty=1 gapBelow=0 (PASS: статус-бар прижат к низу)"
+            exit 0
+          else
+            echo "DETECTOR footer_gap_120_inline: last_row_nonempty=0 gapBelow>0 (FAIL: щель под статус-баром)"
+            exit 1
+          fi
+        timeout: 180
+        idempotent: true
+        retry: 2
+
+  # Footer-gap detector at 80×24 (inline mode, narrow width).
+  # Without patch 45: powerline row wraps to 3-4 lines → gap=3 → FAIL.
+  # With patch 45: row clamped → gap=0 → PASS.
+  - name: footer_gap_80_inline
+    steps:
+      - run: |
+          tmux resize-window -t $sess -x 80 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $frames/fgap-80-inline.txt
+          LAST_LINE=$(tmux capture-pane -p -t $sess | tail -1)
+          if echo "$LAST_LINE" | grep -q '[^[:space:]]'; then
+            echo "DETECTOR footer_gap_80_inline: last_row_nonempty=1 gapBelow=0 (PASS: статус-бар прижат к низу)"
+            exit 0
+          else
+            echo "DETECTOR footer_gap_80_inline: last_row_nonempty=0 gapBelow>0 (FAIL: щель под статус-баром, узкая ширина)"
+            exit 1
+          fi
+        timeout: 180
+        idempotent: true
+        retry: 2
+
+  # Fullscreen frames at 120×40 and 80×24 (evidence capture, no gap detector).
+  # Fullscreen mode uses alt-screen — the footer-gap bug is inline-specific
+  # (fullscreen renders differently). These frames confirm the status bar
+  # renders correctly in fullscreen at both widths.
+  - name: fullscreen_frames
+    steps:
+      - run: |
+          # Switch to fullscreen mode
+          sed -i 's/fullscreen: false/fullscreen: true/' /root/.dsh/settings.yaml
+          tmux send-keys -t $sess C-c; sleep 0.5
+          pkill -f '/usr/local/bin/dsh --profile' 2>/dev/null || true
+          sleep 2
+          tmux send-keys -t $sess "FAKE_LLM_KEY=fake-local-key DSH_TUI_PIN_TRACE=1 dsh --profile $(cat /root/.dsh-live-target) 2/root/dsh-fgap-fs.err" Enter
+          for i in $(seq 1 60); do
+            tmux capture-pane -p -t $sess > $mode/fs-boot.txt
+            if grep -qE '❯|for shortcuts' $mode/fs-boot.txt; then echo "FS_BOOT_READY"; break; fi
+            sleep 1
+          done
+          grep -qE '❯|for shortcuts' $mode/fs-boot.txt || { echo FS_BOOT_TIMEOUT; exit 0; }
+        timeout: 180
+        idempotent: true
+        retry: 2
+      - run: |
+          tmux resize-window -t $sess -x 120 -y 40; sleep 1.5
+          tmux capture-pane -p -t $sess > $frames/fgap-120-fullscreen.txt
+          echo "DETECTOR fullscreen_120: frame_captured=1 (evidence: статус-бар в fullscreen 120×40)"
+        timeout: 180
+        idempotent: true
+        retry: 2
+      - run: |
+          tmux resize-window -t $sess -x 80 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $frames/fgap-80-fullscreen.txt
+          echo "DETECTOR fullscreen_80: frame_captured=1 (evidence: статус-бар в fullscreen 80×24)"
+        timeout: 180
+        idempotent: true
+        retry: 2
+      - run: |
+          # Restore inline mode
+          sed -i 's/fullscreen: true/fullscreen: false/' /root/.dsh/settings.yaml
+          echo INLINE_RESTORED
+        timeout: 60
+        idempotent: true
+        retry: 2

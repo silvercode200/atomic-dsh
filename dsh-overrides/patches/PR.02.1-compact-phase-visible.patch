@@ -1,0 +1,132 @@
+# Goal:      компакция-фаза видима в статус-баре
+# Family:    PR.02
+# Status:    live
+# Files:     lib/types/dsh-adapter/channel.js
+# Evidence:  TG-DSH-REBUILD-20260921 узел 7;
+#            reports/colab-w3v58s-20260922T085756Z/
+# Upstream:  not-applicable
+# Added:     2026-09-22 (TG-DSH-REBUILD-20260921 узел 7)
+
+# 58-compact-phase-visible (TG-DSH-REBUILD-20260921, узел 7 item 7.3 —
+# C5 «компакция: фаза видима», канон §3): фаза компакции получает живой
+# индикатор на всё окно /compact.
+# Сток: state.notify(t('compact-working')) — toast 4с при окне суммаризации
+#   ~45-50с (fake: delayMs 4с + repeatMs 45с; прод-LLM тоже десятки секунд),
+#   затем десятки секунд НУЛЕВОЙ индикации, завершение — событие+toast
+#   (строка 'Conversation compacted' в транскрипте уже была — renderEvent
+#   user/message source=plugin:compact).
+# Фикс (3 части, всё в channel.js):
+#   1) notify(): dismiss-хэндл получает .update(text) — обновление текста
+#      уведомления IN PLACE (мутация item.text + emit). Слот уведомлений —
+#      фиксированная строка height-1 (overflow hidden, truncate) в футере
+#      (патч 02): текст меняется, высота НЕТ (инвариант 48), без ED-клиров
+#      (55c: только in-place репейнт диффа).
+#   2) compact(): фазовый notice sticky (timeoutMs 0) + тикер 1с:
+#      '⠋ Compacting conversation… Ns' (брайль-кадр вращается, сек растут).
+#      Слот занят ВЕСЬ период фазы → «фаза видима» весь окно (C5).
+#   3) завершение: ветки done/nothing/failed/persistence/cancelled пушат
+#      свой результирующий toast ДО снятия фазового notice (settled.finally(
+#      endPhase) в конце цепочки) — слот замещается на месте, без
+#      разрыва-восстановления строки на границе фазы.
+# Ранние return'ы (veto/stale/while-working) идут ДО подъёма фазового
+# notice — утечек нет; sync-throw compactNow покрыт settled.finally.
+# Инвариант 48: единственные события высоты слота = появление в t0 фазы и
+# освобождение после settle — те же границы, что у любого toast сегодня;
+# ВНУТРИ фазы высота константна (пин слота height-1), осцилляции нет.
+# Доказательства: reports/statusbar-fix-20260919/compact-visible-probe.mjs
+# (+ -result.txt): pty-прогон настоящего dsh (fake-llm localhost) —
+# RED на стеке 01-57 (фаза невидима после смерти 4с-тоста), GREEN на 01-58
+# (индикация в каждый тик фазы, высота футера стабильна, строка завершения
+# 'Conversation compacted' в транскрипте).
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -1973,6 +1973,24 @@
+     let manualCompaction;
+     /** Compactions cancelled by settleManualCompaction: their rejection is expected. */
+     const cancelledCompactions = new WeakSet();
++    // dsh-overrides 58 (C5): braille frames for the compaction PHASE indicator.
++    // Canon §3 requires the whole compaction window (~tens of seconds) to be
++    // user-visible — the stock 4s toast dies mid-phase leaving zero indication.
++    const COMPACT_PHASE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
++    /**
++     * Build the phase-indicator text: spinner frame + i18n message + elapsed
++     * seconds. Called once at phase start and again on every 1s tick.
++     *
++     * @param {number} phaseStart - Date.now() of the phase start
++     * @returns {string} one line of terminal cells (the notice slot is a
++     *   fixed height-1 row with overflow hidden — text length never changes
++     *   the footer height, invariant 48)
++     */
++    const compactPhaseText = (phaseStart) => {
++        const elapsed = Math.max(0, Math.floor((Date.now() - phaseStart) / 1000));
++        const frame = COMPACT_PHASE_FRAMES[elapsed % COMPACT_PHASE_FRAMES.length];
++        return `${frame} ${t('compact-working')} ${elapsed}s`;
++    };
+     /**
+      * Cancel an in-flight manual compaction and wait for it to settle.
+      * Aborting tears the summarizer stream down; dsh-compaction then closes
+@@ -4189,11 +4207,24 @@
+             const expire = item.timeoutMs > 0 ? setTimeout(remove, item.timeoutMs) : undefined;
+             // Early-dismiss handle for flows that know their notice went stale
+             // (e.g. a decision-parked indicator whose decision just landed).
+-            return () => {
++            const dismiss = () => {
+                 if (expire !== undefined)
+                     clearTimeout(expire);
+                 remove();
+             };
++            // dsh-overrides 58 (C5): in-place text update for long-lived phase
++            // indicators (compaction). The notice row is a fixed height-1 slot;
++            // updating the text keeps the footer height pinned (invariant 48)
++            // for the whole phase, where remove+push would re-key the row.
++            // A late tick after dismissal is a no-op — a dismissed indicator
++            // must never resurrect itself.
++            dismiss.update = (nextText) => {
++                if (state.notifications.indexOf(item) < 0)
++                    return;
++                item.text = nextText;
++                state.emit();
++            };
++            return dismiss;
+         },
+         setDiffLayout(layout) {
+             if (layout === state.diffLayout)
+@@ -5335,7 +5366,23 @@
+                     return;
+                 }
+                 const controller = new AbortController();
+-                state.notify(t('compact-working'));
++                // dsh-overrides 58 (C5, canon §3): the compaction PHASE must
++                // stay visible for its whole window. Stock behavior: a 4s
++                // "Compacting" toast, then tens of seconds of silence until the
++                // completion event. Fix: a sticky notice (timeoutMs 0) whose
++                // text ticks in place every second (spinner frame + elapsed) —
++                // the notice slot is a fixed height-1 row, so the footer height
++                // never oscillates mid-phase (invariant 48; in-place update,
++                // no ED clears per 55c). Completion replaces the slot text with
++                // the result toast BEFORE the phase notice is removed, so the
++                // row never tears down and back up at the phase boundary.
++                const phaseStart = Date.now();
++                const dismissPhase = state.notify(compactPhaseText(phaseStart), { timeoutMs: 0 });
++                const phaseTick = setInterval(() => { dismissPhase.update(compactPhaseText(phaseStart)); }, 1000);
++                const endPhase = () => {
++                    clearInterval(phaseTick);
++                    dismissPhase();
++                };
+                 // Register the in-flight transaction so any agent-replacing path
+                 // (rewind/resume/new/model switch) can cancel it before snapshotting
+                 // the session — see settleManualCompaction. `settled` never rejects:
+@@ -5367,7 +5414,12 @@
+                         state.notify(t('compact-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 });
+                     }
+                 })();
+-                manualCompaction = { controller, settled };
++                // dsh-overrides 58: endPhase rides the SAME settle chain — every
++                // outcome (done/nothing/failed/cancelled/persistence) stops the
++                // 1s ticker and drops the phase notice; the completion toast was
++                // already pushed inside, so the notice row is replaced in place
++                // (or freed when the branch had nothing to add, e.g. a cancel).
++                manualCompaction = { controller, settled: settled.finally(endPhase) };
+                 void settled.finally(() => {
+                     if (manualCompaction?.controller === controller)
+                         manualCompaction = undefined;

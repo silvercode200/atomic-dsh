@@ -1,0 +1,605 @@
+# Goal:      минимум-метрика статус-бара (инвариант 8 канона)
+# Family:    SB.08
+# Status:    live
+# Files:     lib/types/screens/StatusLine.js, lib/types/effectsPrefs.js,
+#            lib/types/components/hubSettings.js
+# Evidence:  TG-DSH-REBUILD-20260921 узел 7.3;
+#            reports/colab-w2v567s-20260922T035827Z/
+# Upstream:  not-applicable
+# Added:     2026-09-22 (TG-DSH-REBUILD-20260921 узел 7.3)
+
+# 56-statusbar-minimum-metric (TG-DSH-REBUILD-20260921, узел 7 item 7.3 —
+# A9, инвариант 8 канона STATUS-BAR-CANON.md §1.8): «model ✦ +
+# контекст-метрика (⚡ или comp) на каждой ширине ≥40» — минимум не
+# дропается НИКОГДА (канон §2). ВЕРСИЯ 2 (итерация 2, e5-фикс; v1 =
+# f06e07f). Маркер-строка MARKERS сменена с v1 (ловушка идемпотентности:
+# одинаковые маркеры разных версий = молчаливый skip при деплое).
+# Root-cause A9 (бисекция узла 4): патчи 50/51 ввели целочисленный дроп
+#   (fitFieldParts + цепь powerline с pop справа-налево) БЕЗ защищённого
+#   минимума: на w40-70 powerline-цепь выкидывала ⚡-сегмент первым,
+#   tail-поля (comp) не выживали — юзер w47 в зоне (live ×2).
+# Root-cause e5-регрессии v1 (VM w2, colab-w2v567s-20260922T035827Z,
+#   slash-47x43.ansi L42, детектор e5_color_contrast): v1 защитил ctx →
+#   НОВОЕ соседство [model][ctx]; в теме юзера tokyonight-moon
+#   resolved-цвета claude == toolDotWrite == #c099ff (ansi256 183) →
+#   клин между ними fg=183 при bg=183 — НЕВИДИМ (invisible_runs=1).
+#   До v1 соседства не существовало (ctx дропался раньше cwd).
+# Фикс v1 — защищённая пара + ступени компактных форм:
+# 1. fitFieldParts(parts, budget, protect): защищённые ключи (Set) не
+#    шредятся как sub-stubs и не дропаются; при нехватке идут вниз по
+#    ступеням compact-рангов (part.compact — узкий альтернативный node),
+#    сначала самая большая экономия; дроп пары разрешён только когда не
+#    влезает даже компактная форма (w<40 — вне канона).
+# 2. Цепь powerline (buildPowerlineSegments, protectCtx): pop пропускает
+#    защищённый ctx-сегмент (жертвуют timer/git/cwd раньше), при остатке
+#    [model+ctx] ctx ступает на percent-only ранг (переиспользована форма
+#    ctxBarMode='percent-only': ` ⚡ 41% `), затем model на ` ✦ glm… `.
+# 3. Настройка «Minimum metric» (решение юзера §5.2): строка в хабе
+#    /effects (группа hub-effects, язык EN), persist в
+#    ~/.dsh-tui/effects.json (top-level minimumMetric), консьюмер —
+#    StatusLine (minimumMetricPref, кэш модуля); переключение живое
+#    (channel.emit). Компакт-ряд: ctxNode-бокс уступает выбранной comp.
+# Фикс v2 — e5, инвариант 6 (fused-заливки): PowerlineChain НЕ рисует
+#    клин на границе сегментов с ОДИНАКОВЫМИ resolved-цветами (слитый
+#    блок — powerline-стандарт; глиф был бы fg=from==bg=to, невидим);
+#    клинья на контрастных границах и trailing — рисуются как раньше.
+# Сепаратор-инвариант 2: компактные формы — целые поля с сепаратором.
+# Доказательства:
+#   reports/statusbar-fix-20260919/a9-minimum-metric-probe.mjs — RED на
+#     стеке 01-55 (ctx_lost w40-70, exit=1, -RED-pre56.txt) → GREEN
+#     (свип w40-240 model+ctx/comp на каждой ширине ≥40, переключение
+#     ctx↔comp меняет защищённое поле, exit=0);
+#   reports/statusbar-fix-20260919/e5-wedge-contrast-probe.mjs (v2) —
+#     юзер-парити (тема tokyonight-moon, 47×43, ctxBarMode=percent-only):
+#     RED на v1 (fused-клин model→ctx в ряду: gap=' ', e5-FAIL w40-50,
+#     exit=1, -RED-iter1.txt; VM: invisible_runs=1 fg==bg=183) → GREEN на
+#     v2: fused-граница без глифа, контрастные границы + trailing держат
+#     клинья, инвариант 8 держится, exit=0.
+# Ловушка итерации 2 (зафиксирована в комментарии пробы): headless-рендер
+#   на стеке 52+ эмитит статус-ряд БЕЗ SGR и с [nC-дырами (styleId ячеек
+#   frontFrame = 0 у всех; на стеке 51 стиль-смены были) — ANSI-детектор
+#   клиньев по кумулятивному SGR в headless невозможен до починки; проба
+#   e5 детектит по frontFrame-тексту ряда (U+E0B0 на границах). НЕ мой
+#   write-set (55c/inline-путь) — передано родителю.
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -11,6 +11,9 @@
+ import { formatContextUsage, DEFAULT_STATUS_BAR, compactCwd, normalizePowerlineStyle, normalizeStatusBar, subCells } from '../tuiDisplayPrefs.js';
+ // dsh-overrides 42: braille sparklines (opt-in).
+ import { cacheHitPct, newBuffer, pushSample, sparkline } from '../sparkline.js';
++// dsh-overrides 56: the invariant-8 minimum metric (canon §1.8 + §5.2 —
++// which context metric survives on narrow rows is a hub-effects setting).
++import { minimumMetricPref } from '../effectsPrefs.js';
+ import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js';
+ import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js';
+ import { GoalStatusChip } from '../components/GoalTodoPanel.js';
+@@ -82,6 +85,20 @@
+ // so truncation eats the trailing number, never the gauge's ▏ frame.
+ const FIELD_SEP_WIDTH = 3;
+ const MIN_FIELD_COLS = 6;
++// dsh-overrides 56: compact-form rung for the protected model field (the
++// invariant-8 minimum pair, canon §1.8): 'glm-5.3' → 'glm…' (cut at the
++// first '-' or '.'), a 6+ char delimiter-free name compresses to 5+'…',
++// short names stay whole. The mks substitution suffix drops with the rung.
++function compactModelName(model) {
++    if (typeof model !== 'string' || model === '')
++        return model;
++    const cut = model.search(/[-.]/);
++    if (cut === -1)
++        return model.length > 6 ? `${model.slice(0, 5)}…` : model;
++    if (cut === 0)
++        return model.length > 6 ? `${model.slice(0, 5)}…` : model;
++    return `${model.slice(0, cut)}…`;
++}
+ function textNodeWidth(node) {
+     if (node === null || node === undefined || node === false || node === true)
+         return 0;
+@@ -100,15 +117,69 @@
+     return parts.reduce((sum, part) => sum + fieldPartWidth(part), 0)
+         + FIELD_SEP_WIDTH * Math.max(0, parts.length - 1);
+ }
+-function fitFieldParts(parts, budget) {
++/**
++ * dsh-overrides 51: integer drop under width pressure — keep only the
++ * leading fields that fit WHOLE (sub-stub fields shed first, then
++ * right-to-left drops).
++ * dsh-overrides 56: `protect` (a Set of field keys — the invariant-8
++ * minimum pair, canon §1.8) exempts its keys from every drop: protected
++ * fields survive the sub-stub shed and the right-to-left sacrifice; when
++ * even dropping every unprotected field is not enough they step down to
++ * their `compact` rung (a narrower alternative node — 'glm…', 'ctx 86k')
++ * biggest saving first. Only a protected field that cannot fit even in
++ * its compact form drops (in practice w<40 — outside the canon).
++ */
++function fitFieldParts(parts, budget, protect) {
+     if (fieldListWidth(parts) <= budget)
+         return parts;
++    const isProtected = (part) => protect !== undefined && protect.has(part.key);
+     // dsh-overrides 51: under pressure shed sub-stub fields first (a
+     // <MIN_FIELD_COLS sliver + its 3-cell separator informs nothing), then
+     // drop trailing fields right-to-left until the group fits WHOLE.
+-    let kept = parts.filter(part => fieldPartWidth(part) >= MIN_FIELD_COLS);
+-    while (kept.length > 0 && fieldListWidth(kept) > budget)
+-        kept = kept.slice(0, -1);
++    // dsh-overrides 56: protected keys never shed as sub-stubs.
++    let kept = parts.filter(part => fieldPartWidth(part) >= MIN_FIELD_COLS || isProtected(part));
++    // dsh-overrides 56: drop the rightmost UNPROTECTED field — the pair
++    // keeps its slot while ordinary fields sacrifice per canon §2.
++    while (kept.length > 0 && fieldListWidth(kept) > budget) {
++        let dropAt = -1;
++        for (let i = kept.length - 1; i >= 0; i--) {
++            if (!isProtected(kept[i])) {
++                dropAt = i;
++                break;
++            }
++        }
++        if (dropAt < 0)
++            break; // only protected fields remain — compact rungs next
++        kept = kept.filter((_, i) => i !== dropAt);
++    }
++    // dsh-overrides 56: compact rungs — swap protected fields to their
++    // `compact` node one rung at a time (widest saving first: the ctx
++    // metric before the model name) until the group fits.
++    if (protect !== undefined) {
++        while (kept.length > 0 && fieldListWidth(kept) > budget) {
++            let swapAt = -1;
++            let swapSaving = 0;
++            for (let i = 0; i < kept.length; i++) {
++                const part = kept[i];
++                if (!isProtected(part) || part.compact === undefined)
++                    continue;
++                const saving = fieldPartWidth(part) - textNodeWidth(part.compact);
++                if (saving > swapSaving) {
++                    swapSaving = saving;
++                    swapAt = i;
++                }
++            }
++            if (swapAt < 0)
++                break; // rungs spent
++            kept = kept.slice();
++            const part = kept[swapAt];
++            kept[swapAt] = { ...part, node: part.compact, compact: undefined };
++        }
++        // Rungs spent and still over budget (w<40): honest right-to-left
++        // drop, protection included — the canon floor does not reach there.
++        while (kept.length > 0 && fieldListWidth(kept) > budget)
++            kept = kept.slice(0, -1);
++    }
+     return kept;
+ }
+ /**
+@@ -242,13 +313,17 @@
+  * renders the segment INCLUDING its leading separator, so the chain is a
+  * flat list of flexShrink:0 boxes that never wrap or reflow.
+  */
+-function buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual, hoverProps, columns, themeName, }) {
++function buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual, hoverProps, columns, themeName, protectCtx = false, }) {
+     const plain = powerlineStyle(channel) === 'plain';
+     const sepWidth = plain ? 3 : 1;
+     const modelSuffix = mksActual !== undefined && mksActual !== channel.model
+         ? ` → ${mksActual}`
+         : '';
+     const modelText = ` ✦ ${channel.model}${modelSuffix} `;
++    // dsh-overrides 56: the model segment's compact rung (the invariant-8
++    // minimum pair, canon §1.8) — ` ✦ glm… ` when the full name cannot
++    // fit; the mks substitution suffix drops with the rung.
++    const modelCompactText = ` ✦ ${compactModelName(channel.model)} `;
+     const segments = [];
+     const add = (key, bgKey, width, node) => {
+         segments.push({ key, bgKey, width, node });
+@@ -262,6 +337,12 @@
+         const gitText = ` ⎇ ${channel.gitBranch} `;
+         add('git', 'success', stringWidth(gitText), _jsx(PowerlineSegment, { bg: "success", fg: "inverseText", plain: plain, children: gitText }, "git"));
+     }
++    // dsh-overrides 56: the ctx segment's two rungs — the configured form
++    // and the percent-only compact (the invariant-8 minimum form, canon
++    // §1.8): it reuses the ctxBarMode='percent-only' shape (` ⚡ N% `);
++    // under width pressure the protected ctx steps down to it instead of
++    // dropping off the chain.
++    let ctxCompactSeg;
+     if (contextUsed !== undefined && channel.contextWindow !== undefined) {
+         const threshold = Math.round(channel.contextWindow * (statusBar.compactThresholdRatio ?? 1));
+         const frac = threshold > 0 ? Math.min(1, Math.max(0, contextUsed / threshold)) : 0;
+@@ -269,30 +350,40 @@
+         // dsh-overrides 40: ctx-bar shape modes — full (6 cells), narrow
+         // (3), percent-only (no bar at all: just the % text).
+         const barMode = statusBar.ctxBarMode ?? 'full';
+-        const barCells = barMode === 'narrow' ? 3 : CTX_BAR_CELLS;
+-        // dsh-overrides 40: sub-cell smoothing (eighths) when on.
+-        const { fill, track } = effectEnabled('subCellBars') && barMode !== 'percent-only'
+-            ? subCells(frac, barCells)
+-            : barMode === 'percent-only' ? { fill: '', track: '' } : ctxBarCells(frac);
+-        const fillKey = pct >= PRESSURE_DANGER_PCT ? 'error' : pct >= PRESSURE_WARN_PCT ? 'warning' : 'inverseText';
+-        const ctxWidth = barMode === 'percent-only' ? 3 + stringWidth(`${pct}%`) + 1 : 3 + barCells + 1 + stringWidth(`${pct}%`) + 1;
+-        // dsh-overrides 40: gradient fill along the bar (barGradientFill)
+-        // paints each cell its own pair color; the breath (patch 34) and
+-        // the gradient stack: breath wraps the gradient at the pressure key.
+-        const gradientOn = effectEnabled('barGradientFill') && barMode !== 'percent-only' && fill !== '';
+-        let fillNode;
+-        if (gradientOn) {
+-            const themeNow = getTheme(themeName);
+-            const gBase = parseRGB(themeNow[fillKey]) ?? { r: 122, g: 162, b: 247 };
+-            const gHi = parseRGB(themeNow.claudeShimmer) ?? { r: 171, g: 194, b: 236 };
+-            const cells = gradientBarFill(fill.length, gBase, gHi, (Math.sin(Date.now() / 1400) + 1) / 2);
+-            fillNode = _jsx(Text, { wrap: "truncate", children: cells.join('') });
+-        }
+-        else if (channel.working && effectEnabled('ctxBarBreath'))
+-            fillNode = _jsx(BreathingCtxFill, { fillKey: fillKey, text: fill });
+-        else
+-            fillNode = _jsx(Text, { color: fillKey, wrap: "truncate", children: fill });
+-        add('ctx', 'toolDotWrite', ctxWidth, _jsxs(PowerlineSegment, { bg: "toolDotWrite", fg: "inverseText", id: "ctx", hoverProps: hoverProps, plain: plain, children: [" ⚡", fillNode, barMode === 'percent-only' ? '' : _jsx(Text, { dimColor: true, wrap: "truncate", children: track }), ` ${pct}% `] }, "ctx"));
++        const ctxSegOf = (mode) => {
++            const barCells = mode === 'narrow' ? 3 : CTX_BAR_CELLS;
++            // dsh-overrides 40: sub-cell smoothing (eighths) when on.
++            const { fill, track } = effectEnabled('subCellBars') && mode !== 'percent-only'
++                ? subCells(frac, barCells)
++                : mode === 'percent-only' ? { fill: '', track: '' } : ctxBarCells(frac);
++            const fillKey = pct >= PRESSURE_DANGER_PCT ? 'error' : pct >= PRESSURE_WARN_PCT ? 'warning' : 'inverseText';
++            const ctxWidth = mode === 'percent-only' ? 3 + stringWidth(`${pct}%`) + 1 : 3 + barCells + 1 + stringWidth(`${pct}%`) + 1;
++            // dsh-overrides 40: gradient fill along the bar (barGradientFill)
++            // paints each cell its own pair color; the breath (patch 34) and
++            // the gradient stack: breath wraps the gradient at the pressure key.
++            const gradientOn = effectEnabled('barGradientFill') && mode !== 'percent-only' && fill !== '';
++            let fillNode;
++            if (gradientOn) {
++                const themeNow = getTheme(themeName);
++                const gBase = parseRGB(themeNow[fillKey]) ?? { r: 122, g: 162, b: 247 };
++                const gHi = parseRGB(themeNow.claudeShimmer) ?? { r: 171, g: 194, b: 236 };
++                const cells = gradientBarFill(fill.length, gBase, gHi, (Math.sin(Date.now() / 1400) + 1) / 2);
++                fillNode = _jsx(Text, { wrap: "truncate", children: cells.join('') });
++            }
++            else if (channel.working && effectEnabled('ctxBarBreath'))
++                fillNode = _jsx(BreathingCtxFill, { fillKey: fillKey, text: fill });
++            else
++                fillNode = _jsx(Text, { color: fillKey, wrap: "truncate", children: fill });
++            return {
++                key: 'ctx',
++                bgKey: 'toolDotWrite',
++                width: ctxWidth,
++                node: _jsxs(PowerlineSegment, { bg: "toolDotWrite", fg: "inverseText", id: "ctx", hoverProps: hoverProps, plain: plain, children: [" ⚡", fillNode, mode === 'percent-only' ? '' : _jsx(Text, { dimColor: true, wrap: "truncate", children: track }), ` ${pct}% `] }, "ctx"),
++            };
++        };
++        const ctxSeg = ctxSegOf(barMode);
++        ctxCompactSeg = ctxSegOf('percent-only');
++        add('ctx', ctxSeg.bgKey, ctxSeg.width, ctxSeg.node);
+     }
+     // dsh-overrides 47: the timer segment is a first-class toggle
+     // (settings.yaml statusBar.timer, default on).
+@@ -312,11 +403,46 @@
+     // stable-width promise of 48 every second. With the reserve the
+     // right-to-left drop fires honestly (timer gone as a whole) instead of
+     // a half-dead fragment; on w82+ the timer survives intact.
++    // dsh-overrides 56 (A9 / invariant 8, canon §1.8): at w>=40 the ctx
++    // segment (when it is the chosen minimum metric) never DROPS — the pop
++    // skips it and its would-be victims (git/cwd) sacrifice first; when
++    // only the protected pair remains, it steps down to compact rungs
++    // (ctx → percent-only ` ⚡ N% `, model → ` ✦ glm… `) before any drop.
++    // A pair that cannot fit even compact is w<40 — outside the canon —
++    // and drops honestly like before.
+     const POWERLINE_TAIL_RESERVE = 15;
+     const budget = columns - 2 - POWERLINE_TAIL_RESERVE;
+     const chainWidth = (list) => list.reduce((sum, s) => sum + s.width + sepWidth, 0);
++    let ctxCompacted = false;
++    let modelCompacted = false;
+     while (segments.length > 1 && chainWidth(segments) > budget) {
+-        segments.pop();
++        // rightmost droppable segment (never index 0 — the model identity,
++        // never the protected ctx)
++        let dropAt = -1;
++        for (let i = segments.length - 1; i >= 1; i--) {
++            if (!(protectCtx && segments[i].key === 'ctx')) {
++                dropAt = i;
++                break;
++            }
++        }
++        if (dropAt >= 0) {
++            segments.splice(dropAt, 1);
++            continue;
++        }
++        // only the protected pair remains — compact rungs, ctx first (its
++        // full form is the widest), then the model name
++        const ctxIdx = segments.findIndex(s => s.key === 'ctx');
++        if (protectCtx && columns >= 40 && ctxIdx >= 0 && !ctxCompacted && ctxCompactSeg !== undefined) {
++            segments[ctxIdx] = ctxCompactSeg;
++            ctxCompacted = true;
++            continue;
++        }
++        if (protectCtx && columns >= 40 && !modelCompacted) {
++            segments[0] = { key: 'model', bgKey: 'claude', width: stringWidth(modelCompactText), node: _jsx(PowerlineSegment, { bg: "claude", fg: "inverseText", id: "model", hoverProps: hoverProps, plain: plain, children: modelCompactText }, "model") };
++            modelCompacted = true;
++            continue;
++        }
++        segments.pop(); // rungs spent / protection off: honest drop
+     }
+     return { segments, plain, sepWidth };
+ }
+@@ -326,9 +452,25 @@
+  * closes with a trailing wedge onto the terminal background.
+  */
+ function PowerlineChain({ segments, plain, sepWidth, }) {
++    // dsh-overrides 56 (v2, e5-фикс): fused-заливки не рисуют клин. Когда
++    // resolved-цвет заливки предыдущего сегмента совпадает со следующим,
++    // глиф получал fg=from==bg=to — невидим (инвариант 6 канона, детектор
++    // e5_color_contrast: fg!=bg; VM w2: invisible_runs=1, fg==bg=183 —
++    // тема юзера tokyonight-moon: claude == toolDotWrite == #c099ff; до 56
++    // такого соседства не было: цепь дропала ctx раньше cwd). Слитые
++    // заливки — один непрерывный блок (powerline-стандарт на одинаковых
++    // цветах); клин рисуется только на границах с РАЗНЫМИ resolved-цветами
++    // (инвариант 6: «тексты без клиньев» запрещены только там) + trailing.
++    const [themeName] = useTheme();
++    const theme = getTheme(themeName);
++    const fused = (a, b) => theme[a] === theme[b];
+     if (segments.length === 0)
+         return null;
+-    const nodes = segments.map((segment, index) => (_jsxs(React.Fragment, { children: [index > 0 ? (_jsx(PowerlineSeparator, { from: segments[index - 1].bgKey, to: segment.bgKey, plain: plain })) : null, segment.node] }, segment.key)));
++    const nodes = segments.map((segment, index) => (_jsxs(React.Fragment, { children: [index > 0
++            ? (plain || !fused(segments[index - 1].bgKey, segment.bgKey)
++                ? _jsx(PowerlineSeparator, { from: segments[index - 1].bgKey, to: segment.bgKey, plain: plain })
++                : null)
++            : null, segment.node] }, segment.key)));
+     if (!plain) {
+         nodes.push(_jsx(PowerlineSeparator, { from: segments[segments.length - 1].bgKey, plain: plain }, "trailing"));
+     }
+@@ -465,6 +607,13 @@
+         : ctxGauge !== undefined
+             ? (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), ctxGauge, ' ', ctxParts.percent] }))
+             : (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), formattedContext] }));
++    // dsh-overrides 56: the ctx field's compact rung for the protected
++    // minimum on field rows (canon §1.8) — counts-only 'ctx 86k' (the
++    // compact form formatContextUsage already produces), the full form
++    // being 'ctx 86k/262k'. A whole field with its separator — invariant 2.
++    const ctxCompactNode = ctxNode === undefined
++        ? undefined
++        : (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), formatContextUsage(contextUsed, channel.contextWindow, true)] }));
+     if (statusBar.cache) {
+         const cacheRate = formatCacheHitRate(usage);
+         if (cacheRate !== undefined) {
+@@ -575,6 +724,10 @@
+                                 ? _jsxs(Text, { dimColor: true, children: [' → ', mks.actualModel] })
+                                 : null,
+                         ] })),
++                    // dsh-overrides 56: the protected model field's compact
++                    // rung (invariant 8, canon §1.8) — 'glm…' when the full
++                    // name cannot fit; the substitution suffix drops with it.
++                    compact: _jsx(Text, { color: "inactiveShimmer", children: compactModelName(channel.model) }),
+                 }]
+             : []),
+         ...(tpsPart !== undefined ? [tpsPart] : []),
+@@ -694,11 +847,29 @@
+         ...leftFields,
+         // dsh-overrides 51 (D5-gauge): in the hover state the gauge (with
+         // its ▏ frame) rides lockHead; only the percent text shrinks.
++        // dsh-overrides 56: `compact` — the counts-only 'ctx 86k' rung the
++        // protected minimum steps down to under width pressure (§1.8).
+         ...(ctxNode !== undefined
+-            ? [{ key: 'context', id: 'ctx', node: ctxGauge !== undefined ? (_jsxs(Text, { color: "inactiveShimmer", children: [' ', ctxParts.percent] })) : ctxNode, lockHead: ctxGauge !== undefined ? (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), ctxGauge] })) : undefined }]
++            ? [{ key: 'context', id: 'ctx', node: ctxGauge !== undefined ? (_jsxs(Text, { color: "inactiveShimmer", children: [' ', ctxParts.percent] })) : ctxNode, lockHead: ctxGauge !== undefined ? (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), ctxGauge] })) : undefined, compact: ctxCompactNode }]
+             : []),
+     ];
+     const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined;
++    // dsh-overrides 56 (A9 / invariant 8, canon §1.8 + §5.2): the minimum
++    // pair — `model` plus the chosen context metric — never drops from the
++    // status row on w>=40; instead it steps down to compact rungs. WHICH
++    // metric is protected is the hub-effects "Minimum metric" setting
++    // (effects.json `minimumMetric`, default 'ctx'; the /effects hub row
++    // writes it, see hubSettings.js). A chosen metric with no data this
++    // session yields the protected slot to the other one (a missing-data
++    // row shows the metric that exists — an empty minimum helps nobody).
++    const minimumMetric = minimumMetricPref();
++    const hasCompMetric = contextParts.some(part => part.key === 'compactLeft');
++    const hasCtxMetric = ctxNode !== undefined;
++    const protectCtxMetric = hasCtxMetric && (minimumMetric === 'ctx' || !hasCompMetric);
++    const protectCompMetric = hasCompMetric && (minimumMetric === 'comp' || !hasCtxMetric);
++    const minimumProtect = columns >= 40
++        ? new Set(['model', ...(protectCtxMetric ? ['ctx', 'context'] : []), ...(protectCompMetric ? ['compactLeft'] : [])])
++        : undefined;
+     // dsh-overrides 29: assemble the powerline chain for the full (non-compact)
+     // row. The model field and the git/cwd right fields fold into segments;
+     // the ctx hover field folds into the ⚡ segment; everything else stays a
+@@ -706,7 +877,7 @@
+     // blocks carry identity, dim text carries telemetry).
+     const powerlineOn = hasStatusFields && !statusBar.compact && powerlineStyle(channel) !== 'off';
+     const powerline = powerlineOn
+-        ? buildPowerlineSegments({ channel, statusBar, displayCwd: displayCwdShown, contextUsed, mksActual: statusBar.realModel ? mks.actualModel : undefined, hoverProps, columns, themeName })
++        ? buildPowerlineSegments({ channel, statusBar, displayCwd: displayCwdShown, contextUsed, mksActual: statusBar.realModel ? mks.actualModel : undefined, hoverProps, columns, themeName, protectCtx: protectCtxMetric })
+         : undefined;
+     const powerlineTailParts = powerlineOn
+         ? leftFields.filter(part => part.key !== 'model')
+@@ -733,18 +904,35 @@
+     let shownRightFields = rightFields;
+     let shownTailParts = powerlineTailParts;
+     let shownRightParts = powerlineRightParts;
++    // dsh-overrides 56: in compact mode the always-rendered ctxNode box is
++    // the ctx metric's own protected slot; when comp is the chosen minimum
++    // and cannot fit beside the box, the BOX yields — the minimum metric
++    // outranks the un-chosen ctx readout, not the other way round.
++    let showCtxBox = ctxNode !== undefined;
+     if (statusBar.compact) {
+-        shownCompactFields = fitFieldParts(compactFields, Math.max(0, plainRowAvail - (ctxNode !== undefined ? textNodeWidth(ctxNode) : 0)));
++        const ctxBoxWidth = ctxNode !== undefined ? textNodeWidth(ctxNode) : 0;
++        shownCompactFields = fitFieldParts(compactFields, Math.max(0, plainRowAvail - ctxBoxWidth), minimumProtect);
++        if (protectCompMetric
++            && !shownCompactFields.some(part => part.key === 'compactLeft')) {
++            // the protected comp died only because the ctx box eats its
++            // cells: refit without the box; keep the box only if the
++            // refit does not actually recover the minimum metric.
++            const refit = fitFieldParts(compactFields, plainRowAvail, minimumProtect);
++            if (refit.some(part => part.key === 'compactLeft')) {
++                shownCompactFields = refit;
++                showCtxBox = false;
++            }
++        }
+     }
+     else if (powerlineHasContent && powerline !== undefined) {
+         const chainCells = powerline.segments.reduce((sum, s) => sum + s.width + powerline.sepWidth, 0);
+         const chainAvail = Math.max(0, rowCells - chainCells - (powerline.segments.length > 0 ? 1 : 0) - 2);
+-        shownTailParts = fitFieldParts(powerlineTailParts, chainAvail);
+-        shownRightParts = fitFieldParts(powerlineRightParts, Math.max(0, chainAvail - fieldListWidth(shownTailParts)));
++        shownTailParts = fitFieldParts(powerlineTailParts, chainAvail, minimumProtect);
++        shownRightParts = fitFieldParts(powerlineRightParts, Math.max(0, chainAvail - fieldListWidth(shownTailParts)), minimumProtect);
+     }
+     else {
+-        shownLeftFields = fitFieldParts(fullLeftFields, plainRowAvail);
+-        shownRightFields = fitFieldParts(rightFields, Math.max(0, plainRowAvail - fieldListWidth(shownLeftFields)));
++        shownLeftFields = fitFieldParts(fullLeftFields, plainRowAvail, minimumProtect);
++        shownRightFields = fitFieldParts(rightFields, Math.max(0, plainRowAvail - fieldListWidth(shownLeftFields)), minimumProtect);
+     }
+     // Supplemental row mounts only when it carries real content (hover
+     // detail, hint, activity, trajectory). The upstream build kept it
+@@ -767,7 +955,7 @@
+     const sparkRow = _jsx(SparkRow, { channel: channel, columns: columns });
+     return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [sparkRow, barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
+                         ? (current !== null && current.startsWith('segment:') ? null : current)
+-                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownCompactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: shownTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownRightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
++                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownCompactFields, hoverProps: hoverProps }) }), showCtxBox ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: shownTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownRightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
+ }
+ /**
+  * The supplemental-row readout for a hovered footer field. Technical label
+--- a/lib/types/effectsPrefs.js
++++ b/lib/types/effectsPrefs.js
+@@ -53,3 +53,66 @@
+         return false;
+     }
+ }
++/**
++ * dsh-overrides 56: the invariant-8 "Minimum metric" setting (canon
++ * STATUS-BAR-CANON.md §1.8 + the §5.2 user decision): which context
++ * metric — ⚡ ctx or comp — keeps its status-row slot on narrow widths
++ * (w>=40) when fields must drop. Stored TOP-LEVEL in effects.json next to
++ * the effects map (settings.yaml rejects unknown keys, so the theme.json
++ * -style pref file is the store); 'ctx' is the default.
++ */
++let minimumMetricCache; // undefined = not yet loaded from disk
++/**
++ * The persisted minimum metric, lazily read once per process ('ctx' when
++ * unset/invalid). StatusLine calls this per render — a cache read, no I/O.
++ * @returns 'ctx' | 'comp'.
++ */
++export function minimumMetricPref() {
++    if (minimumMetricCache === undefined)
++        minimumMetricCache = readMinimumMetricPref();
++    return minimumMetricCache === 'comp' ? 'comp' : 'ctx';
++}
++/**
++ * Read effects.json's top-level `minimumMetric` field.
++ * @param dir - Prefs directory (injectable for tests).
++ * @returns 'ctx' | 'comp' ('ctx' when unset, invalid, or unreadable).
++ */
++export function readMinimumMetricPref(dir = PREFS_DIR) {
++    try {
++        const parsed = JSON.parse(readFileSync(join(dir, 'effects.json'), 'utf8'));
++        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
++            return 'ctx';
++        return parsed.minimumMetric === 'comp' ? 'comp' : 'ctx';
++    }
++    catch {
++        return 'ctx';
++    }
++}
++/**
++ * Persist the minimum metric (best effort). Read-modify-write keeps the
++ * existing `effects` map intact; refreshes the module cache so the next
++ * StatusLine render sees the new value without a restart.
++ * @returns True when the file was written.
++ */
++export function writeMinimumMetricPref(value, dir = PREFS_DIR) {
++    const next = value === 'comp' ? 'comp' : 'ctx';
++    try {
++        mkdirSync(dir, { recursive: true });
++        let doc = {};
++        try {
++            const parsed = JSON.parse(readFileSync(join(dir, 'effects.json'), 'utf8'));
++            if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed))
++                doc = parsed;
++        }
++        catch {
++            // absent or corrupt file: start a fresh document
++        }
++        doc.minimumMetric = next;
++        writeFileSync(join(dir, 'effects.json'), JSON.stringify(doc, null, 2));
++        minimumMetricCache = next;
++        return true;
++    }
++    catch {
++        return false;
++    }
++}
+--- a/lib/types/components/hubSettings.js
++++ b/lib/types/components/hubSettings.js
+@@ -12,6 +12,9 @@
+ import { SPINNER_NAMES, getSpinnerStyle } from '../spinnerCatalog.js';
+ import { EFFECT_KEYS, effectEnabled } from '../animationsMode.js';
+ import { getEffectDescription } from '../effectsCatalog.js';
++// dsh-overrides 56: the invariant-8 minimum metric (canon §1.8 + §5.2) —
++// which context metric keeps its slot on narrow status rows.
++import { minimumMetricPref, writeMinimumMetricPref } from '../effectsPrefs.js';
+ import { subCells } from '../tuiDisplayPrefs.js';
+ import { sparkline } from '../sparkline.js';
+ /**
+@@ -142,6 +145,20 @@
+             },
+             // ── Эффекты ──
+             ...EFFECT_GROUP_KEYS().map(key => effectField(key, 'hub-effects')),
++            // dsh-overrides 56: the invariant-8 minimum metric (canon
++            // §1.8 + the §5.2 user decision: which context metric survives
++            // narrow rows is a hub-effects setting). EN per the canon §3
++            // language decision; persists to effects.json (top-level
++            // `minimumMetric`), NOT settings.yaml (which rejects unknown
++            // keys); StatusLine consumes it live (minimumMetricPref).
++            {
++                path: ['hub', 'minimumMetric'],
++                label: 'Minimum metric',
++                kind: 'custom',
++                group: 'hub-effects',
++                custom: { type: 'minimumMetric', demoLines: 1 },
++                hint: 'Invariant-8 minimum (canon §1.8): which context metric keeps its status-row slot on narrow widths (w>=40) when fields drop — ⚡ ctx (compact rung: ⚡ 41%) or comp (tokens left to auto-compact). Enter/space switches; applies live; persists to ~/.dsh-tui/effects.json.',
++            },
+             // ── Статус-ряд (нативная группа status-bar) ──
+             {
+                 path: ['statusBar', 'ctxBarMode'],
+@@ -344,6 +361,9 @@
+         return _jsx(ThemeEntry, { field: field, focused: focused, bump: bump, rowSlot: rowSlot });
+     if (custom.type === 'spinner')
+         return _jsx(SpinnerEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
++    // dsh-overrides 56: the invariant-8 minimum metric row.
++    if (custom.type === 'minimumMetric')
++        return _jsx(MinimumMetricEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
+     return _jsx(EffectEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
+ }
+ /** Тема: ←/→ live preview (patch-37 chain), Enter commits via setTheme. */
+@@ -462,6 +482,35 @@
+     const demo = (_jsxs(Text, { dimColor: true, children: [_jsx(EffectDemo, { effect: key, time: time }), _jsxs(Text, { dimColor: true, children: ["  ", key !== undefined ? getEffectDescription(key) : ''] })] }));
+     return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
+ }
++/**
++ * dsh-overrides 56: Minimum metric — which context metric (⚡ ctx or comp)
++ * keeps its status-row slot on narrow widths (w>=40) when fields drop: the
++ * canon-§1.8 minimum pair. Enter/space cycles ctx↔comp; the write persists
++ * to ~/.dsh-tui/effects.json (`minimumMetric`, top-level next to the
++ * effects map — settings.yaml rejects unknown keys) and refreshes the
++ * module cache, then channel.emit() re-renders the tree so StatusLine
++ * shows the new protected field immediately (no dead row — the setting
++ * really changes the render, canon §3).
++ */
++function MinimumMetricEntry({ field, focused, channel, bump, rowSlot }) {
++    const current = minimumMetricPref();
++    useInput((input, key) => {
++        if (!focused)
++            return;
++        if (key.return || (input === ' ' && !key.ctrl)) {
++            const next = current === 'ctx' ? 'comp' : 'ctx';
++            if (writeMinimumMetricPref(next)) {
++                channel?.emit?.();
++                bump();
++            }
++        }
++    });
++    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, wrap: "truncate-end", children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: current === 'comp' ? 'comp (tokens left)' : 'ctx (⚡ context)' }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" })] })] }));
++    const demo = (_jsx(Text, { dimColor: true, children: current === 'comp'
++            ? 'narrow row (w47):  ✦ glm…   comp 31k left'
++            : 'narrow row (w47):  ✦ glm…   ⚡ 41%' }));
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
++}
+ // ── Demos for the plain (settings-backed) fields ────────────────────────
+ /** Live demo registry: every plain appearance field demos itself. */
+ export const HUB_FIELD_DEMOS = {

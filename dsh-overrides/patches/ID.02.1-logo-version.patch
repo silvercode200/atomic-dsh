@@ -1,0 +1,60 @@
+# Goal:      forkVersion в стартовом логотипе (createRequire/ESM)
+# Family:    ID.02
+# Status:    live
+# Files:     lib/types/components/LogoV2.js
+# Evidence:  TG-DSH-FORK-VERSION-20260918; reports/fork-version-20260918/
+# Upstream:  not-applicable
+# Added:     2026-09-20 (untracked с 09-18), TG-DSH-FORK-VERSION-20260918
+
+# 49-logo-version: стартовый логотип показывает версию форка — суффикс +p<N>
+# после базовой версии (v0.10.0-beta.4+p49). N = max числовой префикс записей
+# реестра патчей (26b-*.patch даёт 26); apply-скрипт генерирует мета-файл
+# lib/types/components/forkVersion.js в живом пакете (НЕ входит в реестр —
+# генерируется, не патчится). LogoV2 читает его через createRequire +
+# require(esm) (пакет ESM type:module — голый require не существует; CJS
+# module.exports в .js этого пакета = ReferenceError «module is not defined»)
+# с fallback '' → стоковый вид версии. dimColor и wrap:"truncate-end"
+# родительского Text сохранены.
+--- a/lib/types/components/LogoV2.js
++++ b/lib/types/components/LogoV2.js
+@@ -6,6 +6,7 @@
+ import { readFileSync } from 'node:fs';
+ import { dirname, join } from 'node:path';
+ import { fileURLToPath } from 'node:url';
++import { createRequire } from 'node:module';
+ import { Box, Text, useAnimationFrame, useTerminalSize } from '../ui.js';
+ import { getTheme } from '../theme.js';
+ import { useTheme } from './design-system/ThemeProvider.js';
+@@ -29,6 +30,23 @@
+         return '0.1.0';
+     }
+ })();
++// dsh-overrides 49: fork version suffix (+p<N>) — the patch-stack depth.
++// scripts/apply-dsh-overrides.sh regenerates ./forkVersion.js with the
++// registry's max numeric patch prefix (26b-… counts as 26; this patch itself
++// is 49). Plain `require` does not exist in this ESM package (type:module),
++// so the require is created via createRequire and the ESM file loads through
++// require(esm) (Node >= 22.12 — the pinned local/colab runtime). Missing or
++// unreadable → no suffix, stock version display.
++const forkSuffix = (() => {
++    try {
++        const req = createRequire(import.meta.url);
++        const forkPatch = req('./forkVersion.js').patch;
++        return forkPatch ? '+p' + forkPatch : '';
++    }
++    catch {
++        return '';
++    }
++})();
+ /** Below this width the whale hides and the header goes text-only. */
+ const WHALE_MIN_COLUMNS = 64;
+ /**
+@@ -110,7 +128,7 @@
+         : 2;
+     const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 60);
+     const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 60);
+-    return (_jsxs(Box, { ref: ref, flexDirection: "column", marginTop: 1, children: [_jsxs(Box, { flexDirection: "row", gap: 2, width: "100%", alignItems: "center", children: [showWhale && _jsx(WhaleArt, { frameIndex: frameIndex, width: FULL_WHALE_WIDTH }), _jsxs(Box, { flexDirection: "column", flexShrink: 1, children: [_jsxs(Text, { wrap: "truncate-end", children: [sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60), _jsx(Text, { dimColor: true, children: '  v' + VERSION })] }), bigDeepSeek.map((row, index) => (_jsx(Text, { wrap: "truncate-end", children: row }, `ds-${index}`))), bigHarness.map((row, index) => (_jsx(Text, { wrap: "truncate-end", children: row }, `h-${index}`))), _jsxs(Text, { wrap: "truncate-end", children: [model, effort !== undefined && _jsx(Text, { dimColor: true, children: ' · ' + capitalize(effort) + ' effort' })] }), _jsx(Text, { dimColor: true, wrap: "truncate-end", children: cwd }), _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { dimColor: true, children: tr('logo-tip-prefix') }), getLang() === 'zh' ? randomTip.zh : randomTip.en, _jsx(Text, { dimColor: true, children: ' · /tips ' + tr('logo-tip-more') })] }), (false) && // dsh-overrides 21: startup version-drift warnings suppressed (user request: no mismatch banners on boot)
++    return (_jsxs(Box, { ref: ref, flexDirection: "column", marginTop: 1, children: [_jsxs(Box, { flexDirection: "row", gap: 2, width: "100%", alignItems: "center", children: [showWhale && _jsx(WhaleArt, { frameIndex: frameIndex, width: FULL_WHALE_WIDTH }), _jsxs(Box, { flexDirection: "column", flexShrink: 1, children: [_jsxs(Text, { wrap: "truncate-end", children: [sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60), _jsx(Text, { dimColor: true, children: '  v' + VERSION + forkSuffix })] }), bigDeepSeek.map((row, index) => (_jsx(Text, { wrap: "truncate-end", children: row }, `ds-${index}`))), bigHarness.map((row, index) => (_jsx(Text, { wrap: "truncate-end", children: row }, `h-${index}`))), _jsxs(Text, { wrap: "truncate-end", children: [model, effort !== undefined && _jsx(Text, { dimColor: true, children: ' · ' + capitalize(effort) + ' effort' })] }), _jsx(Text, { dimColor: true, wrap: "truncate-end", children: cwd }), _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { dimColor: true, children: tr('logo-tip-prefix') }), getLang() === 'zh' ? randomTip.zh : randomTip.en, _jsx(Text, { dimColor: true, children: ' · /tips ' + tr('logo-tip-more') })] }), (false) && // dsh-overrides 21: startup version-drift warnings suppressed (user request: no mismatch banners on boot)
+                             driftLine != null && (_jsxs(Text, { color: "warning", wrap: "wrap", children: ["\u26A0", ' ', tOr(`logo-drift-${driftLine.kind}`, `The dsh engine (${driftLine.versions.join(' / ')}) does not match the validated ${UPSTREAM_VALIDATED_VERSION}; reinstall via npm i -g @deepseek-ai/dsh@${UPSTREAM_VALIDATED_VERSION}.`, {
+                                         installed: driftLine.versions.join(' / '),
+                                         validated: UPSTREAM_VALIDATED_VERSION,

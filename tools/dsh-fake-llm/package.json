@@ -1,0 +1,14 @@
+{
+  "name": "dsh-fake-llm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Фиктивная локальная LLM для dsh (anthropic-messages поверх HTTP, ноль зависимостей)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "selftest": "node selftest.mjs"
+  }
+}

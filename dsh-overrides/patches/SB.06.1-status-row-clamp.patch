@@ -1,0 +1,50 @@
+# Goal:      powerline-ряд hard 1-line + truncate сепараторов
+# Family:    SB.06
+# Status:    live
+# Files:     lib/types/screens/StatusLine.js
+# Evidence:  TG-DSH-TUI-LAYOUT-FIX-20260917 узел 1;
+#            reports/tui-layout-fix-20260917/
+# Upstream:  not-applicable
+# Added:     2026-09-18, W5 (TG-DSH-TUI-LAYOUT-FIX-20260917 узел 1)
+
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -73,7 +73,7 @@
+  */
+ function FieldLine({ parts, hoverProps, }) {
+     const visible = parts.filter(part => part.node !== null && part.node !== undefined && part.node !== false);
+-    return (_jsx(_Fragment, { children: visible.map((part, index) => (_jsxs(React.Fragment, { children: [index > 0 ? _jsx(Text, { dimColor: true, children: " \u00B7 " }) : null, _jsx(Box, { flexShrink: 1, ...(part.id === undefined ? {} : hoverProps(part.id)), children: part.tooltip === undefined || part.tooltip === '' ? (_jsx(Text, { wrap: "truncate", children: part.node })) : (_jsx(TooltipTarget, { content: part.tooltip, children: _jsx(Text, { wrap: "truncate", children: part.node }) })) })] }, part.key))) }));
++    return (_jsx(_Fragment, { children: visible.map((part, index) => (_jsxs(React.Fragment, { children: [index > 0 ? _jsx(Text, { dimColor: true, wrap: "truncate", children: " \u00B7 " }) : null, _jsx(Box, { flexShrink: 1, ...(part.id === undefined ? {} : hoverProps(part.id)), children: part.tooltip === undefined || part.tooltip === '' ? (_jsx(Text, { wrap: "truncate", children: part.node })) : (_jsx(TooltipTarget, { content: part.tooltip, children: _jsx(Text, { wrap: "truncate", children: part.node }) })) })] }, part.key))) }));
+ }
+ // dsh-overrides 29: powerline segments — powerlevel/fish-style status row.
+ //
+@@ -111,12 +111,18 @@
+         : { color: fg };
+     return (_jsx(Box, { flexShrink: 0, ...(id === undefined ? {} : hoverProps(id)), ...boxProps, children: _jsx(Text, { wrap: "truncate", ...textProps, children: children }) }));
+ }
++// dsh-overrides 45: the powerline row is a hard 1-line cell — the row
++// Box gets height:1 + overflow:hidden (the same clamp the supplemental
++// row uses), and the ` · `/wedge separators wrap:"truncate": an unwrapped
++// separator under width pressure hard-wrapped to 2-3 lines, growing the
++// row/footer (the bottom gap + duplicated ctx tails; diagnosis:
++// reports/footer-gap-20260917/footer-gap-diagnosis.md).
+ /** The wedge between two filled segments (or trailing the last one). */
+ function PowerlineSeparator({ from, to, plain, }) {
+     if (plain) {
+-        return (_jsx(Text, { dimColor: true, children: ` ${POWERLINE_PLAIN_SEP} ` }));
++        return (_jsx(Text, { dimColor: true, wrap: "truncate", children: ` ${POWERLINE_PLAIN_SEP} ` }));
+     }
+-    return (_jsx(Text, { ...(to === undefined ? {} : { backgroundColor: to }), color: from, children: POWERLINE_SEP }));
++    return (_jsx(Text, { wrap: "truncate", ...(to === undefined ? {} : { backgroundColor: to }), color: from, children: POWERLINE_SEP }));
+ }
+ /** Fill/track blocks for the ctx segment's pressure bar (fraction 0..1). */
+ function ctxBarCells(frac) {
+@@ -613,7 +619,7 @@
+     const sparkRow = _jsx(SparkRow, { channel: channel, columns: columns });
+     return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [sparkRow, barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
+                         ? (current !== null && current.startsWith('segment:') ? null : current)
+-                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: powerlineTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: powerlineRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
++                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: powerlineTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: powerlineRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
+ }
+ /**
+  * The supplemental-row readout for a hovered footer field. Technical label

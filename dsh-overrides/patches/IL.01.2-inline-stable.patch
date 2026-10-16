@@ -1,0 +1,50 @@
+# Goal:      стабильный inline-футер: supplemental только fullscreen
+# Family:    IL.01
+# Status:    live
+# Files:     lib/types/screens/StatusLine.js, lib/types/screens/Chat.js
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-09, W2
+
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -29,7 +29,7 @@
+     const visible = parts.filter(part => part.node !== null && part.node !== undefined && part.node !== false);
+     return (_jsx(_Fragment, { children: visible.map((part, index) => (_jsxs(React.Fragment, { children: [index > 0 ? _jsx(Text, { dimColor: true, children: " \u00B7 " }) : null, _jsx(Box, { flexShrink: 1, ...(part.id === undefined ? {} : hoverProps(part.id)), children: part.tooltip === undefined || part.tooltip === '' ? (_jsx(Text, { wrap: "truncate", children: part.node })) : (_jsx(TooltipTarget, { content: part.tooltip, children: _jsx(Text, { wrap: "truncate", children: part.node }) })) })] }, part.key))) }));
+ }
+-export function StatusLine({ channel, selectionActive = false, helpOpen = false, wake, }) {
++export function StatusLine({ channel, selectionActive = false, helpOpen = false, wake, fullscreen = false, }) {
+     const { columns } = useTerminalSize();
+     const [themeName] = useTheme();
+     const [hover, setHover] = React.useState(null);
+@@ -279,9 +279,18 @@
+     // screens that reserved blank row read as stray empty lines under the
+     // input — reclaiming the row beats the transient grow on hover.
+     const showSupplementalRow = detail !== null || hint !== '' || showActivity || showTrajectory;
++    // dsh-overrides 10: in inline (non-fullscreen) mode the supplemental row
++    // is never mounted. Its content is situational (hover detail, shortcut
++    // hint, activity, trajectory) and appears/disappears as that state
++    // changes, so the footer height jumps by 1-3 lines under the statusbar —
++    // in inline mode each such reflow repaints scrollback and reads as stray
++    // blank lines. Fullscreen keeps the row: the alt screen has no scrollback
++    // to damage, and hover detail only works there anyway (AlternateScreen
++    // supplies the mouse tracking).
++    const mountSupplementalRow = fullscreen && showSupplementalRow;
+     return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
+                         ? (current !== null && current.startsWith('segment:') ? null : current)
+-                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] })) : null, showSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
++                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] })) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
+ }
+ /**
+  * The supplemental-row readout for a hovered footer field. Technical label
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -3335,7 +3335,7 @@
+                         // clock and shifting every row-count layout invariant.
+                         channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
+                             ? backgroundAgentsNeedingInput
+-                            : undefined, controllerRef: promptControllerRef })), _jsx(StatusLine, { channel: channel, selectionActive: selectionActive, helpOpen: helpOpen, wake: wakeBand === undefined
++                            : undefined, controllerRef: promptControllerRef })), _jsx(StatusLine, { channel: channel, selectionActive: selectionActive, helpOpen: helpOpen, fullscreen: fullscreen, wake: wakeBand === undefined
+                             ? undefined
+                             : {
+                                 band: wakeBand,

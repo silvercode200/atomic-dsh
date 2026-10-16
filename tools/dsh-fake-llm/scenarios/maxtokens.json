@@ -1,0 +1,35 @@
+{
+  "name": "maxtokens",
+  "description": "Обрыв хода по лимиту токенов (max-tokens, D-b): второй сегмент несёт stopReason max_tokens — ответ обрывается на середине, wire stop_reason max_tokens (pi-ai маппит в length, dsh — в finish kind max-tokens). Хвост с маркером MAXTOKENS_TAIL доигрывается СЛЕДУЮЩИМ запросом (синтетическое continue от core-патча 07 auto-continue; сервер продолжает сценарий по session state, см. server.mjs). delayMs 1000 — окно первого ответа до обрыва",
+  "usage": {
+    "input_tokens": 950,
+    "output_tokens": 310,
+    "cache_read_input_tokens": 1200,
+    "cache_creation_input_tokens": 300
+  },
+  "delayMs": 1000,
+  "segments": [
+    {
+      "thinking": [
+        "Ходу задан лимит вывода; рассуждение успевает начаться, ",
+        "но ответ будет оборван по лимиту токенов."
+      ]
+    },
+    {
+      "text": [
+        "MAXTOKENS_CUT: начало ответа, обрываемое лимитом токенов. ",
+        "Симулированный ход умирает на этом тексте — продолжение приходит только ",
+        "после авто-продолжения (dsh-overrides core 07): без него ход завершён, ",
+        "хвост-маркер не доедет."
+      ],
+      "stopReason": "max_tokens"
+    },
+    {
+      "text": [
+        "MAXTOKENS_TAIL: продолжение доставлено после max-tokens auto-continue. ",
+        "Суммарный ответ хода = обрыв (MAXTOKENS_CUT) + этот хвост: ",
+        "детектор stream_stall проверяет оба маркера в транскрипте."
+      ]
+    }
+  ]
+}

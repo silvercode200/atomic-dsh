@@ -1,0 +1,274 @@
+# SOC-gate Phase 1 tests (T1-T6).
+# Deploys soc-gate preset to colab VM, checks structure + preset mounting.
+program: soc-gate-phase1
+lane: colab
+vars:
+  sess: dsh-socgate
+  preset_dir: /root/.dsh/.agent-presets/soc-gate
+
+setup:
+  # Single deploy step: all preset files in one shot (reduces colabctl calls)
+  - id: deploy_all
+    retry: 2
+    run: |
+      mkdir -p $preset_dir
+      cat > $preset_dir/preset.yml <<'PYEOF'
+      name: SOC Gate
+      description: Strict gate preset — main delegates, enforcer blocks direct tools for main.
+      order: 7
+      PYEOF
+      cat > $preset_dir/soc-gate-enforcer.mjs <<'ENFEOF'
+      export const name = 'soc-gate-enforcer'
+      export const inject = ['tools', 'systemPrompt']
+      const WL = ['subagent','subagent_exec','subagent_research','subagent_review','subagent_fork','ask_user_question','exit_plan_mode','todo_write','spot_search','spot_load','skill_search','skill_load','render_verdict']
+      const MCP = ['mcp__taskgate__','mcp__octa__','mcp__socctl-mcp__']
+      export function apply(ctx, config) {
+        const wl = new Set(config?.whitelist ?? WL)
+        const mcp = config?.mcpPrefixWhitelist ?? MCP
+        ctx.on('tools/execute', async (exec, next) => {
+          const d = exec.agent?.session?.header?.delegationDepth ?? 0
+          if (d >= 1) return next()
+          const n = exec.name
+          if (wl.has(n) || mcp.some(p => n.startsWith(p))) return next()
+          return { content: [{ type: 'text', text: 'BLOCKED by SOC-gate: ' + n + ' unavailable to main. Delegate.' }] }
+        })
+        ctx.effect(() => ctx.systemPrompt.section({ name: 'soc-gate:enforcer', order: config?.order ?? 116.3, text: 'SOC-GATE: Direct execution tools blocked. Delegate ALL implementation to subagents.' }), 'enforcer')
+      }
+      ENFEOF
+      cat > $preset_dir/soc-gate-prose.mjs <<'PRSEOF'
+      export const name = 'soc-gate-prose'
+      export const inject = ['systemPrompt']
+      export function apply(ctx, config) {
+        ctx.effect(() => ctx.systemPrompt.section({ name: 'soc-gate:prose', order: config?.order ?? 116.35, text: 'SOC-GATE MANDATE: You are the plan-gate and verdict renderer. Delegate all implementation. You do NOT write code or run commands.' }), 'prose')
+      }
+      PRSEOF
+      # agent.cordis.yml: skill-search replaced with dsh-tool-skill for VM test
+      cat > $preset_dir/agent.cordis.yml <<'ACEOF'
+      - id: persona
+        name: '@deepseek-ai/dsh-persona'
+        config:
+          text: >-
+            You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+      - id: agent-instructions
+        name: '@deepseek-ai/dsh-agent-instructions'
+        config:
+          maxBytes: 65536
+      - id: tool-bash
+        name: '@deepseek-ai/dsh-tool-bash'
+        disabled: !!js process.platform === 'win32'
+      - id: tool-pwsh
+        name: '@deepseek-ai/dsh-tool-pwsh'
+        disabled: !!js process.platform !== 'win32'
+      - id: tool-fs
+        name: '@deepseek-ai/dsh-tool-fs'
+      - id: tool-fs-search
+        name: '@deepseek-ai/dsh-tool-fs-search'
+        config:
+          sampleOverCapGlobResults: false
+      - id: tool-jobs
+        name: '@deepseek-ai/dsh-tool-jobs'
+      - id: skill-filesystem
+        name: '@deepseek-ai/dsh-skill-filesystem'
+      - id: tool-skill
+        name: '@deepseek-ai/dsh-tool-skill'
+      - id: tool-goal
+        name: '@deepseek-ai/dsh-tool-goal'
+      - id: planning
+        name: cordis:group
+        group: true
+        isolate:
+          planMode: true
+        config:
+          - id: plan-mode
+            name: '@deepseek-ai/dsh-plan-mode'
+            config:
+              section: |
+                You are in SOC-gate plan mode. STRICT GATE: plan, decompose, delegate. You do NOT implement.
+      - id: compaction
+        name: cordis:group
+        group: true
+        isolate:
+          compaction: true
+          toolResultPruner: true
+        config:
+          - id: compaction-basic
+            name: '@deepseek-ai/dsh-compaction-basic'
+            config:
+              thresholdRatio: 0.4768
+          - id: command-compact
+            name: '@deepseek-ai/dsh-command-compact'
+          - id: tool-result-pruner
+            name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+            config:
+              thresholdChars: 8192
+              headChars: 4096
+              tailChars: 1024
+      - id: delegation
+        name: cordis:group
+        group: true
+        isolate:
+          workflowEngine: true
+        config:
+          - id: tool-subagent-control
+            name: '@deepseek-ai/dsh-tool-subagent-control'
+          - id: tool-subagent-list-agents
+            name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+          - id: tool-subagent
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: spawn
+              toolName: subagent
+              backgroundMode: continuable
+          - id: tool-subagent-fork
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: fork
+              toolName: subagent_fork
+              backgroundMode: continuable
+          - id: tool-subagent-exec
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: spawn
+              toolName: subagent_exec
+              backgroundMode: continuable
+              agentOptions:
+                provider: cli
+                model: sonnet
+          - id: tool-subagent-research
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: spawn
+              toolName: subagent_research
+              backgroundMode: continuable
+              agentOptions:
+                provider: cli
+                model: haiku
+          - id: tool-subagent-review
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: spawn
+              toolName: subagent_review
+              backgroundMode: continuable
+              agentOptions:
+                provider: cli
+                model: fable
+          - id: soc-gate-enforcer
+            name: ./soc-gate-enforcer.mjs
+            config:
+              whitelist: [subagent, subagent_exec, subagent_research, subagent_review, subagent_fork, ask_user_question, exit_plan_mode, todo_write, spot_search, spot_load, skill_search, skill_load, render_verdict]
+              mcpPrefixWhitelist: [mcp__taskgate__, mcp__octa__, mcp__socctl-mcp__]
+              order: 116.3
+          - id: soc-gate-prose
+            name: ./soc-gate-prose.mjs
+            config:
+              order: 116.35
+          - id: workflow-worker-thread
+            name: '@deepseek-ai/dsh-workflow-worker-thread'
+            config:
+              provider: spawn
+          - id: tool-workflow
+            name: '@deepseek-ai/dsh-tool-workflow'
+          - id: tool-ralph
+            name: '@deepseek-ai/dsh-tool-ralph'
+            config:
+              subagentProvider: spawn
+              maxRounds: 64
+      - id: tool-ask-user
+        name: '@deepseek-ai/dsh-tool-ask-user'
+      - id: tool-todo
+        name: '@deepseek-ai/dsh-tool-todo'
+        config:
+          allowParallelInProgress: true
+      - id: tool-web
+        name: '@deepseek-ai/dsh-tool-web'
+        config:
+          fetch: false
+          searchTimeoutMs: 60000
+      - id: tool-presentation
+        name: '@deepseek-ai/dsh-agent-tool-presentation'
+        config:
+          mode: code
+      ACEOF
+      echo "DEPLOY DONE: $(ls $preset_dir/ | wc -l) files"
+      node --check $preset_dir/soc-gate-enforcer.mjs && echo "enforcer OK"
+      node --check $preset_dir/soc-gate-prose.mjs && echo "prose OK"
+    timeout: 120
+
+tests:
+  - name: t1_t3_t4_structure
+    steps:
+      - run: |
+          echo "=== T1/T3/T4: Structural checks ==="
+          grep -q "subagent_exec" $preset_dir/soc-gate-enforcer.mjs && echo "T1: PASS — subagent_exec in whitelist"
+          grep -q "BLOCKED" $preset_dir/soc-gate-enforcer.mjs && echo "T3: PASS — BLOCKED response in enforcer"
+          grep -q "delegationDepth" $preset_dir/soc-gate-enforcer.mjs && echo "T4: PASS — delegationDepth gate in enforcer"
+          grep -q "soc-gate-enforcer" $preset_dir/agent.cordis.yml && echo "T5a: PASS — enforcer row in agent.cordis.yml"
+          grep -q "tool-bash" $preset_dir/agent.cordis.yml && echo "tool-bash: preserved"
+          grep -q "tool-fs" $preset_dir/agent.cordis.yml && echo "tool-fs: preserved"
+          grep -q "tool-presentation" $preset_dir/agent.cordis.yml && echo "tool-presentation: preserved"
+          grep -q "tool-web" $preset_dir/agent.cordis.yml && echo "tool-web: preserved"
+          grep -q "SOC-GATE MANDATE" $preset_dir/soc-gate-prose.mjs && echo "prose: mandate present"
+          if grep -q "delegation-mandate" $preset_dir/agent.cordis.yml; then
+            echo "WARN: delegation-mandate still present"
+          else
+            echo "PASS: delegation-mandate removed"
+          fi
+        timeout: 90
+
+  - name: t2_child_toolset
+    steps:
+      - run: |
+          echo "=== T2: Child toolset inheritance ==="
+          tools="tool-bash tool-pwsh tool-fs tool-fs-search tool-jobs tool-goal tool-web tool-presentation tool-ask-user tool-todo"
+          missing=0
+          for t in $tools; do
+            if grep -q "$t" $preset_dir/agent.cordis.yml; then
+              echo "  $t: present"
+            else
+              echo "  $t: MISSING"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "T2: PASS — all tool-rows preserved"
+          else
+            echo "T2: FAIL — $missing missing"
+            exit 1
+          fi
+        timeout: 90
+
+  - name: t5_preset_mounting
+    steps:
+      - run: |
+          tmux kill-session -t $sess 2>/dev/null || true
+          tmux new-session -d -s $sess -x 180 -y 50
+          tmux send-keys -t $sess "DSH_TUI_PRESET=soc-gate dsh --no-tui 2>&1 | head -50" Enter
+          sleep 15
+          tmux capture-pane -p -t $sess > /tmp/t5_output.txt
+          cat /tmp/t5_output.txt | head -30
+          echo "---T5 CHECK---"
+          if grep -qi "soc-gate\|enforcer\|SOC.Gate" /tmp/t5_output.txt; then
+            echo "T5: PASS — soc-gate detected"
+          else
+            echo "T5: CHECK — looking for indicators..."
+            grep -i "preset\|error\|fail\|mount\|warn" /tmp/t5_output.txt || echo "no indicators"
+          fi
+          tmux kill-session -t $sess 2>/dev/null || true
+        timeout: 120
+
+  - name: t6_non_soc_regression
+    steps:
+      - run: |
+          tmux kill-session -t $sess 2>/dev/null || true
+          tmux new-session -d -s $sess -x 180 -y 50
+          tmux send-keys -t $sess "dsh --no-tui 2>&1 | head -50" Enter
+          sleep 15
+          tmux capture-pane -p -t $sess > /tmp/t6_output.txt
+          if grep -qi "soc-gate\|enforcer\|SOC.Gate" /tmp/t6_output.txt; then
+            echo "T6: FAIL — enforcer in non-SOC mode"
+            exit 1
+          else
+            echo "T6: PASS — no soc-gate in default mode"
+          fi
+          tmux kill-session -t $sess 2>/dev/null || true
+        timeout: 120

@@ -1,0 +1,64 @@
+# Goal:      радужный глиф спиннера (rainbow shimmer)
+# Family:    EF.01
+# Status:    live
+# Files:     lib/types/components/Spinner/SpinnerGlyph.js
+# Evidence:  facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (style wave)
+
+--- a/lib/types/components/Spinner/SpinnerGlyph.js
++++ b/lib/types/components/Spinner/SpinnerGlyph.js
+@@ -9,6 +9,34 @@
+ const REDUCED_MOTION_DOT = '●';
+ const REDUCED_MOTION_CYCLE_MS = 2000; // 2-second cycle: 1s visible, 1s dim
+ const ERROR_RED = { r: 171, g: 43, b: 63 };
++// dsh-overrides 30: the glyph cycles the rainbow_*_shimmer palette — the
++// same animation firmware the theme protects (dsh-overrides 28). One
++// palette step per spinner frame (120ms), smoothly interpolated between
++// neighbors: a full 7-color cycle every 840ms. The position derives from
++// the existing animation clock's `time`, so no new timer source; ANSI
++// palettes (no parseable RGB) fall back to the brand messageColor, and
++// the stall path (red interpolation) keeps precedence.
++const RAINBOW_SHIMMER_KEYS = [
++    'rainbow_red_shimmer',
++    'rainbow_orange_shimmer',
++    'rainbow_yellow_shimmer',
++    'rainbow_green_shimmer',
++    'rainbow_blue_shimmer',
++    'rainbow_indigo_shimmer',
++    'rainbow_violet_shimmer',
++];
++/** Interpolated palette color at animation time `time` (ms), or null. */
++function rainbowGlyphColor(theme, time) {
++    const palette = RAINBOW_SHIMMER_KEYS
++        .map(key => parseRGB(theme[key]))
++        .filter((rgb) => rgb !== null);
++    if (palette.length < 2)
++        return null;
++    const position = (time / 120) % palette.length;
++    const index = Math.floor(position);
++    const next = (index + 1) % palette.length;
++    return toRGBColor(interpolateColor(palette[index], palette[next], position - index));
++}
+ /**
+  * The animated spinner glyph (·✢*✶✻✽ cycle), mirroring Claude Code's
+  * `Spinner/SpinnerGlyph.tsx`. Interpolates toward red when stalled.
+@@ -21,6 +49,7 @@
+         return (_jsx(Box, { flexWrap: "wrap", height: 1, width: 2, children: _jsx(Text, { color: messageColor, dimColor: isDim, children: REDUCED_MOTION_DOT }) }));
+     }
+     const spinnerChar = SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
++    const glyphColor = rainbowGlyphColor(theme, time) ?? messageColor;
+     if (stalledIntensity > 0) {
+         const baseColorStr = theme[messageColor];
+         const baseRGB = baseColorStr ? parseRGB(baseColorStr) : null;
+@@ -29,8 +58,8 @@
+             return (_jsx(Box, { flexWrap: "wrap", height: 1, width: 2, children: _jsx(Text, { color: toRGBColor(interpolated), children: spinnerChar }) }));
+         }
+         // Fallback for ANSI themes: use messageColor until fully stalled, then error
+-        const color = stalledIntensity > 0.5 ? 'error' : messageColor;
++        const color = stalledIntensity > 0.5 ? 'error' : glyphColor;
+         return (_jsx(Box, { flexWrap: "wrap", height: 1, width: 2, children: _jsx(Text, { color: color, children: spinnerChar }) }));
+     }
+-    return (_jsx(Box, { flexWrap: "wrap", height: 1, width: 2, children: _jsx(Text, { color: messageColor, children: spinnerChar }) }));
++    return (_jsx(Box, { flexWrap: "wrap", height: 1, width: 2, children: _jsx(Text, { color: glyphColor, children: spinnerChar }) }));
+ }

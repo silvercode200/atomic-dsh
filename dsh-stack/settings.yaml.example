@@ -1,0 +1,59 @@
+agent-default-model:
+  provider: bg
+  model: glm-5.3
+llm-pi-ai:
+  providers:
+    bg:
+      api: anthropic-messages
+      apiKeyEnv: DSH_BG_API_KEY
+      baseURL: https://relay.example.com
+      models:
+        - id: glm-5.3
+        - id: deepseek-v4-pro-0813
+        - id: hy4
+        - id: kimi-k2.6
+        - id: minimax-m3
+      # fallback-эндуранс ~60 мин, когда патч retry-budget не активен
+      # (TG-DSH-TUI-RETRY-20260917; при DSH_RETRY_BUDGET_MIN>0 патч
+      # игнорирует maxRetries, cap = max(maxDelayMs, 120000))
+      retryPolicy:
+        mode: normal
+        maxRetries: 37
+        backoff:
+          maxDelayMs: 120000
+    cli:
+      api: anthropic-messages
+      apiKeyEnv: MKS_DSH_TOKEN
+      baseURL: http://localhost:8350
+      models:
+        - id: opus
+        - id: sonnet
+        - id: haiku
+        - id: fable
+        - id: glm-5.3
+        - id: gpt-5.6-luna
+        - id: grok-4.6
+      retryPolicy:
+        mode: normal
+        maxRetries: 37
+        backoff:
+          maxDelayMs: 120000
+      headers:
+        Authorization: Bearer ***REDACTED***
+dsh-tui:
+  statusBar:
+    tokens: true
+    compact: true
+    contextBar: true
+    mode: true
+    trajectory: true
+    shortcutHint: true
+    activity: true
+    cache: true
+    gitBranch: true
+    compactThresholdRatio: 0.4768
+  fullscreen: false
+  minimal: true
+  toolBackground: subtle
+agent-presets:
+  default: code-lazy

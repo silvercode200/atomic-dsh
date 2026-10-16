@@ -1,0 +1,76 @@
+# Goal:      kitty CSI-u: имена спец-клавиш не текут в input
+# Family:    TR.05
+# Status:    live
+# Files:     lib/types/ink/events/input-event.js
+# Evidence:  TG-DSH-REBUILD-20260921 узел 7 C4;
+#            reports/colab-w4green-20260922T170736Z/
+# Upstream:  not-applicable
+# Added:     2026-09-23 (TG-DSH-REBUILD-20260921 узел 7 C4)
+
+# 62-theme-picker-kitty-input (TG-DSH-REBUILD-20260921, узел 7 item C4 —
+# «/theme пикер вклеен + ❯ фриз»): kitty CSI-u / xterm modifyOtherKeys —
+# имена специальных клавиш больше не утекают литеральным текстом в input.
+# Локус (root-cause, input-event.js CSI-u ветка):
+#   processedAsSpecialSequence=true обходил очистку nonAlphanumericKeys
+#   (строки ~139), а в самой CSI-u/modifyOtherKeys ветке спец-кейсами были
+#   только 'space'→' ' и 'escape'→'' — 'return'/'tab'/'delete' утекали как
+#   СЛОВА. В среде юзера (WezTerm через zellij, TERM_PROGRAM пробрасывается)
+#   supportsExtendedKeys()=true → приложение пушит kitty disambiguate
+#   (CSI > 1u) → Shift+Enter приходит как ESC[13;2u → input="return".
+#   Каскад C4 в /theme-пикере (Chat.js ~2941 catch-all не исключает shift):
+#   query="return" → filterThemeOptions 0 матчей → chatOverlay 'move'
+#   count<=0 → стрелки мертвы (❯ фриз) → первый Esc только чистит фильтр
+#   (пикер «вклеен»). RED-проба: reports/c4-evidence/c4-kitty-RED-console.log
+#   (54/54→0/54 + "No themes match" + arrows dead + single-Esc glue).
+# Механика фикса: в обеих ветках (CSI-u + modifyOtherKeys) правило
+#   словаря вместо двух спец-кейсов: 'space'→' ' (space НЕ в
+#   nonAlphanumericKeys — текст), любое другое nonAlphanumeric-имя → ''
+#   (флаги key.return/key.tab/key.delete несут семантику, текст не нужен),
+#   буквы/цифры (односимвольные имена) текут текстом как раньше. Побочно
+#   лечит ту же утечку в search/history-оверлеях и промпте (Shift+Tab).
+# Проверка: probe c4-kitty-red-probe (RED до / GREEN после фикса),
+#   c4-parser-battery (3 утечки → 0), инварианты I1-I5 в пробе.
+--- a/lib/types/ink/events/input-event.js
++++ b/lib/types/ink/events/input-event.js
+@@ -88,14 +88,22 @@
+             input = '';
+         }
+         else {
+-            // 'space' → ' '; 'escape' → '' (key.escape carries it;
++            // 'space' → ' ' (space is NOT in nonAlphanumericKeys — it must
++            // keep reaching text input); every other non-alphanumeric name
++            // ('escape', 'return', 'tab', 'delete', 'backspace', …) → ''.
+             // processedAsSpecialSequence bypasses the nonAlphanumericKeys
+-            // clear below, so we must handle it explicitly here);
+-            // otherwise use key name.
++            // clear below, so the whole vocabulary must be handled here.
++            // dsh-overrides 62: kitty CSI-u special-key names — previously
++            // only 'escape' was special-cased, so Shift+Enter (CSI 13;2u)
++            // leaked the literal word "return" as text input and poisoned
++            // every overlay filter catch-all (the /theme picker: 0 matches →
++            // arrows dead → first Esc only cleared the filter = C4
++            // «вклеен + ❯ фриз»); Shift+Tab (CSI 9;2u) leaked "tab" the
++            // same way. Letters/digits (length-1 names) keep flowing as text.
+             input =
+                 keypress.name === 'space'
+                     ? ' '
+-                    : keypress.name === 'escape'
++                    : nonAlphanumericKeys.includes(keypress.name)
+                         ? ''
+                         : keypress.name;
+         }
+@@ -114,10 +122,13 @@
+             input = '';
+         }
+         else {
++            // dsh-overrides 62: same vocabulary rule as the CSI u branch
++            // above — 'space' stays text, other non-alphanumeric names are
++            // cleared (Shift+Enter via "[27;2;13~" used to leak "return").
+             input =
+                 keypress.name === 'space'
+                     ? ' '
+-                    : keypress.name === 'escape'
++                    : nonAlphanumericKeys.includes(keypress.name)
+                         ? ''
+                         : keypress.name;
+         }

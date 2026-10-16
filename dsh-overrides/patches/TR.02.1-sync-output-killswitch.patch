@@ -1,0 +1,48 @@
+# Goal:      E2 kill-switch sync-пути: DSH_TUI_SYNC_OUTPUT=0
+# Family:    TR.02
+# Status:    live
+# Files:     lib/types/ink/terminal.js
+# Evidence:  TG-DSH-REBUILD-20260921 (7.2-mitigate);
+#            reports/colab-w2v567s-20260922T035827Z/
+# Upstream:  not-applicable
+# Added:     2026-09-22 (TG-DSH-REBUILD-20260921, 7.2-mitigate)
+
+# 57-sync-output-killswitch (TG-DSH-REBUILD-20260921, узел 7 item
+# 7.2-mitigate — E2 «слэш-меню невидимо в среде юзера»): env-выключатель
+# sync-пути рендера.
+# Локус E2 (вердикт бисекции узла 4): WezTerm 20240203 юзера —
+#   TERM_PROGRAM=WezTerm (TMUX пусто) → isSynchronizedOutputSupported()
+#   = true → BSU/ESU (DEC 2026) + DECSTBM путь включён; A/B/C на VM
+#   (tmux / zellij 0.45.1 / zellij+env юзера) — sync-путь dsh чист,
+#   т.е. виновата связка с конкретной сборкой WezTerm.
+# Митигейт (для верификации юзером): DSH_TUI_SYNC_OUTPUT=0 первой строкой
+#   isSynchronizedOutputSupported() → false. Следствие: boot-константа
+#   SYNC_OUTPUT_SUPPORTED=false → isDecstbmSafe()=false → полный отход от
+#   BSU/ESU+DECSTBM. Запуск: `DSH_TUI_SYNC_OUTPUT=0 dsh` (слэш-меню '/'
+#   должно стать видимым); постоянное решение — обновить WezTerm
+#   (20240203 → свежий). Без env поведение прежнее во всех детекциях.
+# Доказательства: reports/statusbar-fix-20260919/
+#   sync-output-killswitch-probe.mjs (RED на стеке 01-55: WezTerm+
+#   DSH_TUI_SYNC_OUTPUT=0 → true → GREEN после 57: fn/bootConst/
+#   decstbmSafe=false; нейтральная среда и WezTerm без env — прежние) +
+#   sync-output-killswitch-probe-result.txt.
+--- a/lib/types/ink/terminal.js
++++ b/lib/types/ink/terminal.js
+@@ -69,6 +69,17 @@
+  * @returns true when the terminal supports DEC 2026.
+  */
+ export function isSynchronizedOutputSupported() {
++    // dsh-overrides 57: sync-output kill switch (E2 mitigation, canon §3
++    // «Слэш-меню»): DSH_TUI_SYNC_OUTPUT=0 forces the whole BSU/ESU (DEC
++    // 2026) + DECSTBM path off regardless of terminal detection — WezTerm
++    // <=20240203 renders the slash-menu overlay invisible in inline mode
++    // through this path (registry E2, node-4 bisect verdict: the dsh sync
++    // path is clean in tmux/zellij — the locus is the WezTerm build).
++    // Verify with `DSH_TUI_SYNC_OUTPUT=0 dsh`; the permanent fix is
++    // updating WezTerm. First check: also gates the boot-time
++    // SYNC_OUTPUT_SUPPORTED constant and isDecstbmSafe() below.
++    if (process.env.DSH_TUI_SYNC_OUTPUT === '0')
++        return false;
+     // tmux parses and proxies every byte but doesn't implement DEC 2026.
+     // BSU/ESU pass through to the outer terminal but tmux has already
+     // broken atomicity by chunking. Skip to save 16 bytes/frame + parser work.

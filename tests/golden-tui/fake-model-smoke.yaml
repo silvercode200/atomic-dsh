@@ -1,0 +1,52 @@
+# fake-model-smoke — живая dsh-сессия с фиктивной локальной моделью (golden-tui этап 4-5).
+# Lane termseer: dsh в zellij-пейне, провайдер fake (tools/dsh-fake-llm, 127.0.0.1:8787),
+# поворот с tool-циклом, запись кадров через record start/stop + frames diff.
+program: fake_model_smoke
+lane: termseer
+cwd: /home/user/xeon-Programms/deepseek_harness
+
+vars:
+  dsh_bin: dsh
+
+setup:
+  - run: "echo FAKE_SMOKE_SETUP"
+
+tests:
+  - name: fake_turn_and_record
+    steps:
+      # Запись стартует ДО запуска dsh: видно и boot, и стрим, и статус-бар.
+      - run: "record start dsh_fake 200"
+        timeout: 60
+      - run: "dsh --profile dsh-tui"
+        timeout: 240
+      # tool-цикл сценария tools: эмулирует Bash->Read->Write + финальный текст
+      - run: "send_line SCENARIO:tools запусти тестовый цикл инструментов"
+        timeout: 240
+      - run: "wait_for Subagent"
+        timeout: 120
+      # дать стриму закончиться и статус-бару обновиться (tps/ctx живые поля)
+      - run: "sleep 8"
+        timeout: 60
+      - run: "read_screen"
+        capture: screen_final
+        timeout: 60
+      # структурный таймлайн без vision: changed_rows/blank/last_nonempty
+      - run: "frames dsh_fake diff"
+        capture: frames_diff
+        timeout: 120
+      - run: "send_line /exit"
+        timeout: 60
+      - run: "record stop"
+        timeout: 60
+
+  - name: asserts
+    steps:
+      # 1) ответ фейк-модели появился в кадре (сценарий tools шлёт финальный текст)
+      - run: 'test "$screen_final" != "" && echo "$screen_final" | grep -q "SCENARIO\|tool\|Bash\|задач"'
+        timeout: 30
+      # 2) запись собрана: cast-файл существует и > 5 строк (header + кадры)
+      - run: 'test -f reports/recordings/dsh_fake/cast && [ "$(wc -l < reports/recordings/dsh_fake/cast)" -gt 5 ]'
+        timeout: 30
+      # 3) frames diff вернул таймлайн (число кадров > 5)
+      - run: 'echo "$frames_diff" | grep -q "frames\|changed\|last_nonempty"'
+        timeout: 30

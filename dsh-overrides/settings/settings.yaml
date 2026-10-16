@@ -1,0 +1,44 @@
+agent-default-model:
+  provider: bg
+  model: glm-5.3
+compaction-basic:
+  thresholdRatio: 0.8
+llm-pi-ai:
+  providers:
+    bg:
+      api: anthropic-messages
+      apiKeyEnv: DSH_BG_API_KEY
+      baseURL: https://relay.example.com
+      models:
+        - id: deepseek-v4-pro-0813
+        - contextWindow: 250000
+          id: deepseek-v4-flash-0731
+        - id: glm-5.2
+        - id: glm-5.3
+        - id: glm-5.3-flash
+    a6:
+      api: anthropic-messages
+      apiKeyEnv: A6API_API_KEY
+      baseURL: https://relay.example.com/
+      models:
+        - id: deepseek-v4-pro-0813
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+dsh-tui:
+  lang: en
+  thinkingFold: preview
+  whale: false
+  minimal: true
+  # false = inline-рендер (как Claude Code): история уходит в scrollback
+  # терминала/zellij → работает скролл панели Alt+W/S/A/Q (Alt ц/ы/ф/й).
+  # true (дефолт плагина) = alternate screen: мышь dsh (выделение OSC52,
+  # колесо) внутри TUI, но zellij-скролл не работает.
+  fullscreen: false
+  statusBar:
+    tokens: false
+    cost: false
+    tps: true
+    mode: true
+    goal: false
+  shortcuts:
+    todoFold: "alt+m,alt+м,ctrl+m"

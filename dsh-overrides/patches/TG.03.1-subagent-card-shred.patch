@@ -1,0 +1,221 @@
+# Goal:      шред карточек субагентов: бюджет заголовка w60
+# Family:    TG.03
+# Status:    live
+# Files:     lib/types/components/Chat/SubagentMessage.js,
+#            lib/types/components/SubagentCard.js
+# Evidence:  TG-DSH-TESTING-20260920 узел D7; reports/colab-fake-e2e-20260920/
+# Upstream:  not-applicable
+# Added:     2026-09-20, W5 (TG-DSH-TESTING-20260920 узел D7)
+
+# 53-subagent-card-shred (TG-DSH-TESTING-20260920, узел D7): шред карточек
+# субагентов со скрина живой сессии юзера (2026-09-20). Заголовок карточки
+# транскрипта — цепочка голых Text в Box{flexDirection:row, gap:1}: ink
+# хардкодит flexShrink:1 в каждом ink-text стиле (Text.js
+# memoizedStylesForWrap), поэтому под давлением ширины ВСЕ поля шредились до
+# огрызков 1-2 символов (w60: «spawn task     u         tok   tools  ng» —
+# model→«u», tokens→«tok», status→«ng»); патч 51 (fitFieldParts, StatusLine)
+# этот путь не покрывал. Второй дефект с того же скрина: молчащий агент
+# рисовал 3 пустые waterfall-рамки «  │ » (Array.from(WATERFALL_ROWS) рисует
+# activity[index] ?? '' даже при пустой activity).
+# Фикс SubagentMessage.js:
+#   - заголовок получает клеточный бюджет (columns − 2 gutter-слот таймлайна −
+#     2 paddingLeft − глиф − gap): description (идентичность карточки) клипится
+#     по остатку бюджета с «…», метаданные (model/effort/duration/tokens/
+#     tools/status) — либо ЦЕЛИКОМ, либо дроп ЦЕЛИКОМ справа-налево (status →
+#     tools → tokens → duration → effort → model — левые информативнее),
+#     сепараторы «·» только между ОТРЕНДЕРЕННЫМИ полями (сиротских точек нет);
+#   - waterfall: строки только для СУЩЕСТВУЮЩИХ activity-строк (максимум
+#     WATERFALL_ROWS; outputLines только аппендится — окно растёт 1→3 и не
+#     сжимается обратно), при пустой активности — один dim-плейсхолдер
+#     «  │ …» вместо трёх пустых рамок.
+# SubagentCard.js (дашборд-карточка): тот же класс дефекта (метаданные шли
+# одним Text-run и под давлением резались посреди поля: «· 0» вместо
+# «0 tools») — та же механика бюджета (columns − 5: dashboard paddingX 2 +
+# card paddingLeft 1), поля целыми или дроп (tools → tokens → duration →
+# model), description клипится по остатку.
+# Доказательства: reports/statusbar-fix-20260919/subagent-card-probe-result-red.txt
+#   (RED: огрызки w60/w80, 20 пустых рамок) и subagent-card-probe-result.txt
+#   (GREEN: 6/6).
+--- a/lib/types/components/Chat/SubagentMessage.js
++++ b/lib/types/components/Chat/SubagentMessage.js
+@@ -48,6 +48,36 @@
+     }
+     return index < text.length ? `${text.slice(0, index)}…` : text;
+ }
++// dsh-overrides 53: header width governance (subagent card shred). ink
++// hardcodes flexShrink:1 in every ink-text style (Text.js
++// memoizedStylesForWrap), so the header — a chain of bare Text fields in a
++// row Box — shredded ALL fields to 1-2 char stubs under width pressure
++// (live w60: `spawn task     u         tok   tools  ng`). Same defect class
++// as the statusbar D5 ELLIPSIS-NOISE (patch 51 fitFieldParts in StatusLine),
++// which never covered this path. The header now gets a cell budget: the
++// description (the card's identity) clips to the leftover budget, while
++// every metadata field renders WHOLE or drops WHOLE, right-to-left in the
++// fixed order status → tools → tokens → duration → effort → model — the
++// leftmost fields (model, duration) inform the most. Separators `·` are
++// emitted only BETWEEN rendered fields, so no orphan dots survive a drop.
++/** Separator cost between two rendered header fields: row gap(1) + `·`(1) + row gap(1). */
++const HEADER_FIELD_GAP = 3;
++/** Floor for the description while metadata is still being dropped: the
++ * prefix plus ~10 cells of identity text. Below this the metadata yields
++ * first (a field that costs `3 + width` cells must lose to the identity). */
++function headerDescFloor() {
++    return stringWidth(t('subagent-card-prefix')) + 10;
++}
++/** Total cells of a rendered metadata field list (fields + separators). */
++function headerMetaCells(fields) {
++    let cells = 0;
++    for (let index = 0; index < fields.length; index++) {
++        if (index > 0)
++            cells += HEADER_FIELD_GAP;
++        cells += fields[index].cells;
++    }
++    return cells;
++}
+ /**
+  * Borderless, fixed-height activity card embedded directly in the transcript
+  * (Kimi Code visual language). Running: header + one-line current tool + a
+@@ -77,7 +107,55 @@
+     const activity = settled ? [] : subagent.outputLines.slice(-WATERFALL_ROWS);
+     const runningGlyph = preset.frames[Math.floor(time / preset.intervalMs) % preset.frames.length] ?? '·';
+     const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER);
++    // dsh-overrides 53: budget for the header row. The card lives inside the
++    // transcript: terminal width minus the timeline gutter slot (2 columns,
++    // kept by both rail and scrollbar modes — reserving it also covers
++    // 'hidden' by dropping a field two cells early instead of shredding) and
++    // the card's own paddingLeft(2), minus the glyph and the glyph→desc gap.
++    const headerGlyph = settled ? info.glyph : ` ${runningGlyph}`;
++    const headerGlyphCells = stringWidth(headerGlyph);
++    const headerBudget = Math.max(20, (columns ?? 80) - 2 - 2 - headerGlyphCells - 1);
++    // Metadata fields in drop order (leftmost informs the most): model,
++    // [effort], duration, tokens, tools, status.
++    const metaFields = [];
++    const pushMeta = (key, text, props) => {
++        if (text === undefined || text === null || text === '')
++            return;
++        metaFields.push({ key, text, cells: stringWidth(String(text)), props });
++    };
++    pushMeta('model', subagent.model ?? subagent.provider ?? 'default', {});
++    pushMeta('effort', subagent.effort, { dimColor: true });
++    pushMeta('duration', duration(elapsed), { dimColor: true });
++    pushMeta('tokens', tokens(subagent), { dimColor: true });
++    pushMeta('tools', `${subagent.toolCalls.length} tools`, { dimColor: true });
++    pushMeta('status', info.label, { color: info.color });
++    // dsh-overrides 53: integer drop right-to-left while the description
++    // floor does not fit; then the description absorbs the remaining squeeze
++    // (clipped with `…`). Whole-or-dropped — never a mid-field stub.
++    const descFull = `${t('subagent-card-prefix')}${subagent.description}`;
++    let shownMeta = metaFields;
++    while (shownMeta.length > 0 && headerDescFloor() + HEADER_FIELD_GAP + headerMetaCells(shownMeta) > headerBudget)
++        shownMeta = shownMeta.slice(0, -1);
++    // The desc→first-meta boundary costs a full separator (gap + `·` + gap),
++    // like every meta→meta boundary.
++    const descAvail = headerBudget - (shownMeta.length > 0 ? HEADER_FIELD_GAP : 0) - headerMetaCells(shownMeta);
++    const shownDesc = stringWidth(descFull) <= descAvail ? descFull : clipLine(descFull, descAvail);
++    // dsh-overrides 53: separators `·` live BETWEEN rendered fields only
++    // (including the description→metadata boundary; no orphan dots).
++    const headerMetaChildren = [];
++    for (let index = 0; index < shownMeta.length; index++) {
++        const part = shownMeta[index];
++        headerMetaChildren.push(_jsx(Text, { dimColor: true, children: "·" }, `${subagent.agentId}-meta-sep-${part.key}`));
++        headerMetaChildren.push(_jsx(Text, { ...part.props, wrap: "truncate", children: part.text }, `${subagent.agentId}-meta-${part.key}`));
++    }
+     // 点击打开详情场景；hover 不刷整行背景（转录视觉保持安静），只把状态
+     // glyph 提亮为品牌色作为可点指示。
+-    return _jsxs(Box, { flexDirection: "column", marginTop: addMargin ? 1 : 0, paddingLeft: 2, ref: viewportRef, onClick: onClick, onMouseEnter: clickable ? () => setHovered(true) : undefined, onMouseLeave: clickable ? () => setHovered(false) : undefined, children: [_jsxs(Box, { flexDirection: "row", gap: 1, children: [_jsx(Text, { color: hovered && clickable ? 'claude' : info.color, children: settled ? info.glyph : ` ${runningGlyph}` }), _jsx(Text, { bold: true, color: hovered && clickable ? 'claude' : undefined, children: `${t('subagent-card-prefix')}${subagent.description}` }), _jsx(Text, { dimColor: true, children: "\u00B7" }), _jsx(Text, { children: subagent.model ?? subagent.provider ?? 'default' }), subagent.effort && _jsxs(_Fragment, { children: [_jsx(Text, { dimColor: true, children: "\u00B7" }), _jsx(Text, { dimColor: true, children: subagent.effort })] }), _jsx(Text, { dimColor: true, children: "\u00B7" }), _jsx(Text, { dimColor: true, children: duration(elapsed) }), _jsx(Text, { dimColor: true, children: "\u00B7" }), _jsx(Text, { dimColor: true, children: tokens(subagent) }), _jsx(Text, { dimColor: true, children: "\u00B7" }), _jsxs(Text, { dimColor: true, children: [subagent.toolCalls.length, " tools"] }), _jsx(Text, { dimColor: true, children: "\u00B7" }), _jsx(Text, { color: info.color, children: info.label })] }), !settled && (lastRunning ?? previousDone) !== undefined && (_jsx(Text, { wrap: "truncate", children: lastRunning !== undefined ? (_jsxs(_Fragment, { children: [previousDone !== undefined && (_jsxs(_Fragment, { children: [_jsx(Text, { dimColor: true, children: '  · ' }), _jsx(Text, { color: "success", children: "\u2713" }), _jsx(Text, { color: toolNameColor(previousDone.name), children: previousDone.name }), _jsx(Text, { dimColor: true, children: ' · ' })] })), lastRunning.argsPreview === undefined && (_jsx(Text, { color: toolNameColor(lastRunning.name), children: lastRunning.name })), lastRunning.argsPreview !== undefined && (_jsxs(_Fragment, { children: [_jsx(Text, { color: toolNameColor(lastRunning.name), children: lastRunning.name }), _jsx(Text, { dimColor: true, children: ` (${clipLine(lastRunning.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - lastRunning.name.length - 6))})` })] }))] })) : (previousDone !== undefined && (_jsxs(_Fragment, { children: [_jsx(Text, { dimColor: true, children: '  · ' }), _jsx(Text, { color: "success", children: "\u2713" }), _jsx(Text, { color: toolNameColor(previousDone.name), children: previousDone.name }), previousDone.argsPreview !== undefined && (_jsx(Text, { dimColor: true, children: ` (${clipLine(previousDone.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - previousDone.name.length - 6))})` }))] }))) })), !settled && Array.from({ length: WATERFALL_ROWS }, (_, index) => (_jsx(Text, { dimColor: true, wrap: "truncate", children: `  │ ${clipLine(activity[index] ?? '', rowWidth)}` }, `${subagent.agentId}-wf-${index}`))), settled && subagent.status === 'failed' && subagent.error && (_jsx(Text, { color: "error", wrap: "truncate", children: `  └ ${clipLine(subagent.error, rowWidth)}` }))] });
++    return _jsxs(Box, { flexDirection: "column", marginTop: addMargin ? 1 : 0, paddingLeft: 2, ref: viewportRef, onClick: onClick, onMouseEnter: clickable ? () => setHovered(true) : undefined, onMouseLeave: clickable ? () => setHovered(false) : undefined, children: [_jsxs(Box, { flexDirection: "row", gap: 1, children: [_jsx(Text, { color: hovered && clickable ? 'claude' : info.color, children: headerGlyph }), _jsx(Text, { bold: true, color: hovered && clickable ? 'claude' : undefined, wrap: "truncate", children: shownDesc }), ...headerMetaChildren] }), !settled && (lastRunning ?? previousDone) !== undefined && (_jsx(Text, { wrap: "truncate", children: lastRunning !== undefined ? (_jsxs(_Fragment, { children: [previousDone !== undefined && (_jsxs(_Fragment, { children: [_jsx(Text, { dimColor: true, children: '  · ' }), _jsx(Text, { color: "success", children: "✓" }), _jsx(Text, { color: toolNameColor(previousDone.name), children: previousDone.name }), _jsx(Text, { dimColor: true, children: ' · ' })] })), lastRunning.argsPreview === undefined && (_jsx(Text, { color: toolNameColor(lastRunning.name), children: lastRunning.name })), lastRunning.argsPreview !== undefined && (_jsxs(_Fragment, { children: [_jsx(Text, { color: toolNameColor(lastRunning.name), children: lastRunning.name }), _jsx(Text, { dimColor: true, children: ` (${clipLine(lastRunning.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - lastRunning.name.length - 6))})` })] }))] })) : (previousDone !== undefined && (_jsxs(_Fragment, { children: [_jsx(Text, { dimColor: true, children: '  · ' }), _jsx(Text, { color: "success", children: "✓" }), _jsx(Text, { color: toolNameColor(previousDone.name), children: previousDone.name }), previousDone.argsPreview !== undefined && (_jsx(Text, { dimColor: true, children: ` (${clipLine(previousDone.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - previousDone.name.length - 6))})` }))] }))) })), !settled && (activity.length > 0
++        // dsh-overrides 53: the waterfall window renders only EXISTING
++        // activity lines (max WATERFALL_ROWS — outputLines only appends, so
++        // the window grows 1→3 as lines arrive and never shrinks back; a
++        // silent agent no longer paints 3 empty `│` frames from the user's
++        // 2026-09-20 screenshot — it paints one dim placeholder instead).
++        ? Array.from({ length: Math.min(WATERFALL_ROWS, activity.length) }, (_, index) => (_jsx(Text, { dimColor: true, wrap: "truncate", children: `  │ ${clipLine(activity[index] ?? '', rowWidth)}` }, `${subagent.agentId}-wf-${index}`)))
++        : [_jsx(Text, { dimColor: true, wrap: "truncate", children: '  │ …' }, `${subagent.agentId}-wf-empty`)]), settled && subagent.status === 'failed' && subagent.error && (_jsx(Text, { color: "error", wrap: "truncate", children: `  └ ${clipLine(subagent.error, rowWidth)}` }))] });
+ }
+--- a/lib/types/components/SubagentCard.js
++++ b/lib/types/components/SubagentCard.js
+@@ -1,8 +1,29 @@
+ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+ import { useState } from 'react';
+-import { Box, Text } from '../ui.js';
++import { Box, Text, useTerminalSize } from '../ui.js';
+ import { t } from '../i18n.js';
+ import { isMinimalMode } from '../minimalMode.js';
++import { stringWidth } from '../ink/stringWidth.js';
++
++// dsh-overrides 53: header width governance for the DASHBOARD subagent card —
++// the same shred class as the transcript SubagentMessage (see the long
++// comment there): ink hardcodes flexShrink:1 in every ink-text style, so
++// under row pressure the description AND the metadata run both truncated
++// into mid-field stubs (live w60: `· 0` was `0 tools`). The metadata now
++// renders as whole-or-dropped fields (drop right-to-left: tools → tokens →
++// duration → model) and the description clips to the leftover budget.
++/** Separator cost between two rendered fields: row gap(1) + `·`(1) + row gap(1). */
++const CARD_FIELD_GAP = 3;
++/** Total cells of a rendered metadata field list (fields + separators). */
++function cardMetaCells(fields) {
++    let cells = 0;
++    for (let index = 0; index < fields.length; index++) {
++        if (index > 0)
++            cells += CARD_FIELD_GAP;
++        cells += stringWidth(String(fields[index].text));
++    }
++    return cells;
++}
+ function formatDuration(ms) {
+     const seconds = Math.floor(ms / 1000);
+     return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+@@ -29,5 +50,52 @@
+             : subagent.status === 'failed' || subagent.status === 'cancelled' ? 'error'
+                 : 'success';
+     const hoverTint = onClick !== undefined && hovered && !focused;
+-    return _jsxs(Box, { flexDirection: "column", paddingLeft: 1, marginBottom: 1, onClick: onClick, onMouseEnter: onClick !== undefined ? () => setHovered(true) : undefined, onMouseLeave: onClick !== undefined ? () => setHovered(false) : undefined, backgroundColor: hoverTint ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Box, { flexDirection: "row", gap: 1, children: [_jsx(Text, { color: glyphColor, children: glyph }), _jsx(Text, { bold: true, color: focused ? 'claude' : undefined, children: `${t('subagent-card-prefix')}${subagent.description}` }), _jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: ' · ' }), _jsx(Text, { children: subagent.model ?? subagent.provider ?? 'default' }), _jsx(Text, { dimColor: true, children: ` · ${formatDuration(elapsed)} · ${total || '—'} tok · ${subagent.toolCalls.length} tools` })] })] }), liveLine && _jsx(Text, { dimColor: true, wrap: "truncate", children: `  │ ${liveLine}` })] });
++    // dsh-overrides 53: cell budget for the header row. The dashboard paints
++    // at full terminal width; the card column costs paddingX 2 (dashboard) +
++    // paddingLeft 1 (card) = 5 columns, plus the glyph and the glyph→desc gap.
++    const { columns } = useTerminalSize();
++    const glyphCells = stringWidth(glyph);
++    const headerBudget = Math.max(20, (columns ?? 80) - 5 - glyphCells - 1);
++    const descFull = `${t('subagent-card-prefix')}${subagent.description}`;
++    const metaFields = [
++        { key: 'model', text: String(subagent.model ?? subagent.provider ?? 'default'), dim: false },
++        { key: 'duration', text: formatDuration(elapsed), dim: true },
++        { key: 'tokens', text: `${total || '—'} tok`, dim: true },
++        { key: 'tools', text: `${subagent.toolCalls.length} tools`, dim: true },
++    ].filter(field => field.text.length > 0);
++    // Integer drop right-to-left (tools first, model last — the leftmost
++    // fields inform the most) while the description floor does not fit;
++    // then the description absorbs the remaining squeeze (clipped with `…`).
++    const descFloor = stringWidth(t('subagent-card-prefix')) + 10;
++    let shownMeta = metaFields;
++    while (shownMeta.length > 0 && descFloor + CARD_FIELD_GAP + cardMetaCells(shownMeta) > headerBudget)
++        shownMeta = shownMeta.slice(0, -1);
++    // The desc→first-meta boundary costs a full separator (gap + `·` + gap),
++    // like every meta→meta boundary.
++    const descAvail = headerBudget - (shownMeta.length > 0 ? CARD_FIELD_GAP : 0) - cardMetaCells(shownMeta);
++    let shownDesc = descFull;
++    if (stringWidth(descFull) > descAvail) {
++        // Hard clip by display width (wide glyphs never split in half).
++        let width = 0;
++        let index = 0;
++        while (index < descFull.length) {
++            const next = descFull.codePointAt(index);
++            const char = String.fromCodePoint(next);
++            const charWidth = stringWidth(char);
++            if (width + charWidth > descAvail - 1)
++                break;
++            width += charWidth;
++            index += char.length;
++        }
++        shownDesc = index < descFull.length ? `${descFull.slice(0, index)}…` : descFull;
++    }
++    // Separators `·` live BETWEEN rendered fields only (including the
++    // description→metadata boundary; no orphan dots).
++    const metaChildren = [];
++    for (let index = 0; index < shownMeta.length; index++) {
++        const part = shownMeta[index];
++        metaChildren.push(_jsx(Text, { dimColor: true, children: "·" }, `${subagent.agentId}-meta-sep-${part.key}`));
++        metaChildren.push(_jsx(Text, { dimColor: part.dim, wrap: "truncate", children: part.text }, `${subagent.agentId}-meta-${part.key}`));
++    }
++    return _jsxs(Box, { flexDirection: "column", paddingLeft: 1, marginBottom: 1, onClick: onClick, onMouseEnter: onClick !== undefined ? () => setHovered(true) : undefined, onMouseLeave: onClick !== undefined ? () => setHovered(false) : undefined, backgroundColor: hoverTint ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Box, { flexDirection: "row", gap: 1, children: [_jsx(Text, { color: glyphColor, children: glyph }), _jsx(Text, { bold: true, color: focused ? 'claude' : undefined, wrap: "truncate", children: shownDesc }), ...metaChildren] }), liveLine && _jsx(Text, { dimColor: true, wrap: "truncate", children: `  │ ${liveLine}` })] });
+ }

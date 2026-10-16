@@ -1,0 +1,314 @@
+# Goal:      секция appearance в schemastery-схеме settings
+# Family:    PR.04
+# Status:    live
+# Files:     lib/types/tuiDisplayPrefs.js, lib/types/themePrefs.js,
+#            lib/types/components/design-system/ThemeProvider.js,
+#            lib/types/screens/StatusLine.js,
+#            lib/types/components/PromptInput.js,
+#            lib/types/dsh-adapter/channel.js, lib/types/dsh-adapter/plugin.js
+# Evidence:  facts/patches-B.md; reports/settings-channel-map (см. реестр
+#            apply-скрипта)
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (wave-b)
+
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -1,3 +1,10 @@
++// dsh-overrides 31: appearance settings (powerline/theme/inputBorder)
++// normalize here, next to the other display prefs. The color form check
++// reuses customTheme's validator so `appearance.inputBorder` accepts
++// exactly the same forms a theme file may (customTheme does not import
++// this module, so the edge adds no cycle).
++import { isValidThemeColor } from './customTheme.js';
++
+ /** Defaults keep the essential route/context information visible. */
+ export const DEFAULT_STATUS_BAR = Object.freeze({
+     compact: true,
+@@ -59,6 +66,37 @@
+     }
+     return normalized;
+ }
++// dsh-overrides 31: the powerline status-row style selector. Settings
++// values normalize here so every consumer (StatusLine) sees the enum or
++// undefined — never a free-form string.
++const POWERLINE_STYLES = new Set(['full', 'plain', 'off']);
++/** Normalize an appearance.powerline value to the enum, else undefined. */
++export function normalizePowerlineStyle(value) {
++    return typeof value === 'string' && POWERLINE_STYLES.has(value) ? value : undefined;
++}
++/**
++ * Merge a partial `dsh-tui.appearance` settings value into the stable
++ * defaults (all three fields optional; invalid values drop per-field,
++ * same contract as normalizeStatusBar).
++ * - powerline: 'full' | 'plain' | 'off' (anything else → undefined);
++ * - theme: non-empty string after trim (availability is checked by the
++ *   consumer, ThemeProvider, which owns the theme catalog);
++ * - inputBorder: a customTheme color form (#rgb/#rrggbb/#rrggbbaa,
++ *   rgb(r,g,b), ansi256(n), ansi:name) after trim.
++ */
++export function normalizeAppearance(value) {
++    const normalized = { powerline: undefined, theme: undefined, inputBorder: undefined };
++    if (value === null || typeof value !== 'object' || Array.isArray(value))
++        return normalized;
++    const input = value;
++    normalized.powerline = normalizePowerlineStyle(input.powerline);
++    if (typeof input.theme === 'string' && input.theme.trim() !== '')
++        normalized.theme = input.theme.trim();
++    if (typeof input.inputBorder === 'string' && isValidThemeColor(input.inputBorder.trim()))
++        normalized.inputBorder = input.inputBorder.trim();
++    return normalized;
++}
++
+ export function formatTokenCount(value) { // dsh-overrides 17: exported for StatusLine compact-left field
+     const rounded = Math.max(0, Math.round(value));
+     if (rounded < 1_000)
+--- a/lib/types/themePrefs.js
++++ b/lib/types/themePrefs.js
+@@ -11,6 +11,20 @@
+ import { isSafeThemeName } from './customTheme.js';
+ import { DATA_DIR } from './utils/paths.js';
+ const PREFS_DIR = DATA_DIR;
++// dsh-overrides 31: the settings.yaml `dsh-tui.appearance.theme` value.
++// Module-level only (settings.yaml owns the data; nothing is persisted
++// here): the plugin's settings apply writes it BEFORE the tree mounts,
++// and ThemeProvider reads it at boot BELOW DSH_TUI_THEME and ABOVE the
++// /theme persistence (theme.json) — see resolveForcedTheme there.
++let settingsTheme;
++/** Set (or clear with undefined/empty) the settings-layer theme name. */
++export function setSettingsThemePref(name) {
++    settingsTheme = typeof name === 'string' && name.trim() !== '' ? name.trim() : undefined;
++}
++/** The settings-layer theme name, or undefined when unset. */
++export function settingsThemePref() {
++    return settingsTheme;
++}
+ /**
+  * Parse a persisted `{ theme }` value; anything else yields undefined.
+  * @param text - Raw file contents.
+--- a/lib/types/components/design-system/ThemeProvider.js
++++ b/lib/types/components/design-system/ThemeProvider.js
+@@ -3,7 +3,7 @@
+ import { isThemeAvailable, registerCustomThemeResolver, setActiveThemeName, setAutoThemeBase, getAutoThemeBase, AUTO_THEME_NAME, } from '../../theme.js';
+ import { resolveCustomTheme } from '../../customTheme.js';
+ import { useRuntimeThemeSnapshot } from '../../hooks/useRuntimeThemeSnapshot.js';
+-import { readThemePref, writeThemePref } from '../../themePrefs.js';
++import { readThemePref, settingsThemePref, writeThemePref } from '../../themePrefs.js';
+ import useStdin from '../../ink/hooks/use-stdin.js';
+ import { oscColor } from '../../ink/terminal-querier.js';
+ import { parseOscColor } from '../../ink/termio/osc.js';
+@@ -65,11 +65,29 @@
+ function isLightBackground(r, g, b) {
+     return 0.299 * r + 0.587 * g + 0.114 * b > 140;
+ }
++// dsh-overrides 31: the boot-time forced-theme chain, exported for
++// tests. Explicit prop > DSH_TUI_THEME env > settings.yaml
++// `dsh-tui.appearance.theme` (only when the name resolves; an
++// unavailable settings theme is skipped so the persisted /theme choice
++// still wins) > the persisted ~/.dsh-tui/theme.json choice.
++export function resolveForcedTheme(explicit, settingsTheme, persisted) {
++    if (explicit !== undefined)
++        return explicit;
++    const env = envThemeOverride();
++    if (env !== undefined)
++        return env;
++    if (settingsTheme !== undefined && settingsTheme !== '' && isThemeAvailable(settingsTheme))
++        return settingsTheme;
++    return persisted;
++}
+ export function ThemeProvider({ children, theme, themeHost, }) {
+     const runtimeThemeSnapshot = useRuntimeThemeSnapshot(themeHost);
+     // Resolution happens once on mount: the forced chain (prop > env >
+-    // persisted) or null, which arms OSC 11 detection.
+-    const [forced] = useState(() => theme ?? envThemeOverride() ?? readThemePref());
++    // settings > persisted — see resolveForcedTheme) or null, which arms
++    // OSC 11 detection. The settings layer is boot-time only: the plugin
++    // writes it before the tree mounts; `/theme` keeps hot-swapping
++    // in-session and persists to theme.json.
++    const [forced] = useState(() => resolveForcedTheme(theme, settingsThemePref(), readThemePref()));
+     const [forcedValid] = useState(() => {
+         if (forced === undefined)
+             return false;
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -7,7 +7,7 @@
+ import { sweep } from '../components/shimmer.js';
+ import { parseRGB } from '../components/Spinner/spinnerUtils.js';
+ import { t } from '../i18n.js';
+-import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar } from '../tuiDisplayPrefs.js';
++import { formatContextUsage, DEFAULT_STATUS_BAR, normalizePowerlineStyle, normalizeStatusBar } from '../tuiDisplayPrefs.js';
+ import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js';
+ import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js';
+ import { GoalStatusChip } from '../components/GoalTodoPanel.js';
+@@ -87,7 +87,13 @@
+ // timer source; unmounted while idle, so the idle bar costs nothing).
+ const POWERLINE_SEP = '';
+ const POWERLINE_PLAIN_SEP = '❯';
+-const powerlineStyle = () => process.env.DSH_TUI_POWERLINE ?? 'full';
++// dsh-overrides 31: settings-layer precedence — env DSH_TUI_POWERLINE
++// (tests/debugging, never overridden) > settings.yaml
++// `dsh-tui.appearance.powerline` > 'full'. Invalid settings values
++// normalize away, so the default still applies.
++export const powerlineStyle = (channel) => process.env.DSH_TUI_POWERLINE
++    ?? normalizePowerlineStyle(channel?.appearance?.powerline)
++    ?? 'full';
+ const PRESSURE_WARN_PCT = 80;
+ const PRESSURE_DANGER_PCT = 95;
+ const CTX_BAR_CELLS = 6;
+@@ -139,7 +145,7 @@
+  * flat list of flexShrink:0 boxes that never wrap or reflow.
+  */
+ function buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual, hoverProps, columns, }) {
+-    const plain = powerlineStyle() === 'plain';
++    const plain = powerlineStyle(channel) === 'plain';
+     const sepWidth = plain ? 3 : 1;
+     const modelSuffix = mksActual !== undefined && mksActual !== channel.model
+         ? ` → ${mksActual}`
+@@ -500,7 +506,7 @@
+     // the ctx hover field folds into the ⚡ segment; everything else stays a
+     // plain dim tail field after the chain (fish-style hierarchy: filled
+     // blocks carry identity, dim text carries telemetry).
+-    const powerlineOn = hasStatusFields && !statusBar.compact && powerlineStyle() !== 'off';
++    const powerlineOn = hasStatusFields && !statusBar.compact && powerlineStyle(channel) !== 'off';
+     const powerline = powerlineOn
+         ? buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual: mks.actualModel, hoverProps, columns })
+         : undefined;
+--- a/lib/types/components/PromptInput.js
++++ b/lib/types/components/PromptInput.js
+@@ -10,6 +10,27 @@
+ import { EffortTierBadge } from './EffortTierBadge.js';
+ import { isLightThemeActive } from '../theme.js';
+ import { sessionColorHex } from '../cc/sessionColors.js';
++// dsh-overrides 31: appearance.inputBorder accepts the same color forms
++// as a theme file, so validation reuses customTheme's checker.
++import { isValidThemeColor } from '../customTheme.js';
++
++// dsh-overrides 31: the prompt-input border accent chain, exported for
++// tests. Precedence: plan mode (the sage-green planMode theme key) >
++// the /color session accent > settings.yaml `dsh-tui.appearance.inputBorder`
++// (a customTheme color form: #hex / rgb() / ansi256() / ansi:name) > the
++// theme's promptBorder key. `?? ''` semantics from the old inline code
++// are preserved: missing channel fields behave as unset.
++export function resolvePromptAccent(plan, sessionColorName, inputBorderSetting) {
++    if (plan === true)
++        return 'planMode';
++    const sessionAccent = sessionColorHex(sessionColorName ?? '');
++    if (sessionAccent !== undefined)
++        return sessionAccent;
++    const candidate = typeof inputBorderSetting === 'string' ? inputBorderSetting.trim() : '';
++    if (isValidThemeColor(candidate))
++        return candidate;
++    return 'promptBorder';
++}
+ import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js';
+ import { TerminalWriteContext } from '../ink/useTerminalNotification.js';
+ import { setClipboard } from '../ink/termio/osc.js';
+@@ -1882,8 +1903,7 @@
+     // 绿）。`/color` 会话强调色优先于主题 promptBorder（plan 模式仍整体走
+     // sage 绿）。`?? ''` 防御最小 mock channel（只声明用到的字段的回归脚
+     // 本）。声明在渲染派生区之前：展开编辑器的行号高亮与边框同用此色。
+-    const sessionAccent = sessionColorHex(channel.sessionColor ?? '');
+-    const promptAccent = channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'promptBorder');
++    const promptAccent = resolvePromptAccent(channel.mode.plan, channel.sessionColor, channel.appearance?.inputBorder);
+     // 展开态布局参数：编辑器独占整屏 —— 行号槽（宽度随逻辑行数伸缩）+
+     // 圆角边框 2 + 两侧 padding 各 1 占列，❯ 前缀 / vim 徽标 / ⛶ 按钮
+     // 全部让位；收起态额外扣掉行尾 ⛶ 按钮的 2 列。
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -45,7 +45,7 @@
+ import { AUTO_THEME_NAME } from '../theme.js';
+ import { listThemeCatalog } from '../themeCatalog.js';
+ import { modeDisplayName, resolveSessionModes } from '../sessionModes.js';
+-import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground } from '../tuiDisplayPrefs.js';
++import { normalizeAppearance, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground } from '../tuiDisplayPrefs.js';
+ import { SubagentActivityStore } from './subagents.js';
+ import { BackgroundJobStore, formatJobDuration } from './jobs.js';
+ import { ActivityTracker } from 'dsh-working-activity/status';
+@@ -2276,6 +2276,10 @@
+         statusBar: normalizeStatusBar(options.statusBar),
+         whale: options.whale !== false,
+         minimal: options.minimal === true,
++        // dsh-overrides 31: appearance (powerline/theme/inputBorder) —
++        // set by the plugin's settings apply; consumers read
++        // channel.appearance with per-field optional chaining.
++        appearance: normalizeAppearance(options.appearance),
+         activityEnabled: options.activity !== false,
+         contextBarEnabled: options.contextBar !== false,
+         agentPreset: options.agentPreset,
+@@ -4230,6 +4234,18 @@
+             state.minimal = enabled;
+             state.emit();
+         },
++        // dsh-overrides 31: appearance settings — merge-over-setter like
++        // setStatusBar (a partial update keeps the other fields).
++        setAppearance(config) {
++            const next = normalizeAppearance({ ...state.appearance, ...config });
++            const changed = next.powerline !== state.appearance.powerline
++                || next.theme !== state.appearance.theme
++                || next.inputBorder !== state.appearance.inputBorder;
++            if (!changed)
++                return;
++            state.appearance = next;
++            state.emit();
++        },
+         setActivityFrames(name) {
+             if (!isPresetName(name)) {
+                 state.notify(t('unknown-activity-preset', { name }), { color: 'error' });
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -12,6 +12,10 @@
+ import { ApprovalStore } from './approvals.js';
+ import { registerPromptDebug } from './promptDebug.js';
+ import { readActivityFrames } from '../activityPrefs.js';
++// dsh-overrides 31: appearance.theme rides the settings apply into the
++// theme preference layer (ThemeProvider reads it at boot, below the
++// DSH_TUI_THEME env and above the /theme persistence).
++import { setSettingsThemePref } from '../themePrefs.js';
+ import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js';
+ import { readModelPref } from '../modelPrefs.js';
+ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js';
+@@ -571,6 +575,19 @@
+             // Same no-default rule: unset keeps cordis.yml's `fullscreen`
+             // decisive; set overrides it from the next boot on.
+             fullscreen: Schema.boolean(),
++            // dsh-overrides 31: appearance settings channel — the styling
++            // knobs the user asked to own from settings.yaml. No defaults
++            // on purpose (same rule as `lang` above): an unset field must
++            // never shadow the consumer-side resolution (powerline:
++            // DSH_TUI_POWERLINE > this > 'full'; theme: DSH_TUI_THEME >
++            // this > ~/.dsh-tui/theme.json; inputBorder: /color > this >
++            // theme promptBorder). Invalid values fail the section
++            // resolve (the service keeps the last good section).
++            appearance: Schema.object({
++                powerline: Schema.union(['full', 'plain', 'off']).required(false),
++                theme: Schema.string().required(false),
++                inputBorder: Schema.string().required(false),
++            }).required(false),
+             // Built-in action-shortcut overrides, one optional combo string per
+             // action (see src/utils/keymap.ts). Unset keeps the default binding
+             // and the section's format() shows the effective combos.
+@@ -617,6 +634,17 @@
+             channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true);
+             channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar));
+         };
++        // dsh-overrides 31: appearance (powerline / theme / inputBorder).
++        // powerline + inputBorder land on the channel for the render
++        // consumers (StatusLine, PromptInput); theme goes to the theme
++        // preference layer BELOW DSH_TUI_THEME and ABOVE theme.json —
++        // written here at boot (before the tree mounts), hot-swapped
++        // in-session by /theme.
++        const applyAppearance = (value) => {
++            channel.setAppearance(value.appearance ?? {});
++            const theme = value.appearance?.theme;
++            setSettingsThemePref(typeof theme === 'string' ? theme : undefined);
++        };
+         // Shortcut overrides resolve per action: settings user layer wins over
+         // cordis.yml's `shortcuts` (same precedence as every other field);
+         // unset everywhere keeps the registry default. Applied live into the
+@@ -642,6 +670,7 @@
+             applyMinimal(next);
+             applyLang(next);
+             applyDisplay(next);
++            applyAppearance(next);
+             applyShortcuts(next);
+             applyFullscreen(next);
+         };

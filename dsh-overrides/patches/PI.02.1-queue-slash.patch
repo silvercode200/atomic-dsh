@@ -1,0 +1,26 @@
+# Goal:      слэш в ходе → очередь (queueSend), не литералом модели
+# Family:    PI.02
+# Status:    live
+# Files:     lib/types/components/PromptInput.js
+# Evidence:  reports/wavec-c/; facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-12, W3C Wave C (status bar)
+
+--- a/lib/types/components/PromptInput.js
++++ b/lib/types/components/PromptInput.js
+@@ -851,6 +851,15 @@
+                 if (tryRunCommand(value))
+                     return;
+             }
++            // dsh-overrides 20: slash commands typed during a turn are QUEUED
++            // for after the turn (Claude Code semantics — "/compact" must run
++            // once the turn settles), never steered as literal text: steering
++            // would inject "/compact" into the model's context instead of
++            // running the command. Plain messages keep the steer behavior.
++            if (parsed !== undefined) {
++                queueSend(value);
++                return;
++            }
+             steerSend(value);
+             return;
+         }

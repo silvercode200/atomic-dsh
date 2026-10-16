@@ -1,0 +1,448 @@
+# Goal:      единый хаб кастомизации /effects (hubSections)
+# Family:    HB.08
+# Status:    live
+# Files:     lib/types/hubSections.js, lib/types/appearancePrefs.js,
+#            lib/types/components/CustomizationHub.js,
+#            lib/types/dsh-adapter/plugin.js, lib/types/screens/Chat.js
+# Evidence:  TG-DSH-TUI-HUB-20260918 узел 5; reports/hub-frames/
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (TG-DSH-TUI-HUB-20260918 узел 5)
+
+--- a/lib/types/hubSections.js
++++ b/lib/types/hubSections.js
+@@ -0,0 +1,21 @@
++/**
++ * dsh-overrides 44: the customization-hub section registry. A section is
++ * ONE entry here — {id, title} — plus a component the hub renders for it
++ * (wired in CustomizationHub.js). Adding a future section = add an entry +
++ * a component: the hub root, navigation and the /effects argument jump all
++ * pick it up automatically (the plugin-like extension point the user asked
++ * for; see reports/hub-wave-20260918.md «как добавить секцию»).
++ */
++export const HUB_SECTIONS = [
++    { id: 'appearance', title: 'Оформление' },
++    { id: 'effects', title: 'Эффекты' },
++    { id: 'theme', title: 'Тема' },
++    { id: 'border', title: 'Рамка' },
++    { id: 'spinner', title: 'Спиннеры' },
++    { id: 'statusrow', title: 'Статус-ряд' },
++    { id: 'progress', title: 'Прогресс' },
++];
++/** Find a section by id (the /effects <section> argument jump). */
++export function hubSectionById(id) {
++    return HUB_SECTIONS.find(section => section.id === id);
++}
+--- a/lib/types/appearancePrefs.js
++++ b/lib/types/appearancePrefs.js
+@@ -0,0 +1,53 @@
++/**
++ * dsh-overrides 44: the interactive preference layer — the SAME
++ * best-effort JSON mechanism /theme (theme.json) and /effects
++ * (effects.json) use, extended to a general customization store:
++ * ~/.dsh-tui/appearance.json { appearance: {...}, effects: {...} }.
++ *
++ * The effects.json file stays fully supported (patch 38 semantics); the
++ * hub writes appearance.json and the plugin's apply chain merges BOTH
++ * interactive files OVER the settings.yaml layer (file wins per key —
++ * the fresher interactive choice beats the declarative base, exactly
++ * like theme.json vs the boot default).
++ */
++import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
++import { join } from 'node:path';
++import { DATA_DIR } from './utils/paths.js';
++const PREFS_DIR = DATA_DIR;
++const EMPTY = { appearance: {}, effects: {} };
++/** Read the interactive layer ({appearance, effects}; empty when absent/corrupt). */
++export function readAppearancePref(dir = PREFS_DIR) {
++    try {
++        const parsed = JSON.parse(readFileSync(join(dir, 'appearance.json'), 'utf8'));
++        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
++            return { appearance: {}, effects: {} };
++        return {
++            appearance: (parsed.appearance !== null && typeof parsed.appearance === 'object' && !Array.isArray(parsed.appearance)) ? parsed.appearance : {},
++            effects: (parsed.effects !== null && typeof parsed.effects === 'object' && !Array.isArray(parsed.effects)) ? parsed.effects : {},
++        };
++    }
++    catch {
++        return { appearance: {}, effects: {} };
++    }
++}
++/** Persist the interactive layer (best effort). */
++export function writeAppearancePref(pref, dir = PREFS_DIR) {
++    try {
++        mkdirSync(dir, { recursive: true });
++        writeFileSync(join(dir, 'appearance.json'), JSON.stringify({
++            appearance: pref.appearance ?? {},
++            effects: pref.effects ?? {},
++        }, null, 2));
++        return true;
++    }
++    catch {
++        return false;
++    }
++}
++/**
++ * Merge the interactive appearance layer OVER the settings value: file
++ * keys win, settings-only keys survive.
++ */
++export function mergeAppearanceOver(settingsAppearance, fileAppearance) {
++    return { ...(settingsAppearance ?? {}), ...(fileAppearance ?? {}) };
++}
+--- a/lib/types/components/CustomizationHub.js
++++ b/lib/types/components/CustomizationHub.js
+@@ -0,0 +1,236 @@
++import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
++import React from 'react';
++import { Box, Text, useAnimationFrame } from '../ui.js';
++import { Pane } from './design-system/Pane.js';
++import { HUB_SECTIONS } from '../hubSections.js';
++import { EFFECT_KEYS, animationsMode, effectEnabled, setAnimationsMode, setEffectsMode } from '../animationsMode.js';
++import { getEffectDescription } from '../effectsCatalog.js';
++import { SPINNER_NAMES, SPINNER_CATALOG, getSpinnerStyle } from '../spinnerCatalog.js';
++import { readAppearancePref, writeAppearancePref, mergeAppearanceOver } from '../appearancePrefs.js';
++/**
++ * dsh-overrides 44: the customization hub — ONE entry point for every
++ * dsh-tui appearance knob (the user's «одним пунктом с подпунктами»).
++ * Root = the section list (registry-driven: a future section is one
++ * HUB_SECTIONS entry + one component here); arrows+Enter navigate, Esc
++ * goes back. Every sub-section edits through the interactive layer
++ * (appearance.json / effects.json merged over settings.yaml — file wins
++ * per key) and applies LIVE through the process-wide registries.
++ */
++/** Read the current interactive appearance snapshot (live registries + file). */
++function currentAppearance() {
++    const pref = readAppearancePref();
++    return {
++        powerline: pref.appearance.powerline,
++        theme: pref.appearance.theme,
++        inputBorder: pref.appearance.inputBorder,
++        background: pref.appearance.background,
++        cwdMode: pref.appearance.cwdMode,
++    };
++}
++/** Persist one appearance key through the interactive layer. */
++function persistAppearance(key, value) {
++    const pref = readAppearancePref();
++    pref.appearance[key] = value;
++    writeAppearancePref(pref);
++}
++function persistEffect(key, value) {
++    const pref = readAppearancePref();
++    pref.effects[key] = value;
++    writeAppearancePref(pref);
++    setAnimationsMode('custom');
++    setEffectsMode(mergeEffectsLive());
++    return pref;
++}
++function mergeEffectsLive() {
++    const pref = readAppearancePref();
++    const map = {};
++    for (const k of EFFECT_KEYS)
++        if (typeof pref.effects[k] === 'boolean')
++            map[k] = pref.effects[k];
++    return map;
++}
++/** A small selectable list row. */
++function HubRow({ focused, label, value, color }) {
++    // dsh-overrides 44: the label needs flexShrink — a long name
++    // (inputBorderBreath) must not be clipped by the fixed-width layout.
++    return (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'remember' : undefined, bold: focused, children: focused ? '❯ ' : '  ' }), _jsx(Text, { color: focused ? 'remember' : undefined, wrap: 'truncate-end', children: label }), value !== undefined ? _jsxs(Text, { dimColor: true, children: [': ', _jsx(Text, { color: color ?? 'claude', children: String(value) })] }) : null] }));
++}
++/** Cycle a value through a list (wraps). */
++function cycle(value, list) {
++    const idx = list.indexOf(value);
++    return list[(idx + 1 + list.length) % list.length];
++}
++// ── Sections (each gets {focus, onKey} — Enter cycles/edits, live-applied) ──
++function AppearanceSection({ focus }) {
++    // Cycle-rows: powerline, theme(None=по theme.json), inputBorder(None=тема),
++    // background(None=тема), animations, cwdMode, sparklines (custom opt-in).
++    const rows = [
++        { id: 'powerline', label: 'Powerline', values: ['full', 'plain', 'off'] },
++        { id: 'theme', label: 'Тема', values: [undefined, 'tokyonight-moon', 'tokyonight-storm', 'gruvbox-dark', 'nord'] },
++        { id: 'inputBorder', label: 'Рамка ввода', values: [undefined, '#7aa2f7', '#e06c75', 'rgb(125,161,222)'] },
++        { id: 'background', label: 'Фон', values: [undefined, '#000000', '#1a1b26', '#222436'] },
++        { id: 'animations', label: 'Анимации', values: ['full', 'custom', 'off'] },
++        { id: 'cwdMode', label: 'Путь в статус-ряду', values: ['full', 'compact'] },
++    ];
++    const cur = currentAppearance();
++    const live = { powerline: cur.powerline, theme: cur.theme, inputBorder: cur.inputBorder, background: cur.background, animations: animationsMode(), cwdMode: cur.cwdMode ?? 'full' };
++    return (_jsxs(Box, { flexDirection: 'column', children: [rows.map((row, i) => (_jsx(HubRow, { focused: focus === i, label: row.label, value: live[row.id] ?? 'по умолчанию' }, row.id))), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter — переключить (живьём, персист в appearance.json); Esc — назад" }) })] }));
++}
++function EffectsSection({ focus }) {
++    // dsh-overrides 44: width '100%' so the row boxes get the full column
++    // and long effect names wrap-truncate instead of hard-clipping.
++    return (_jsxs(Box, { flexDirection: 'column', width: '100%', children: [EFFECT_KEYS.map((key, i) => (_jsxs(Box, { key: key, width: '100%', children: [_jsx(HubRow, { focused: focus === i, label: key, value: effectEnabled(key) ? 'on' : 'off', color: effectEnabled(key) ? 'success' : 'inactive' }), focus === i ? _jsx(Box, { paddingLeft: 4, children: _jsx(Text, { dimColor: true, wrap: 'wrap', children: getEffectDescription(key) }) }) : null] }))), _jsxs(Box, { marginTop: 1, children: [_jsx(Text, { dimColor: true, children: `режим: ${animationsMode()} · enter — тумблер · Esc — назад` })] })] }));
++}
++function ThemeSection({ focus, onPreview }) {
++    const themes = ['(по theme.json)', 'tokyonight-moon', 'tokyonight-storm', 'tokyonight-night', 'tokyonight-day', 'gruvbox-dark', 'gruvbox-material-dark', 'nord', 'dracula'];
++    const cur = readAppearancePref().appearance.theme;
++    return (_jsxs(Box, { flexDirection: 'column', children: [themes.map((name, i) => (_jsx(HubRow, { focused: focus === i, label: name, value: (cur ?? undefined) === (themes[i] === '(по theme.json)' ? undefined : themes[i]) ? 'выбрано' : undefined }, name))), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter — применить (живой превью как в /theme; выбранная тема закрепляется в appearance.json); Esc — назад" }) })] }));
++}
++function BorderSection({ focus }) {
++    const rows = [
++        { id: 'inputBorder', label: 'Рамка ввода (цвет)', values: [undefined, '#7aa2f7', '#e06c75', '#98c379', 'rgb(125,161,222)', 'ansi256(75)'] },
++    ];
++    const cur = readAppearancePref().appearance.inputBorder;
++    return (_jsxs(Box, { flexDirection: 'column', children: [rows.map((row, i) => (_jsx(HubRow, { focused: focus === i, label: row.label, value: cur ?? 'ключ темы promptBorder' }, row.id))), _jsx(Box, { marginTop: 1, children: _jsxs(Text, { dimColor: true, children: ["подсказка: значение — hex/rgb()/ansi256() (валидация customTheme); пусто = тема решает. Карточки — отдельный ключ bashBorder темы (в темах). Esc — назад"] }) })] }));
++}
++function SpinnerSection({ focus, columns }) {
++    const [, time] = useAnimationFrame(120);
++    const names = SPINNER_NAMES.slice(0, 24);
++    const cur = readAppearancePref().appearance.spinnerMain;
++    return (_jsxs(Box, { flexDirection: 'column', children: [_jsx(Text, { bold: true, color: 'remember', children: 'Стиль главного спиннера (каталог — 58 стилей):' }), names.map((name, i) => {
++            const style = getSpinnerStyle(name);
++            const frame = style.frames[Math.floor(time / style.interval) % style.frames.length];
++            return (_jsxs(Box, { key: name, children: [_jsx(HubRow, { focused: focus === i, label: name, value: `${frame}  (${style.frames.length} кадров)` }), _jsx(Text, { color: 'claude', children: '  ' + style.frames.slice(0, 3).join('') })] }, name));
++        }), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: `enter — выбрать (живое демо слева; остальные места — dsh-tui.spinner {subagent, toolCard}); Esc — назад` }) })] }));
++}
++function StatusRowSection({ focus }) {
++    const rows = [
++        { id: 'ctxBarMode', label: 'Режим ctx-бара', values: ['full', 'narrow', 'percent-only'] },
++        { id: 'cwdMode', label: 'Путь', values: ['full', 'compact'] },
++        { id: 'sparkTps', label: 'Спарклайн t/s', values: [false, true] },
++        { id: 'sparkCache', label: 'Спарклайн кеша', values: [false, true] },
++    ];
++    const pref = readAppearancePref();
++    const cur = { ctxBarMode: pref.appearance.ctxBarMode ?? 'full', cwdMode: pref.appearance.cwdMode ?? 'full', sparkTps: pref.effects.sparkTps === true, sparkCache: pref.effects.sparkCache === true };
++    return (_jsxs(Box, { flexDirection: 'column', children: [rows.map((row, i) => (_jsx(HubRow, { focused: focus === i, label: row.label, value: String(cur[row.id]), color: cur[row.id] === true || cur[row.id] === 'full' ? 'success' : 'inactive' }, row.id))), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter — цикл значений (сегменты модель/путь/ветка/ctx/таймер — в statusBar настроек; спарклайны — OPT-IN, вторая строка); Esc — назад" }) })] }));
++}
++function ProgressSection({ focus }) {
++    const on = effectEnabled('toolProgressBars');
++    return (_jsxs(Box, { flexDirection: 'column', children: [_jsx(HubRow, { focused: focus === 0, label: 'toolProgressBars', value: on ? 'on' : 'off', color: on ? 'success' : 'inactive' }), _jsx(Box, { paddingLeft: 4, children: _jsx(Text, { dimColor: true, wrap: 'wrap', children: getEffectDescription('toolProgressBars') }) }), _jsx(Box, { marginTop: 1, children: _jsxs(Text, { dimColor: true, children: ["важно: канал не стримит вывод работающего инструмента — бар появляется ПОСЛЕ завершения (итоговый прогресс curl/wget/tqdm). Esc — назад"] }) })] }));
++}
++const SECTION_COMPONENTS = {
++    appearance: AppearanceSection,
++    effects: EffectsSection,
++    theme: ThemeSection,
++    border: BorderSection,
++    spinner: SpinnerSection,
++    statusrow: StatusRowSection,
++    progress: ProgressSection,
++};
++/**
++ * The hub: `openSection` = the active sub-section id (null = root list).
++ * Keyboard lives in Chat's overlay handler (up/down/enter/esc) exactly
++ * like the /effects dashboard of patch 38.
++ */
++export function CustomizationHub({ openSection, focusIndex = 0, onToggle, onSectionChange }) {
++    const section = openSection !== null && openSection !== undefined ? HUB_SECTIONS.find(s => s.id === openSection) : undefined;
++    const Section = section !== undefined ? SECTION_COMPONENTS[section.id] : undefined;
++    return (_jsx(Pane, { color: 'permission', children: _jsxs(Box, { flexDirection: 'column', children: [_jsxs(Box, { marginBottom: 1, children: [_jsx(Text, { color: 'remember', bold: true, children: 'Кастомизация dsh-tui — хаб' }), _jsxs(Text, { dimColor: true, children: ['  (', section !== undefined ? section.title : 'разделы', ')'] })] }), section === undefined
++            ? (_jsxs(Box, { flexDirection: 'column', children: [HUB_SECTIONS.map((s, i) => (_jsx(HubRow, { focused: focusIndex === i, label: s.title }, s.id))), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: '↑/↓ — выбрать · enter — войти · esc — выход · новая секция = запись в HUB_SECTIONS' }) })] }))
++            : Section !== undefined ? _jsx(Section, { focus: focusIndex, onToggle: onToggle }) : null] }) }));
++}
++/** Apply a hub action (Enter): returns the next open section (or null). */
++export function hubEnterAction(openSection, focusIndex) {
++    if (openSection === null || openSection === undefined) {
++        const target = HUB_SECTIONS[focusIndex];
++        return target !== undefined ? target.id : null;
++    }
++    const pref = readAppearancePref();
++    switch (openSection) {
++        case 'appearance': {
++            const rows = [
++                { id: 'powerline', values: ['full', 'plain', 'off'] },
++                { id: 'theme', values: [undefined, 'tokyonight-moon', 'tokyonight-storm', 'gruvbox-dark', 'nord'] },
++                { id: 'inputBorder', values: [undefined, '#7aa2f7', '#e06c75', 'rgb(125,161,222)'] },
++                { id: 'background', values: [undefined, '#000000', '#1a1b26', '#222436'] },
++                { id: 'animations', values: ['full', 'custom', 'off'] },
++                { id: 'cwdMode', values: ['full', 'compact'] },
++            ];
++            const row = rows[focusIndex];
++            if (row === undefined)
++                break;
++            const cur = pref.appearance[row.id];
++            const next = cycle(cur, row.values);
++            if (next === undefined)
++                delete pref.appearance[row.id];
++            else
++                pref.appearance[row.id] = next;
++            writeAppearancePref(pref);
++            if (row.id === 'animations')
++                setAnimationsMode(next ?? 'full');
++            break;
++        }
++        case 'effects': {
++            const key = EFFECT_KEYS[focusIndex];
++            if (key !== undefined)
++                persistEffect(key, !effectEnabled(key));
++            break;
++        }
++        case 'theme': {
++            const themes = ['(по theme.json)', 'tokyonight-moon', 'tokyonight-storm', 'tokyonight-night', 'tokyonight-day', 'gruvbox-dark', 'gruvbox-material-dark', 'nord', 'dracula'];
++            const pick = themes[focusIndex];
++            if (pick === undefined)
++                break;
++            if (pick === '(по theme.json)')
++                delete pref.appearance.theme;
++            else
++                pref.appearance.theme = pick;
++            writeAppearancePref(pref);
++            break;
++        }
++        case 'border': {
++            const values = [undefined, '#7aa2f7', '#e06c75', '#98c379', 'rgb(125,161,222)', 'ansi256(75)'];
++            const next = cycle(pref.appearance.inputBorder, values);
++            if (next === undefined)
++                delete pref.appearance.inputBorder;
++            else
++                pref.appearance.inputBorder = next;
++            writeAppearancePref(pref);
++            break;
++        }
++        case 'spinner': {
++            const names = SPINNER_NAMES.slice(0, 24);
++            const name = names[focusIndex];
++            if (name !== undefined) {
++                pref.appearance.spinnerMain = name;
++                writeAppearancePref(pref);
++            }
++            break;
++        }
++        case 'statusrow': {
++            const rows = [
++                { id: 'ctxBarMode', values: ['full', 'narrow', 'percent-only'] },
++                { id: 'cwdMode', values: ['full', 'compact'] },
++                { id: 'sparkTps', values: [false, true], effect: true },
++                { id: 'sparkCache', values: [false, true], effect: true },
++            ];
++            const row = rows[focusIndex];
++            if (row === undefined)
++                break;
++            if (row.effect) {
++                persistEffect(row.id, !pref.effects[row.id]);
++            }
++            else {
++                const next = cycle(pref.appearance[row.id] ?? 'full', row.values);
++                pref.appearance[row.id] = next;
++                writeAppearancePref(pref);
++            }
++            break;
++        }
++        case 'progress': {
++            persistEffect('toolProgressBars', !effectEnabled('toolProgressBars'));
++            break;
++        }
++    }
++    return openSection;
++}
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -19,6 +19,7 @@
+ // dsh-overrides 33: the effect registry drives the schema's effects map.
+ import { EFFECT_KEYS } from '../animationsMode.js';
+ import { readEffectsPref } from '../effectsPrefs.js';
++import { readAppearancePref, mergeAppearanceOver } from '../appearancePrefs.js';
+ import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js';
+ import { readModelPref } from '../modelPrefs.js';
+ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js';
+@@ -679,14 +680,16 @@
+         // written here at boot (before the tree mounts), hot-swapped
+         // in-session by /theme.
+         const applyAppearance = (value) => {
+-            // dsh-overrides 38: the /effects panel's interactive toggles
+-            // persist to ~/.dsh-tui/effects.json (the theme.json mechanism);
+-            // that fresher layer merges OVER the settings.yaml effects map.
++            // dsh-overrides 38/44: the interactive layers — effects.json
++            // (per-effect toggles) AND appearance.json (the hub's general
++            // customization store) — merge OVER the settings.yaml layer
++            // (file wins per key; settings-only keys survive).
+             const settingsAppearance = value.appearance ?? {};
+             const interactive = readEffectsPref();
+-            const merged = Object.keys(interactive).length > 0
+-                ? { ...settingsAppearance, effects: { ...(settingsAppearance.effects ?? {}), ...interactive } }
+-                : settingsAppearance;
++            const hubLayer = readAppearancePref();
++            const hubAppearance = mergeAppearanceOver(settingsAppearance, hubLayer.appearance);
++            const hubEffects = { ...(hubAppearance.effects ?? {}), ...interactive };
++            const merged = { ...hubAppearance, effects: Object.keys(hubEffects).length > 0 ? hubEffects : (hubAppearance.effects ?? {}) };
+             channel.setAppearance(merged);
+             // dsh-overrides 35: verb customization rides the same apply.
+             channel.setSpinnerVerbs(value.spinnerVerbs);
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -73,6 +73,9 @@
+ import { ThemePicker, getThemeOptions, filterThemeOptions } from '../components/ThemePicker.js';
+ // dsh-overrides 38: /effects dashboard + registry access.
+ import { EffectsPanel } from '../components/EffectsPanel.js';
++// dsh-overrides 44: the customization hub (registry-driven sections).
++import { CustomizationHub, hubEnterAction } from '../components/CustomizationHub.js';
++import { hubSectionById, HUB_SECTIONS } from '../hubSections.js';
+ import { EFFECT_KEYS, animationsMode, effectEnabled, setAnimationsMode, setEffectsMode } from '../animationsMode.js';
+ import { readEffectsPref, writeEffectsPref } from '../effectsPrefs.js';
+ import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js';
+@@ -1303,9 +1306,17 @@
+                     ]);
+                     return true;
+                 }
++                // dsh-overrides 44: /effects opens the customization HUB
++                // (registry sections); '/effects <section>' jumps straight
++                // into a sub-section (effects/appearance/theme/border/
++                // spinner/statusrow/progress).
++                const sectionArg = parts[0];
++                const jump = sectionArg !== undefined && sectionArg !== 'status'
++                    ? (hubSectionById(sectionArg.toLowerCase())?.id ?? null)
++                    : null;
+                 dispatchOverlay({
+                     type: 'open',
+-                    overlay: { kind: 'effects', index: 0 },
++                    overlay: { kind: 'effects', index: 0, section: jump },
+                 });
+                 return true;
+             }
+@@ -2864,26 +2875,32 @@
+             return;
+         }
+         if (overlay.kind === 'effects') {
+-            // dsh-overrides 38: ↑/↓ move, Enter/Space toggle (persist +
+-            // live-apply through the process-wide registry), Esc exits.
+-            const count = EFFECT_KEYS.length;
++            // dsh-overrides 44: the hub drives the keys — root = section
++            // list (Enter enters), sub-sections cycle values through the
++            // interactive layer (appearance.json / effects.json over
++            // settings.yaml); Esc goes back to the root, then out.
++            // Row counts are section-aware (effects = EFFECT_KEYS).
++            const inRoot = (overlay.section ?? null) === null;
++            const count = inRoot ? HUB_SECTION_COUNT : overlay.section === 'effects' ? EFFECT_KEYS.length : 24;
+             if (key.upArrow || key.downArrow) {
+                 dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count });
+             }
+             else if (plainReturn || (input === ' ' && !key.ctrl)) {
+-                const keyName = EFFECT_KEYS[overlay.index];
+-                if (keyName !== undefined) {
+-                    const next = !effectEnabled(keyName);
+-                    const merged = { ...readEffectsPref(), [keyName]: next };
+-                    writeEffectsPref(merged);
+-                    // custom mode honors per-key maps; full/off ignore
+-                    // them — switching a toggle switches to custom.
+-                    setEffectsMode({ ...merged });
+-                    setAnimationsMode('custom');
++                if (inRoot) {
++                    dispatchOverlay({ type: 'set-index', kind: 'effects', index: overlay.index });
++                    const target = HUB_SECTIONS[overlay.index];
++                    if (target !== undefined)
++                        dispatchOverlay({ type: 'open', overlay: { kind: 'effects', index: 0, section: target.id } });
++                }
++                else {
++                    hubEnterAction(overlay.section, overlay.index);
+                 }
+             }
+             else if (key.escape) {
+-                dispatchOverlay({ type: 'close' });
++                if (inRoot)
++                    dispatchOverlay({ type: 'close' });
++                else
++                    dispatchOverlay({ type: 'open', overlay: { kind: 'effects', index: 0, section: null } });
+             }
+             return;
+         }
+@@ -3666,7 +3683,7 @@
+                                             return;
+                                         dispatchOverlay({ type: 'close' });
+                                         applyLang(lang);
+-                                    } }) })), overlay.kind === 'effects' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(EffectsPanel, { focusIndex: overlay.index, onToggle: undefined }) })), overlay.kind === 'theme' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(ThemePicker, { focusIndex: overlay.index, currentTheme: themeName, themeHost: themeHost, query: overlay.query ?? '', onPick: (index) => {
++                                    } }) })), overlay.kind === 'effects' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(CustomizationHub, { openSection: overlay.section ?? null, focusIndex: overlay.index }) })), overlay.kind === 'theme' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(ThemePicker, { focusIndex: overlay.index, currentTheme: themeName, themeHost: themeHost, query: overlay.query ?? '', onPick: (index) => {
+                                         dispatchOverlay({ type: 'close' });
+                                         const name = filterThemeOptions(getThemeOptions(themeHost), overlay.query ?? '')[index]?.value;
+                                         if (name !== undefined) {

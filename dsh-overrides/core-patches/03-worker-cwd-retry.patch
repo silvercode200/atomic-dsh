@@ -1,0 +1,90 @@
+--- a/lib/index.js	2026-09-10 18:02:24.674511053 +0300
++++ b/lib/index.js	2026-09-10 18:34:52.799270144 +0300
+@@ -1,6 +1,8 @@
+ import { stripTypeScriptTypes } from "node:module";
+ import { Worker } from "node:worker_threads";
+ import { fileURLToPath } from "node:url";
++// dsh-overrides core 03: dead-cwd (uv_cwd) worker spawn retry (TG-DSH-CLEAN-20260910 node 3)
++import { tmpdir } from "node:os";
+ import z from "@deepseek-ai/schemastery";
+ import { MAX_TIMER_DELAY_MS } from "@deepseek-ai/dsh-timeout";
+ import { CodeRuntime, DUNDER_MEMBER, PORTABLE_RESERVED_WORDS, RESERVED_BINDING_GLOBALS, RESERVED_ERROR_MEMBERS } from "@deepseek-ai/dsh-code-runtime";
+@@ -503,6 +505,48 @@
+ function messageOf(error) {
+ 	return error instanceof Error ? error.message : String(error);
+ }
++// dsh-overrides core 03: dead-cwd (uv_cwd) worker spawn retry (TG-DSH-CLEAN-20260910 node 3)
++// Когда cwd хост-процесса лежит на мёртвом маунте (SSHFS-флап), КАЖДЫЙ new Worker()
++// падает на спавне с ENOENT/ENOTCONN uv_cwd и все run_code мертвы до рестарта
++// процесса (49% всех code-run фейлов, reports/diagnosis-20260910-bug-a-rootcause.md).
++// У Worker нет опции cwd (воркер наследует process.cwd()), поэтому единственный
++// способ восстановления — process.chdir на живую директорию и один ретрай.
++/** Whether a run result is the dead-cwd spawn failure (uv_cwd ENOENT/ENOTCONN). */
++function isDeadCwdWorkerExit(result) {
++	const message = result?.error?.message;
++	// spawn-фаза умирает до выполнения кода: логов быть не должно; непустые
++	// логи = код уже частично выполнялся — ретраить нельзя (двойное выполнение)
++	const noLogs = Array.isArray(result?.logs) && result.logs.length === 0;
++	return noLogs && result?.error?.kind === "worker-exit" && typeof message === "string" && message.includes("uv_cwd") && (message.includes("ENOENT") || message.includes("ENOTCONN"));
++}
++/**
++* Move the process off a dead cwd. Tries DSH_FALLBACK_CWD, $HOME, the OS temp
++* dir and `/` in order; the first chdir(2) that succeeds wins. `process.chdir`
++* itself never touches the old cwd, so it works from a dead directory.
++* @returns the new live cwd, or null when every candidate failed.
++*/
++function chdirToLiveDirectory() {
++	for (const dir of [process.env.DSH_FALLBACK_CWD, process.env.HOME, tmpdir(), "/"]) {
++		if (typeof dir !== "string" || dir.length === 0) continue;
++		try {
++			process.chdir(dir);
++			return dir;
++		} catch {
++			/* try the next candidate */
++		}
++	}
++	return null;
++}
++/** Replace a dead-cwd failure message with an actionable instruction for the model. */
++function deadCwdActionableFailure(result) {
++	return {
++		...result,
++		error: {
++			...result.error,
++			message: `${result.error.message} — the session cwd is unavailable (dead mount after an SSHFS flap?) and chdir to a live directory failed; restart the session from a live directory`
++		}
++	};
++}
+ /** Resolve after a worker pipe emits all queued data, or closes/errors during termination. */
+ function waitForPipeDrain(stream) {
+ 	if (stream.readableEnded || stream.destroyed) return Promise.resolve();
+@@ -733,7 +777,28 @@
+ 		return bindings;
+ 	}
+ 	/** Spawn the worker for one validated, type-stripped run and drive it to settlement. */
+-	execute(request, code, bindings) {
++	// dsh-overrides core 03: on a dead-cwd (uv_cwd) spawn failure, chdir to a
++	// live directory and retry ONCE; a second dead-cwd failure (or no live dir
++	// at all) becomes an actionable error instead of a generic worker-exit.
++	// The recovered run is stamped with a leading log entry so the MODEL knows
++	// relative paths now resolve against the fallback cwd, not the session cwd.
++	async execute(request, code, bindings) {
++		const first = await this.executeOnce(request, code, bindings);
++		if (!isDeadCwdWorkerExit(first)) return first;
++		const liveDir = chdirToLiveDirectory();
++		if (liveDir === null) return deadCwdActionableFailure(first);
++		const second = await this.executeOnce(request, code, bindings);
++		if (isDeadCwdWorkerExit(second)) return deadCwdActionableFailure(second);
++		if (second?.error === void 0 || second?.error?.kind !== "output-limit") {
++			return {
++				...second,
++				logs: [`[dsh] session cwd was unavailable; process moved to ${liveDir} — relative paths in run_code resolve there, not against the session cwd`, ...second?.logs ?? []]
++			};
++		}
++		return second;
++	}
++	/** Single spawn attempt — the pre-patch `execute` body, unchanged. */
++	executeOnce(request, code, bindings) {
+ 		const worker = new Worker(WORKER_PATH, {
+ 			workerData: {
+ 				code,

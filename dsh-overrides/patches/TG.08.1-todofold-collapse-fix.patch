@@ -1,0 +1,44 @@
+# Goal:      fold-toggle по невидимому фолду: showTodoSection+прун
+# Family:    TG.08
+# Status:    live
+# Files:     lib/types/components/GoalTodoPanel.js
+# Evidence:  TG-DSH-COLLAPSE-011-20260911 узел 1; facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-11, W3 (TG-DSH-COLLAPSE-011-20260911 узел 1)
+
+--- a/lib/types/components/GoalTodoPanel.js
++++ b/lib/types/components/GoalTodoPanel.js
+@@ -255,11 +255,13 @@
+     const elapsed = goal !== undefined && startRef.current !== undefined
+         ? formatDuration(now - startRef.current.at)
+         : undefined;
+-    // Open-work snapshot with no goal: nothing left to narrate — the whole
+-    // panel folds away (historical behavior). dsh-overrides 14: open work
+-    // may hide inside children, so the check is tree-aware.
+-    const anyUnfinished = allTodos.some(todo => todo.status !== 'completed' || hasOpenDescendant(todo));
+-    const showTodoSection = allTodos.length > 0 && (channel.working || anyUnfinished || goal !== undefined);
++    // dsh-overrides 15: the fold header stays mounted whenever todos exist.
++    // Upstream hid the whole section on idle+all-completed ("stale footer
++    // noise"), which left the alt+m fold toggle flipping INVISIBLE state —
++    // every press read as a no-op (the SOC KNOWN-ISSUE "collapse-back broken
++    // on completed todos", reg-07). The collapsed header is one dim line,
++    // not noise; the panel folds away only when the channel has no todos.
++    const showTodoSection = allTodos.length > 0;
+     if (goal === undefined && !showTodoSection)
+         return null;
+     // dsh-overrides 13: live subagents and their mirrored todos. The store
+@@ -283,7 +285,13 @@
+     // dsh-overrides 14: assemble the combined tree and walk it into rows.
+     // Completed rows fold on idle (tree-aware, above); subagent groups then
+     // anchor into the pruned copy.
+-    const mainTree = pruneTree(allTodos, channel.working);
++    let mainTree = pruneTree(allTodos, channel.working);
++    // dsh-overrides 15: idle pruning that leaves NOTHING (all todos done)
++    // would render an expanded panel with an empty body under the ▾ header.
++    // Show the completed rows dim instead — the user asked for the list, and
++    // there is nothing else left to narrate.
++    if (!channel.working && mainTree.length === 0 && allTodos.length > 0)
++        mainTree = pruneTree(allTodos, true);
+     const visibleMainContents = new Set(collectContents(mainTree).slice(0, MAX_TODOS));
+     // Main rows currently in_progress: a live subagent todo with the SAME
+     // content merges into that row (●◐) instead of a duplicate row.

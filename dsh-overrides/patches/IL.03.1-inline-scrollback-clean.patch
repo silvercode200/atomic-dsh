@@ -1,0 +1,438 @@
+# Goal:      inline scrollback clean: пин-флип=ложный resize (E1) + дрейф-захват log-update: resize in-place repaint
+# Family:    IL.03
+# Status:    live
+# Files:     lib/types/ink/log-update.js
+# Evidence:  TG-DSH-REBUILD-20260921 узел 7.1;
+#            reports/colab-e1fix55-20260921T215031Z/;
+#            TG-DSH-REBUILD-20260921 узел 7.5; v2/v3:
+#            TG-DSH-THEMEDEMO-20260926;
+#            reports/colab-e1fix55c7-20260922T015702Z/
+# Upstream:  not-applicable
+# Added:     2026-09-21 (55); 2026-09-23 (55b); v2/v3 2026-09-26 (THEMEDEMO)
+# Squash:    3C consolidation of IL.03.1-inline-scrollback-clean + IL.03.2-log-update-resize-inplace
+--- a/lib/types/ink/log-update.js
++++ b/lib/types/ink/log-update.js
+@@ -1,7 +1,7 @@
+ import { ansiCodesToString, diffAnsiCodes, } from '@alcalzone/ansi-tokenize';
+ import { logForDebugging } from '../utils/debug.js';
+ import { cellAt, charInCellAt, diffEach, isEmptyCellAt, shiftRows, visibleCellAtIndex, } from './screen.js';
+-import { CURSOR_HOME, cursorDown, eraseToEndOfScreen, scrollDown as csiScrollDown, scrollUp as csiScrollUp, RESET_SCROLL_REGION, SGR_RESET, setScrollRegion, } from './termio/csi.js';
++import { CURSOR_HOME, cursorDown, cursorPosition, eraseToEndOfScreen, scrollDown as csiScrollDown, scrollUp as csiScrollUp, ERASE_LINE, RESET_SCROLL_REGION, SGR_RESET, setScrollRegion, } from './termio/csi.js';
+ import { isJetBrainsIdeTerminal } from './terminal.js';
+ import { LINK_END, link as oscLink } from './termio/osc.js';
+ const CARRIAGE_RETURN = { type: 'carriageReturn' };
+@@ -142,12 +142,100 @@
+         // Resizing is a rare enough event that it's not practically a big issue.
+         if (next.viewport.height !== prev.viewport.height ||
+             (prev.viewport.width !== 0 && next.viewport.width !== prev.viewport.width)) {
++            // dsh-overrides 55: pin→unpin transition (inline scrollback clean).
++            // Patch 11's inline pin gives the pinned frame a terminalRows+1
++            // viewport; unpinning drops it to terminalRows, which this branch
++            // treats as a resize and repaints only the frame tail
++            // [startY, H) — declaring rows [0, startY) "already in
++            // scrollback". But the pin phase NEVER scrolls the terminal:
++            // those rows are physically live on screen. ED0 erases them and
++            // the model then claims scrollback depth startY that physically
++            // does not exist — every later relative write lands startY rows
++            // off target (chrome painted over transcript rows — the E1
++            // "mix" lines), and each subsequent growth LF scrolls those
++            // corrupted rows into scrollback as full chrome copies (E1: 6
++            // frame copies per session on the patch stack, 2 on pristine).
++            // Fix: before the tail repaint, COMMIT the still-live top rows
++            // to scrollback for real — print them top-anchored, then scroll
++            // until they sit above the viewport — so the physical scrollback
++            // depth matches what the viewportY formulas already assume.
++            // Fires only on the pin→unpin signature (prev cursor clamped
++            // inside a viewport-filling frame, next cursor parking below a
++            // taller frame, same width); a real terminal resize reflows the
++            // scrollback on its own and falls through to the plain repaint.
++            // `committed` reuses the growing-frame viewportY formula on the
++            // PREVIOUS frame (how many of its rows already sit above the
++            // viewport) — self-consistent: this fix keeps formula and
++            // physics equal, so the next flip computes it correctly again.
++            // dsh-overrides 55b (v2): the detector's cursor signature (prev cursor
++            // clamped, next cursor parked below the frame) died with 70's
++            // cursor clamp — an overflowing frame now parks its cursor INSIDE
++            // the terminal, so `nextCursorBelow` is never true and the COMMIT
++            // below would stop firing: the top rows would stay "declared in
++            // scrollback" by the viewportY formulas without ever being
++            // physically committed (the E1 lost-rows regression). The pin
++            // state is now detected structurally: the pin hack is the ONLY
++            // layout whose viewport exceeds its frame by exactly one row
++            // (renderer.js terminalRows+1 vs a terminalRows-tall frame), so
++            // prevPinHack + next overflow + same width is the same set of
++            // transitions the cursor signature used to catch (the previously
++            // parked cursor was itself just a side effect of the unpin).
++            const prevPinHack = prev.viewport.height - prev.screen.height === 1;
++            const pinUnpin = !altScreen &&
++                prevPinHack &&
++                next.screen.height > next.viewport.height &&
++                prev.viewport.width === next.viewport.width;
++            if (pinUnpin) {
++                // dsh-overrides 55b (v2): mirror viewportRepaintPatches' contentRows
++                // (clamped cursor → full viewport, parked cursor → V-1). The
++                // old unconditional V-1 under-committed by one row relative to
++                // the clamped-cursor repaint: the row painted at the commit
++                // slice's tail was scrolled into scrollback AND repainted in
++                // the viewport — a one-row duplicate in history.
++                const nextCursorClamped = next.cursor.y < next.screen.height;
++                const commitContentRows = Math.min(next.screen.height, nextCursorClamped ? next.viewport.height : next.viewport.height - 1);
++                const startY = next.screen.height - commitContentRows;
++                const prevHadScrollback = prev.cursor.y >= prev.screen.height &&
++                    prev.screen.height >= prev.viewport.height;
++                const committed = Math.max(this.state.anchoredPad ?? 0, Math.max(0, prev.screen.height - prev.viewport.height + (prevHadScrollback ? 1 : 0)));
++                if (startY > committed) {
++                    const patches = [];
++                    // CURSOR_HOME anchors the physical cursor at the viewport
++                    // top, which is model row `committed` (that many frame
++                    // rows already sit above the viewport).
++                    patches.push({ type: 'stdout', content: CURSOR_HOME });
++                    // dsh-overrides 55c: the commit slice rewrites each row
++                    // absolutely (CUP+EL, no ED anchor) — the rows it paints
++                    // over are live screen rows, and the (startY - committed)
++                    // LFs below push exactly the printed rows into scrollback.
++                    const screen = new VirtualScreen({ x: 0, y: committed }, next.viewport.width);
++                    renderFrameSlice(screen, next, committed, startY, stylePool, true, true, 0);
++                    patches.push(...screen.diff);
++                    // Park the cursor ON the bottom row (CUP is absolute and
++                    // never pushes), then each LF scrolls exactly one printed
++                    // line into scrollback — (startY - committed) LFs land
++                    // exactly that many lines in history, matching the
++                    // model's viewportY depth.
++                    patches.push({ type: 'stdout', content: cursorPosition(next.viewport.height, 1) });
++                    for (let i = 0; i < startY - committed; i++) {
++                        patches.push(NEWLINE);
++                    }
++                    return [...patches, ...viewportRepaintPatches(prev, next, stylePool, false, 'resize')];
++                }
++            }
+             // A resize re-aligns the whole terminal (reflow rewraps scrollback):
+             // any anchored-pad offset from a previous shrink repaint is void.
+             // Height-only growth is included: the shrink branches below would
+             // otherwise mix the old and new viewport heights in their geometry.
+             this.state.anchoredPad = 0;
+-            return fullResetSequence_CAUSES_FLICKER(next, 'resize', stylePool);
++            // [LOCAL PATCH dsh-log-update-dup-frames] In-place repaint instead of
++            // clearTerminal (CSI 2J). tmux-style emulators (zellij) implement 2J
++            // as "push the whole viewport into scrollback, then blank it" — every
++            // resize deposited a frozen full-frame copy + blank band into the
++            // user's scroll history (duplicated-frame reports). CSI H + ED0
++            // (viewportRepaintPatches) erases and repaints the visible viewport
++            // in place and never touches scrollback.
++            return viewportRepaintPatches(prev, next, stylePool, false, 'resize');
+         }
+         // One-shot viewport re-anchor (see requestViewportReanchor): repaint
+         // the whole visible window from the physical cursor position, blind to
+@@ -319,6 +407,35 @@
+             if (linesToClear > prev.viewport.height) {
+                 return fullResetSequence_CAUSES_FLICKER(next, 'offscreen', this.options.stylePool);
+             }
++            // dsh-overrides 55b (v2): overflow shrink re-anchor. The terminal's
++            // scrollback is append-only: after a shrink the old scroll depth
++            // (anchoredPad / the shrinking formula) overcounts by the shrink
++            // delta, and the ordinary diff below would treat rows
++            // [next.H - next.V, staleDepth) as unreachable, painting only
++            // V - delta rows and leaving a BLANK band at the terminal bottom
++            // under the StatusLine — the "gap under the status bar" (batch-30
++            // probe: frame clean, status = last frame row, yet lastNonBlank
++            // stays V-2). A frame that still overflows the viewport must fill
++            // it entirely: re-anchor to the frame's bottom (viewportY = H-V)
++            // with a full in-place viewport repaint (55c lineErase — CUP+EL
++            // per row, never pushes into scrollback). anchoredPad resets to
++            // 0: the re-anchored mapping is exactly what the heights formula
++            // derives for the new height, so the next frame's diff stays
++            // consistent. Cost: the seam row (bottomAnchorY's predecessor in
++            // scrollback) keeps its growth-time snapshot while its repaint
++            // lands in the viewport — one duplicate transcript row per
++            // shrink event, versus a persistent visible gap under the status
++            // bar (the RCA's user-facing defect).
++            if (!altScreen && next.screen.height >= next.viewport.height) {
++                const bottomAnchorY = next.screen.height - next.viewport.height;
++                const staleDepth = Math.max(this.state.anchoredPad ?? 0, Math.max(prev.screen.height, next.screen.height) -
++                    next.viewport.height + cursorRestoreScroll);
++                if (staleDepth > bottomAnchorY) {
++                    this.state.anchoredPad = 0;
++                    logForDebugging(`Overflow shrink re-anchor: prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${next.viewport.height}, staleDepth=${staleDepth}, bottomAnchorY=${bottomAnchorY}`);
++                    return viewportRepaintPatches(prev, next, this.options.stylePool, false, 'shrink-reanchor');
++                }
++            }
+             // Record the scrollback rows stranded by this shrink. The terminal's
+             // scrollback cannot shrink with the content: rows that were above the
+             // viewport BEFORE the shrink stay there after it, but the heights
+@@ -461,7 +578,29 @@
+         currentHyperlink = transitionHyperlink(screen.diff, currentHyperlink, undefined);
+         // Handle growth: render new rows directly (they naturally scroll the terminal)
+         if (growing) {
+-            renderFrameSlice(screen, next, prev.screen.height, next.screen.height, stylePool);
++            // dsh-overrides 55b (v3): the growth slice's trailing end-of-row
++            // LF parks the cursor one row BELOW the frame — on the physical
++            // bottom row that LF scrolls an extra row into scrollback every
++            // growth frame, so the scroll depth settles at H-V+1 instead of
++            // H-V: the viewport ends one row PAST the frame tail, the
++            // StatusLine (frame row H-1) sits on physical row V-2 and the
++            // bottom row shows the blank virtual park row — the "gap under
++            // the status bar" during streaming (fake-llm stream replay: 94
++            // scrolls for H=115/V=22, terminal row 21 blank in BOTH terminal
++            // models; batch commits were clean because the pinUnpin/resize
++            // paths return before this slice). Patch 70 already parks the
++            // RENDERED cursor on the frame's last row (cursor.y = H-1), so
++            // when the cursor is clamped inside the frame the slice must
++            // stop there too: suppress the final row's LF, the cursor
++            // restore below becomes a plain same-row move, and the scroll
++            // count per frame is exactly the growth delta (S = H-V,
++            // bottom-anchored viewport, no park row — the model's viewportY
++            // formula with cursorRestoreScroll=0 matches physics again).
++            // Short frames keep the trailing LF: their cursor parks BELOW
++            // the frame (natural inline flow, the shell continues there)
++            // and the cursor-restore rowsToCreate path below expects the
++            // slice to have advanced onto that park row.
++            renderFrameSlice(screen, next, prev.screen.height, next.screen.height, stylePool, true, false, 0, next.cursor.y < next.screen.height);
+         }
+         // Restore cursor. Skipped in alt-screen: the cursor is hidden, its
+         // position only matters as the starting point for the NEXT frame's
+@@ -602,9 +741,26 @@
+     const height = frame.screen.height;
+     const contentRows = Math.min(height, Math.max(1, frame.viewport.height - 1));
+     const startY = height - contentRows;
++    // dsh-overrides 55c: clearTerminal (CSI 2J → v3's CSI H+ED0) →
++    // line-by-line erase (absolute CUP + EL per row). BOTH ED forms push
++    // the on-screen content region into scrollback on tmux-family
++    // multiplexors (micro-tests t2/t3/t5), depositing a frozen full-frame
++    // copy (logo + chrome) into the user's scroll history — the E1 frame
++    // copies. EL is line-local and never pushes (t6); the row-absolute
++    // addressing replaces the erase anchor entirely. Rows below the
++    // painted tail are blanked with the same CUP+EL pairs.
+     const screen = new VirtualScreen({ x: 0, y: startY }, frame.viewport.width);
+-    renderFrameSlice(screen, frame, startY, height, stylePool, false);
+-    return [{ type: 'clearTerminal', reason, debug }, ...screen.diff];
++    renderFrameSlice(screen, frame, startY, height, stylePool, false, true, 0);
++    const patches = [{ type: 'stdout', content: CURSOR_HOME }, ...screen.diff];
++    // screenRows: same terminal-rows clamp as viewportRepaintPatches (the
++    // +1-viewport pinned frame must not blank its own bottom row).
++    const screenRows = frame.cursor.y < frame.screen.height
++        ? frame.viewport.height - 1
++        : frame.viewport.height;
++    for (let p = contentRows; p < screenRows; p += 1) {
++        patches.push({ type: 'stdout', content: cursorPosition(p + 1, 1) + ERASE_LINE });
++    }
++    return patches;
+ }
+ /**
+  * Anchored tail repaint for shrink-to-fit frames — the fix for the
+@@ -660,19 +816,36 @@
+         // Top-anchored whole-frame repaint — the fresh-render layout.
+         const contentRows = Math.min(height, Math.max(1, viewportHeight - 1));
+         const startY = height - contentRows;
+-        const anchor = CURSOR_HOME + eraseToEndOfScreen();
++        // dsh-overrides 55c: line-by-line erase (CUP+EL per row) instead of
++        // the CSI H + ED0 anchor — tmux-family emulators push the on-screen
++        // content region into scrollback on ED (micro-test t5), depositing a
++        // full-frame copy per shrink (E1). See renderFrameSlice lineErase.
+         const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width);
+-        renderFrameSlice(screen, next, startY, height, stylePool, false);
+-        return { patches: [{ type: 'stdout', content: anchor }, ...screen.diff], anchoredPad: 0 };
++        renderFrameSlice(screen, next, startY, height, stylePool, false, true, 0);
++        const patches = [{ type: 'stdout', content: CURSOR_HOME }, ...screen.diff];
++        for (let p = contentRows; p < viewportHeight; p += 1) {
++            patches.push({ type: 'stdout', content: cursorPosition(p + 1, 1) + ERASE_LINE });
++        }
++        return { patches, anchoredPad: 0 };
+     }
+     const rowsToPaint = Math.max(1, Math.min(height, viewportHeight - 1, height - skip));
+     const startY = height - rowsToPaint;
+     const blankBand = Math.max(0, viewportHeight - 1 - rowsToPaint);
+-    const anchor = CURSOR_HOME + eraseToEndOfScreen() + (blankBand > 0 ? cursorDown(blankBand) : '');
++    // dsh-overrides 55c: same line-by-line erase as the skip<=0 branch, with
++    // the blank band above the painted tail blanked by the same absolute
++    // CUP+EL pairs (the old form used CSI H + ED0 + cursorDown — an ED
++    // push in tmux).
+     const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width);
+-    renderFrameSlice(screen, next, startY, height, stylePool, false);
++    renderFrameSlice(screen, next, startY, height, stylePool, false, true, blankBand);
++    const patches = [{ type: 'stdout', content: CURSOR_HOME }, ...screen.diff];
++    for (let p = 0; p < blankBand; p += 1) {
++        patches.push({ type: 'stdout', content: cursorPosition(p + 1, 1) + ERASE_LINE });
++    }
++    for (let p = blankBand + rowsToPaint; p < viewportHeight; p += 1) {
++        patches.push({ type: 'stdout', content: cursorPosition(p + 1, 1) + ERASE_LINE });
++    }
+     return {
+-        patches: [{ type: 'stdout', content: anchor }, ...screen.diff],
++        patches,
+         // Cap at height-1: a seam that matches every row of a very short frame
+         // must not mark the WHOLE frame as scrollback — the last row (the
+         // input area) stays live and repaintable.
+@@ -727,37 +900,63 @@
+  * and relocate the application to the top of the viewport.
+  */
+ function viewportRepaintPatches(prev, next, stylePool, resetPrefix, origin) {
+-    const viewportHeight = prev.viewport.height;
++    // [LOCAL PATCH dsh-log-update-dup-frames] next.viewport.height, not prev:
++    // the resize path calls this with a changed viewport; existing callers
++    // (reanchor, JetBrains append) always run with prev.viewport === next.viewport,
++    // so this is behavior-neutral for them and correct for resize.
++    const viewportHeight = next.viewport.height;
+     const height = next.screen.height;
+-    // The bottom viewport row stays reserved for the cursor park; content
+-    // occupies at most viewportHeight-1 rows above it (same split as the
+-    // steady state, where the park LF materializes one row below the frame).
+-    const contentRows = Math.min(height, viewportHeight - 1);
++    // dsh-overrides 55: a CLAMPED cursor (pinned inline frame — renderer.js
++    // parks it INSIDE the frame at terminalRows-1) does not materialize a
++    // park row below the frame, so the viewport-1 reservation is wrong for
++    // it: contentRows caps at viewport-1, startY skips frame row 0, and ED0
++    // erases that LIVE row — the frame's top line is lost (verified
++    // locally: the boot logo header row vanishes from the scrollback after
++    // the first pin→unpin flip, desyncing model scrollback depth from the
++    // physical one). When the cursor sits inside the frame, paint the whole
++    // frame up to the FULL viewport height; keep the park-row reservation
++    // only for frames whose cursor parks below the last row (natural inline
++    // flow, where the park LF materializes one extra row).
++    const cursorClamped = next.cursor.y < next.screen.height;
++    const contentRows = Math.min(height, cursorClamped ? viewportHeight : viewportHeight - 1);
+     const startY = height - contentRows;
+-    // Anchor with CSI H (cursor to viewport origin) instead of a RELATIVE
+-    // cursor-up walk. The relative form assumed the physical cursor sits
+-    // exactly on the park row — an assumption that breaks after a terminal
+-    // reflow (a width change rewraps scrollback, shifting the buffer/cursor
+-    // bookkeeping by a row or two). The over-shot cursor-up lands ABOVE the
+-    // viewport top, and the subsequent erase+repaint writes a full UI copy
+-    // into the scrollback (duplicated-history reports). CSI H has absolute
+-    // semantics — it always lands on the current viewport's top-left — so the
+-    // repaint can never cross into scrollback regardless of cursor drift.
+-    // Erase down from there (BCE fill — the SGR reset guarantees the default
+-    // background). The erase also blanks the park row, so no stale
+-    // prompt/status pixels survive below short content.
+-    const anchor = (resetPrefix ? SGR_RESET + LINK_END : '') +
+-        CURSOR_HOME +
+-        eraseToEndOfScreen();
++    // dsh-overrides 55c: the repaint no longer anchors with CSI H + ED0.
++    // tmux-family multiplexers implement BOTH ED forms as "push the
++    // on-screen content region into scrollback" (micro-tested: t5 — ED0
++    // from home pushed all 24 content rows), so every resize/reanchor
++    // repaint deposited a frozen full-frame copy (logo+chrome) into the
++    // user's history — the E1 copies. Instead each slice row is opened
++    // with an ABSOLUTE CUP to its physical row + EL (line-local, never
++    // pushes — t6/t7): the visible window is rewritten in place and the
++    // scrollback is never touched. Rows BELOW the slice (the park band and
++    // short-frame tails) are blanked with the same absolute CUP+EL pairs.
++    // The SGR/link reset prefix is kept for the append-caller (JetBrains):
++    // the row-opening EL must not BCE-fill with a style an earlier diff
++    // left open.
+     const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width);
+-    renderFrameSlice(screen, next, startY, height, stylePool, false);
+-    return [{ type: 'stdout', content: anchor }, ...screen.diff];
++    renderFrameSlice(screen, next, startY, height, stylePool, false, true, 0);
++    const patches = [];
++    if (resetPrefix)
++        patches.push({ type: 'stdout', content: SGR_RESET + LINK_END });
++    patches.push({ type: 'stdout', content: CURSOR_HOME });
++    patches.push(...screen.diff);
++    // Blank every physical row below the painted slice (stale
++    // prompt/status pixels of the previous, taller frame). screenRows
++    // clamps the loop to the REAL terminal: the pinned frame's viewport
++    // is terminalRows+1 (renderer.js +1 hack), and a CUP beyond the last
++    // row clamps back ONTO it — an unclamped loop would blank the frame's
++    // own bottom row.
++    const screenRows = cursorClamped ? viewportHeight - 1 : viewportHeight;
++    for (let p = contentRows; p < screenRows; p += 1) {
++        patches.push({ type: 'stdout', content: cursorPosition(p + 1, 1) + ERASE_LINE });
++    }
++    return patches;
+ }
+ /**
+  * Render a slice of rows from the frame's screen.
+  * Each row is rendered followed by a newline. Cursor ends at (0, endY).
+  */
+-function renderFrameSlice(screen, frame, startY, endY, stylePool, 
++function renderFrameSlice(screen, frame, startY, endY, stylePool,
+ /**
+  * When false (repaint / full-reset paths), advance rows with
+  * CR + cursor-down instead of bare LFs. The repaint paints exactly a
+@@ -769,7 +968,33 @@
+  * clamps at the bottom margin instead of scrolling, so the physical
+  * cursor stays exactly where the model expects it.
+  */
+-allowScroll = true) {
++allowScroll = true,
++/**
++ * dsh-overrides 55c: line-by-line erase mode. tmux-family multiplexers
++ * implement BOTH erase-in-display forms (ED0 after CSI H and ED2) as
++ * "push the on-screen content region into scrollback" (micro-tested on
++ * the real tmux: t2/t3/t5) — every repaint that anchored with CSI H+ED0
++ * deposited a frozen full-frame copy (logo+chrome) into the user's
++ * history (E1). In lineErase mode each slice row opens with an ABSOLUTE
++ * CUP to its physical row + EL (CSI 2K) — EL is a line-local operation
++ * and empirically never pushes (t6), and the row-absolute addressing
++ * needs no inter-row advance, so the repaint leaves scrollback
++ * untouched. physicalBase maps slice row 0 to its physical screen row
++ * (0 for top-anchored repaints, the blank-band offset for anchored
++ * shrink repaints).
++ */
++lineErase = false, physicalBase = 0,
++/**
++ * dsh-overrides 55b (v3): skip the LAST row's end-of-row advance. Used by
++ * the growth path when the cursor parks ON the frame's last row (patch 70
++ * clamp, next.cursor.y < screen.height): the trailing LF would land on the
++ * physical bottom row, scrolling one extra row into scrollback per growth
++ * frame (S = H-V+1) and materializing a blank park row below the frame —
++ * the streaming "gap under the status bar". With the suppression the slice
++ * leaves the cursor on the frame's tail and the scroll count is exactly
++ * the growth delta (S = H-V, bottom-anchored viewport).
++ */
++suppressFinalNewline = false) {
+     let currentStyleId = stylePool.none;
+     let currentHyperlink = undefined;
+     // Track the styleId of the last rendered cell on this line (-1 if none).
+@@ -778,13 +1003,26 @@
+     const { width: screenWidth, cells, charPool, hyperlinkPool } = frame.screen;
+     let index = startY * screenWidth;
+     for (let y = startY; y < endY; y += 1) {
++        // dsh-overrides 55c: lineErase opens each row absolutely — CUP to
++        // the physical row + EL(2K) wipes it (line-local, never pushes in
++        // tmux — micro-test t6/t7) — then the row's cells are written. No
++        // inter-row advance: every row re-anchors itself.
++        if (lineErase) {
++            const physRow = physicalBase + (y - startY);
++            screen.diff.push({ type: 'stdout', content: cursorPosition(physRow + 1, 1) + ERASE_LINE });
++            screen.cursor.x = 0;
++            screen.cursor.y = y;
++            lastRenderedStyleId = -1;
++            currentStyleId = transitionStyle(screen.diff, stylePool, currentStyleId, stylePool.none);
++            currentHyperlink = transitionHyperlink(screen.diff, currentHyperlink, undefined);
++        }
+         // Advance cursor to this row. With allowScroll, use LF (not CSI CUD /
+         // cursor-down): CSI CUD stops at the viewport bottom margin and cannot
+         // scroll, but LF scrolls the viewport to create new lines. Without this,
+         // when the cursor is at the viewport bottom, moveCursorTo's
+         // cursor-down silently fails, creating a permanent off-by-one
+         // between the virtual cursor and the real terminal cursor.
+-        if (screen.cursor.y < y) {
++        if (!lineErase && screen.cursor.y < y) {
+             const rowsToAdvance = y - screen.cursor.y;
+             if (allowScroll) {
+                 screen.txn(prev => {
+@@ -834,8 +1072,21 @@
+         // CR+LF (or CR+cursor-down for non-scrolling slices) at end of row —
+         // \r resets to column 0. Without \r, the terminal cursor stays at
+         // whatever column content ended (since we skip trailing spaces, this
+-        // can be mid-row).
+-        if (allowScroll) {
++        // can be mid-row). dsh-overrides 55c: in lineErase mode the next row
++        // re-anchors itself with an absolute CUP, so no end-of-row advance
++        // is emitted at all.
++        if (lineErase) {
++            // cursor already at the row's last written cell; the next row's
++            // CUP resets both column and row.
++        }
++        else if (allowScroll && suppressFinalNewline && y === endY - 1) {
++            // dsh-overrides 55b (v3): the slice's last row IS the cursor's
++            // park row (clamped cursor) — a trailing LF here would scroll
++            // the bottom row and materialize a blank park row below the
++            // frame. The caller's cursor-restore lands on this same row
++            // with a plain move; nothing needs the advance.
++        }
++        else if (allowScroll) {
+             screen.txn(prev => [[CARRIAGE_RETURN, NEWLINE], { dx: -prev.x, dy: 1 }]);
+         }
+         else {

@@ -1,0 +1,321 @@
+# Goal:      бары-глифы: градиенты, суб-ячейки, ctxBarMode/cwdMode
+# Family:    EF.05
+# Status:    live
+# Files:     lib/types/animationsMode.js, lib/types/tuiDisplayPrefs.js,
+#            lib/types/screens/StatusLine.js,
+#            lib/types/components/GoalTodoPanel.js,
+#            lib/types/dsh-adapter/plugin.js, lib/types/effectsCatalog.js
+# Evidence:  TG-DSH-TUI-HUB-20260918 узел 1; reports/hub-frames/
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (TG-DSH-TUI-HUB-20260918 узел 1)
+
+--- a/lib/types/animationsMode.js
++++ b/lib/types/animationsMode.js
+@@ -19,6 +19,7 @@
+  *   spinnerRainbow (30), spinnerGlimmer (28).
+  */
+ import { interpolateColor, toRGBColor } from './components/Spinner/spinnerUtils.js';
++import { getGraphemeSegmenter } from './utils/intl.js';
+ /** The LIVE42 effect registry (single source of truth for schema + panel). */
+ export const EFFECT_KEYS = [
+     'inputBorderBreath',
+@@ -29,6 +30,11 @@
+     'toolCardShimmer',
+     'spinnerRainbow',
+     'spinnerGlimmer',
++    // dsh-overrides 40: glyph-bars wave — pure-glyph restyling, no
++    // layout risk (default ON in full, opt-out in custom).
++    'headerTextGradient',
++    'subCellBars',
++    'barGradientFill',
+ ];
+ const ANIMATION_MODES = new Set(['full', 'custom', 'off']);
+ const EFFECT_KEY_SET = new Set(EFFECT_KEYS);
+@@ -87,3 +93,46 @@
+     const phase = (1 - Math.cos((time / periodMs) * 2 * Math.PI)) / 2;
+     return toRGBColor(interpolateColor(base, highlight, phase));
+ }
++
++/**
++ * dsh-overrides 40: per-character text gradient — each grapheme gets the
++ * pair color interpolated by its position ALONG the word and a slow time
++ * phase (cosine, so t=0 is exactly `base` everywhere, t=periodMs/2 is
++ * `highlight` everywhere; between them the hue travels across the word).
++ * Returns an ANSI string (chalk) to drop into a Text child.
++ */
++export function gradientText(word, time, base, highlight, periodMs = 2400) {
++    const phase = (1 - Math.cos((time / periodMs) * 2 * Math.PI)) / 2;
++    const segments = [...getGraphemeSegmenter().segment(word)];
++    // A traveling FRONT: phase 0 = the whole word sits on `base`; as the
++    // phase grows the highlight crest crosses the word left-to-right (each
++    // crossed segment fully highlighted, the one under the front blended);
++    // phase 1 = the whole word sits on `highlight`. The crest then travels
++    // back the same way (cosine period).
++    const total = segments.length;
++    let out = '';
++    segments.forEach(({ segment }, index) => {
++        const t = Math.min(1, Math.max(0, phase * (total + 1) - index));
++        const rgb = interpolateColor(base, highlight, t);
++        // raw truecolor SGR — no chalk dependency: the gradient must paint
++        // identically under tests (no TTY) and the live TUI.
++        out += `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m${segment}\x1b[0m`;
++    });
++    return out;
++}
++
++/**
++ * dsh-overrides 40: gradient bar fill — N cells, each an eighth-block glyph
++ * string with the pair color interpolated along the bar (first cell ≈ base
++ * at phase 0, last ≈ highlight at phase 1; the time phase slides the whole
++ * ramp). Returns one ANSI-painted string per cell.
++ */
++export function gradientBarFill(cells, base, highlight, phase) {
++    const out = [];
++    for (let i = 0; i < cells; i++) {
++        const t = Math.min(1, Math.max(0, phase)) * (cells <= 1 ? 1 : i / (cells - 1));
++        const rgb = interpolateColor(base, highlight, t);
++        out.push(`\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m█\x1b[0m`);
++    }
++    return out;
++}
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -36,6 +36,8 @@
+     realModel: true,
+     compactProgress: true,
+     compactThresholdRatio: 0.8,
++    // dsh-overrides 40: ctx-bar shape (full | narrow | percent-only).
++    ctxBarMode: 'full',
+ })
+ const TOOL_BACKGROUNDS = new Set(['none', 'subtle', 'strong']);
+ const SCROLL_GUTTERS = new Set(['timeline', 'scrollbar', 'hidden']);
+@@ -66,6 +68,9 @@
+             normalized[key] = input[key];
+         else if (typeof input[key] === 'number' && Number.isFinite(input[key]) && typeof normalized[key] === 'number')
+             normalized[key] = input[key];
++        // dsh-overrides 40: ctxBarMode is an enum, not a boolean/number.
++        else if (key === 'ctxBarMode')
++            normalized[key] = normalizeCtxBarMode(input[key]) ?? 'full';
+     }
+     return normalized;
+ }
+@@ -98,6 +103,51 @@
+         return themeValue;
+     return undefined;
+ }
++const CTX_BAR_MODES = new Set(['full', 'narrow', 'percent-only']);
++const CWD_MODES = new Set(['full', 'compact']);
++/**
++ * dsh-overrides 40: the ctx-bar shape — 'full' (6 cells, default),
++ * 'narrow' (3 cells), 'percent-only' (just the % text, no bar).
++ */
++export function normalizeCtxBarMode(value) {
++    return typeof value === 'string' && CTX_BAR_MODES.has(value) ? value : undefined;
++}
++/**
++ * dsh-overrides 40 (delta 1): the status-row path shape — 'full' = the
++ * whole display path (default), 'compact' = only the LAST segment (the
++ * current folder name). NOT statusBar.compact (that one kills powerline):
++ * a separate knob.
++ */
++export function normalizeCwdMode(value) {
++    return typeof value === 'string' && CWD_MODES.has(value) ? value : undefined;
++}
++/**
++ * dsh-overrides 40 (delta 1): compact the path to its last segment
++ * ('~/…/deepseek_harness' → 'deepseek_harness'; a bare name stays as is).
++ */
++export function compactCwd(displayCwd) {
++    if (typeof displayCwd !== 'string' || displayCwd === '')
++        return displayCwd;
++    return displayCwd.split('/').filter(Boolean).pop() ?? displayCwd;
++}
++const SUB_CELLS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
++/**
++ * dsh-overrides 40: sub-cell smooth bar — eighth-block glyphs make the
++ * fractional trailing cell; the returned pair always totals `cells`
++ * columns (fill + track).
++ * @param fraction - 0..1 fill amount (clamped).
++ * @param cells - Bar width in cells.
++ */
++export function subCells(fraction, cells) {
++    const clamped = Math.min(1, Math.max(0, Number.isFinite(fraction) ? fraction : 0));
++    if (cells <= 0)
++        return { fill: '', track: '' };
++    const eighths = Math.round(clamped * cells * 8);
++    const whole = Math.min(cells, Math.floor(eighths / 8));
++    const rem = whole < cells ? eighths % 8 : 0;
++    const fill = '█'.repeat(whole) + (rem > 0 ? SUB_CELLS[rem] : '');
++    return { fill, track: '·'.repeat(Math.max(0, cells - fill.length)) };
++}
+ /** Normalize an appearance.powerline value to the enum, else undefined. */
+ export function normalizePowerlineStyle(value) {
+     return typeof value === 'string' && POWERLINE_STYLES.has(value) ? value : undefined;
+@@ -138,6 +188,8 @@
+     // as inputBorder — isValidThemeColor).
+     if (typeof input.background === 'string' && isValidThemeColor(input.background.trim()))
+         normalized.background = input.background.trim();
++    // dsh-overrides 40 (delta 1): status-row path shape (full | compact).
++    normalized.cwdMode = normalizeCwdMode(input.cwdMode);
+     if (typeof input.theme === 'string' && input.theme.trim() !== '')
+         normalized.theme = input.theme.trim();
+     if (typeof input.inputBorder === 'string' && isValidThemeColor(input.inputBorder.trim()))
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -5,10 +5,10 @@
+ import { getTheme } from '../theme.js';
+ import { stringWidth } from '../ink/stringWidth.js';
+ import { sweep } from '../components/shimmer.js';
+-import { breathingColor, effectEnabled } from '../animationsMode.js';
++import { breathingColor, effectEnabled, gradientBarFill } from '../animationsMode.js';
+ import { interpolateColor, parseRGB } from '../components/Spinner/spinnerUtils.js';
+ import { t } from '../i18n.js';
+-import { formatContextUsage, DEFAULT_STATUS_BAR, normalizePowerlineStyle, normalizeStatusBar } from '../tuiDisplayPrefs.js';
++import { formatContextUsage, DEFAULT_STATUS_BAR, compactCwd, normalizePowerlineStyle, normalizeStatusBar, subCells } from '../tuiDisplayPrefs.js';
+ import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js';
+ import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js';
+ import { GoalStatusChip } from '../components/GoalTodoPanel.js';
+@@ -161,7 +161,7 @@
+  * renders the segment INCLUDING its leading separator, so the chain is a
+  * flat list of flexShrink:0 boxes that never wrap or reflow.
+  */
+-function buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual, hoverProps, columns, }) {
++function buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual, hoverProps, columns, themeName, }) {
+     const plain = powerlineStyle(channel) === 'plain';
+     const sepWidth = plain ? 3 : 1;
+     const modelSuffix = mksActual !== undefined && mksActual !== channel.model
+@@ -185,12 +185,33 @@
+         const threshold = Math.round(channel.contextWindow * (statusBar.compactThresholdRatio ?? 1));
+         const frac = threshold > 0 ? Math.min(1, Math.max(0, contextUsed / threshold)) : 0;
+         const pct = Math.round(frac * 100);
+-        const { fill, track } = ctxBarCells(frac);
++        // dsh-overrides 40: ctx-bar shape modes — full (6 cells), narrow
++        // (3), percent-only (no bar at all: just the % text).
++        const barMode = statusBar.ctxBarMode ?? 'full';
++        const barCells = barMode === 'narrow' ? 3 : CTX_BAR_CELLS;
++        // dsh-overrides 40: sub-cell smoothing (eighths) when on.
++        const { fill, track } = effectEnabled('subCellBars') && barMode !== 'percent-only'
++            ? subCells(frac, barCells)
++            : barMode === 'percent-only' ? { fill: '', track: '' } : ctxBarCells(frac);
+         const fillKey = pct >= PRESSURE_DANGER_PCT ? 'error' : pct >= PRESSURE_WARN_PCT ? 'warning' : 'inverseText';
+-        const ctxWidth = 3 + CTX_BAR_CELLS + 1 + stringWidth(`${pct}%`) + 1;
+-        add('ctx', 'toolDotWrite', ctxWidth, _jsxs(PowerlineSegment, { bg: "toolDotWrite", fg: "inverseText", id: "ctx", hoverProps: hoverProps, plain: plain, children: [" ⚡", channel.working && effectEnabled('ctxBarBreath')
+-                    ? _jsx(BreathingCtxFill, { fillKey: fillKey, text: fill })
+-                    : _jsx(Text, { color: fillKey, wrap: "truncate", children: fill }), _jsx(Text, { dimColor: true, wrap: "truncate", children: track }), ` ${pct}% `] }, "ctx"));
++        const ctxWidth = barMode === 'percent-only' ? 3 + stringWidth(`${pct}%`) + 1 : 3 + barCells + 1 + stringWidth(`${pct}%`) + 1;
++        // dsh-overrides 40: gradient fill along the bar (barGradientFill)
++        // paints each cell its own pair color; the breath (patch 34) and
++        // the gradient stack: breath wraps the gradient at the pressure key.
++        const gradientOn = effectEnabled('barGradientFill') && barMode !== 'percent-only' && fill !== '';
++        let fillNode;
++        if (gradientOn) {
++            const themeNow = getTheme(themeName);
++            const gBase = parseRGB(themeNow[fillKey]) ?? { r: 122, g: 162, b: 247 };
++            const gHi = parseRGB(themeNow.claudeShimmer) ?? { r: 171, g: 194, b: 236 };
++            const cells = gradientBarFill(fill.length, gBase, gHi, (Math.sin(Date.now() / 1400) + 1) / 2);
++            fillNode = _jsx(Text, { wrap: "truncate", children: cells.join('') });
++        }
++        else if (channel.working && effectEnabled('ctxBarBreath'))
++            fillNode = _jsx(BreathingCtxFill, { fillKey: fillKey, text: fill });
++        else
++            fillNode = _jsx(Text, { color: fillKey, wrap: "truncate", children: fill });
++        add('ctx', 'toolDotWrite', ctxWidth, _jsxs(PowerlineSegment, { bg: "toolDotWrite", fg: "inverseText", id: "ctx", hoverProps: hoverProps, plain: plain, children: [" ⚡", fillNode, barMode === 'percent-only' ? '' : _jsx(Text, { dimColor: true, wrap: "truncate", children: track }), ` ${pct}% `] }, "ctx"));
+     }
+     if (channel.working && channel.turnStart > 0) {
+         const elapsed = Math.max(0, Date.now() - channel.turnStart);
+@@ -246,6 +267,13 @@
+     const displayCwd = channel.displayCwd === channel.cwd
+         ? formatProject(channel.displayCwd, homeDir())
+         : channel.displayCwd;
++    // dsh-overrides 40 (delta 1): compact path shape — only the last
++    // segment (appearance.cwdMode; NOT the powerline-killing statusBar
++    // compact flag). Applied to the display path BEFORE it reaches the
++    // powerline segments and the compact field line.
++    const displayCwdShown = (channel.appearance?.cwdMode ?? 'full') === 'compact'
++        ? compactCwd(displayCwd)
++        : displayCwd;
+     const usage = channel.lastUsage;
+     const contextUsed = usage === undefined
+         ? undefined
+@@ -527,7 +555,7 @@
+     // blocks carry identity, dim text carries telemetry).
+     const powerlineOn = hasStatusFields && !statusBar.compact && powerlineStyle(channel) !== 'off';
+     const powerline = powerlineOn
+-        ? buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual: mks.actualModel, hoverProps, columns })
++        ? buildPowerlineSegments({ channel, statusBar, displayCwd: displayCwdShown, contextUsed, mksActual: mks.actualModel, hoverProps, columns, themeName })
+         : undefined;
+     const powerlineTailParts = powerlineOn
+         ? leftFields.filter(part => part.key !== 'model')
+--- a/lib/types/components/GoalTodoPanel.js
++++ b/lib/types/components/GoalTodoPanel.js
+@@ -2,8 +2,10 @@
+ import React from 'react';
+ import { Box, Text, useAnimationFrame, useTheme } from '../ui.js';
+ import { getTheme } from '../theme.js';
++import { subCells } from '../tuiDisplayPrefs.js';
++import { parseRGB as gtpParseRGB } from './Spinner/spinnerUtils.js';
+ import { parseRGB } from './Spinner/spinnerUtils.js';
+-import { breathingColor, effectEnabled } from '../animationsMode.js';
++import { breathingColor, effectEnabled, gradientText } from '../animationsMode.js';
+ import { t } from '../i18n.js';
+ import { modLabel } from '../utils/modifiers.js';
+ import { effectiveCombos } from '../utils/keymap.js';
+@@ -268,7 +270,12 @@
+  * static mist rose otherwise; ANSI themes fall back to the key.
+  */
+ function TodoProgressBar({ done, total, themeName, time }) {
+-    const { fill, track } = todoProgressCells(done, total);
++    // dsh-overrides 40: sub-cell smoothing for the header mini-bar
++    // (eighths) — same shape, smoother travel; effect off keeps the
++    // patch-29 cell snapping.
++    const { fill, track } = effectEnabled('subCellBars')
++        ? subCells(total > 0 ? Math.min(done, total) / total : 0, 5)
++        : todoProgressCells(done, total);
+     let color = 'toolDotTask';
+     if (effectEnabled('todoProgressBar')) {
+         const theme = getTheme(themeName);
+@@ -456,7 +463,9 @@
+     if (hiddenSubRows > 0)
+         combined.push({ content: t('goal-todo-agent-more', { n: hiddenSubRows }), sub: { live: false, overflow: true } });
+     const rows = walkTree(combined, [], { mainCount: 0, merged: mergedRunning }, []);
+-    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "�� " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "│ " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["✓ "] }), _jsx(TodoProgressBar, { done: doneCount, total: allTodos.length, themeName: glThemeName, time: headerTime }), liveAgents.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · ", _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "◐" }), " agents ", liveAgents.length] })), liveJobs.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · jobs ", liveJobs.length] })), _jsxs(Text, { dimColor: true, children: [" · ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["● ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["→ ○ ", next.content] }) })), !collapsed && (_jsx(Box, { flexDirection: "column", children: rows.map((row, index) => {
++    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "�� " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: effectEnabled('headerTextGradient')
++                        ? _jsx(Text, { bold: true, wrap: "truncate", children: gradientText(String(goal.objective), now, gtpParseRGB(getTheme(glThemeName).suggestion) ?? { r: 133, g: 150, b: 190 }, gtpParseRGB(getTheme(glThemeName).claudeShimmer) ?? { r: 171, g: 194, b: 236 }, 2400) })
++                        : _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "│ " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["✓ "] }), _jsx(TodoProgressBar, { done: doneCount, total: allTodos.length, themeName: glThemeName, time: headerTime }), liveAgents.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · ", _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "◐" }), " agents ", liveAgents.length] })), liveJobs.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · jobs ", liveJobs.length] })), _jsxs(Text, { dimColor: true, children: [" · ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["● ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["→ ○ ", next.content] }) })), !collapsed && (_jsx(Box, { flexDirection: "column", children: rows.map((row, index) => {
+                 // dsh-overrides 14: one flat row list from the tree walk.
+                 // Main rows keep the patch-13 look (dim branches, ● ○ ✓);
+                 // subagent rows are mist-rose with ◐ (works) / ○ (waits for
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -565,6 +565,8 @@
+                 realModel: Schema.boolean().default(DEFAULT_STATUS_BAR.realModel),
+                 compactProgress: Schema.boolean().default(DEFAULT_STATUS_BAR.compactProgress),
+                 compactThresholdRatio: Schema.number().default(DEFAULT_STATUS_BAR.compactThresholdRatio),
++                // dsh-overrides 40: ctx-bar shape — full | narrow | percent-only.
++                ctxBarMode: Schema.union(['full', 'narrow', 'percent-only']).default('full'),
+             }).default({ ...DEFAULT_STATUS_BAR }),
+             // Header pixel whale art; on unless settings.yaml says otherwise.
+             whale: Schema.boolean().default(true),
+@@ -599,6 +601,9 @@
+                 // the theme's appBackground key (env DSH_TUI_BACKGROUND is
+                 // highest; see tuiDisplayPrefs.resolveAppBackground).
+                 background: Schema.string().required(false),
++                // dsh-overrides 40 (delta 1): status-row path shape —
++                // full | compact (last segment only). NOT statusBar.compact.
++                cwdMode: Schema.union(['full', 'compact']).required(false),
+                 animations: Schema.union(['full', 'custom', 'off']).required(false),
+                 effects: Schema.object(Object.fromEntries(EFFECT_KEYS.map(key => [key, Schema.boolean().required(false)]))).required(false),
+             }).required(false),
+--- a/lib/types/effectsCatalog.js
++++ b/lib/types/effectsCatalog.js
+@@ -16,6 +16,10 @@
+     toolCardShimmer: 'Заголовок карточки terminal-инструмента мерцает тоном bashBorder, пока команда выполняется',
+     spinnerRainbow: 'Глиф спиннера плавно циклирует радужную палитру shimmer-оттенков',
+     spinnerGlimmer: 'Глагол под спиннером переливается бегущим окном подсветки',
++    // dsh-overrides 40: glyph-bars wave.
++    headerTextGradient: 'Заголовок панели задач залит градиентом, ползущим по буквам',
++    subCellBars: 'Бары прогресса сглаживаются восьмыми долями ячеек (▏▎▍▌▋▊▉)',
++    barGradientFill: 'Заливка бара контекста — градиент вдоль клеток',
+ };
+ /**
+  * The description for a registry key, or the key itself (with a warn) when

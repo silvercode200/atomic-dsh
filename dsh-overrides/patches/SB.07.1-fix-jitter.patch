@@ -1,0 +1,79 @@
+# Goal:      футер не меняет высоту: слот height:2 + клэмп веток
+# Family:    SB.07
+# Status:    live
+# Files:     lib/types/screens/Chat.js, lib/types/screens/StatusLine.js
+# Evidence:  TG-DSH-HUB-SETTINGS-20260918 узел 4; facts/patches-C.md
+# Upstream:  not-applicable
+# Added:     2026-09-18, W5 (TG-DSH-HUB-SETTINGS-20260918 узел 4)
+
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -3518,7 +3518,12 @@
+                             return _jsx(ScrollbarGutter, { handle: handle, terminalWidth: terminalColumns });
+                         }
+                         return (_jsx(TimelineRail, { handle: handle, turns: timeline.turns, activeId: timeline.activeId, upId: timeline.upId, downId: timeline.downId, terminalWidth: terminalColumns, hoverEnabled: !promptSelectionActive, onRevealTurn: revealAndSeekRow }));
+-                    })()] }), _jsxs(Box, { ref: inlineFooterRef, flexDirection: "column", flexShrink: 0, children: [showPill && (_jsx(NewMessagesPill, { count: unseenCount, onClick: () => handle?.scrollToBottom() })), channel.working &&
++                    })()] }), _jsxs(Box, { ref: inlineFooterRef, flexDirection: "column", flexShrink: 0, children: [showPill && (_jsx(NewMessagesPill, { count: unseenCount, onClick: () => handle?.scrollToBottom() })), // dsh-overrides 48: the footer never changes height — the working slot
++                        // (spinner OR activity line) is an ALWAYS-MOUNTED fixed-height cell
++                        // (2 rows + overflow hidden): appearing/disappearing used to grow
++                        // the footer by 2 (marginTop + the row) and flip the pin latch
++                        // (footer-gap §3); idle renders the same 2 blank rows.
++                        _jsx(Box, { height: 2, flexShrink: 0, overflow: "hidden", children: channel.working ?
+                         (channel.activityEnabled &&
+                             !channel.minimal &&
+                             channel.workingActivity !== undefined &&
+@@ -3528,7 +3533,7 @@
+                                 // the animated chars/4 estimate, matching the classic
+                                 // spinner's counter (the suffix used raw chars before,
+                                 // inflating the reading next to a real upload number).
+-                                suffix: `${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens` }) })) : (_jsx(WorkingSpinner, { spinnerStyle: channel.spinnerPrefs?.main, verbs: channel.spinnerVerbs, mode: channel.spinnerMode, hasActiveTools: channel.activeToolCount > 0, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, thinkingStatus: thinkingStatus }))), _jsx(GoalTodoPanel, { channel: channel, collapsed: todoCollapsed, onToggle: () => setTodoCollapsed(previous => !previous) }), recap !== null && recap.auto && !recap.expanded && (_jsx(AutoRecapRow, { summary: recap.summary, streaming: !recap.done, onExpand: () => setRecap(prev => (prev ? { ...prev, expanded: true } : prev)), onDismiss: () => closeRecap() })), balance !== null && (_jsx(BalanceReportRow, { result: balance.result, refreshing: balance.refreshing, tokens: channel.tokens, model: channel.model, onRefresh: runBalance, onDismiss: () => setBalance(null) })), statusEntries.length > 0 && (_jsx(Text, { dimColor: true, wrap: "truncate", children: statusEntries.map(entry => entry.text).join(' · ') })), approvalPanelNode !== null ? (approvalPanelNode) : dialogSnapshot !== null ? (_jsx(ExtensionDialog, { dialog: dialogSnapshot, onDecide: value => dialogs.decide(dialogSnapshot.key, value), onCancel: () => dialogs.cancel(dialogSnapshot.key) }, dialogSnapshot.key)) : overlay.kind === 'tips' ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(TipsPanel, { onClose: () => dispatchOverlay({ type: 'close-if', kind: 'tips' }) }) })) : recap !== null && (!recap.auto || recap.expanded) ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(RecapPanel, { summary: recap.summary, title: recap.title, error: recap.error, streaming: !recap.done, titleApplied: recap.titleApplied, onClose: () => {
++                                suffix: `${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens` }) })) : (_jsx(WorkingSpinner, { spinnerStyle: channel.spinnerPrefs?.main, verbs: channel.spinnerVerbs, mode: channel.spinnerMode, hasActiveTools: channel.activeToolCount > 0, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, thinkingStatus: thinkingStatus }))) : null }), _jsx(GoalTodoPanel, { channel: channel, collapsed: todoCollapsed, onToggle: () => setTodoCollapsed(previous => !previous) }), recap !== null && recap.auto && !recap.expanded && (_jsx(AutoRecapRow, { summary: recap.summary, streaming: !recap.done, onExpand: () => setRecap(prev => (prev ? { ...prev, expanded: true } : prev)), onDismiss: () => closeRecap() })), balance !== null && (_jsx(BalanceReportRow, { result: balance.result, refreshing: balance.refreshing, tokens: channel.tokens, model: channel.model, onRefresh: runBalance, onDismiss: () => setBalance(null) })), statusEntries.length > 0 && (_jsx(Text, { dimColor: true, wrap: "truncate", children: statusEntries.map(entry => entry.text).join(' · ') })), approvalPanelNode !== null ? (approvalPanelNode) : dialogSnapshot !== null ? (_jsx(ExtensionDialog, { dialog: dialogSnapshot, onDecide: value => dialogs.decide(dialogSnapshot.key, value), onCancel: () => dialogs.cancel(dialogSnapshot.key) }, dialogSnapshot.key)) : overlay.kind === 'tips' ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(TipsPanel, { onClose: () => dispatchOverlay({ type: 'close-if', kind: 'tips' }) }) })) : recap !== null && (!recap.auto || recap.expanded) ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(RecapPanel, { summary: recap.summary, title: recap.title, error: recap.error, streaming: !recap.done, titleApplied: recap.titleApplied, onClose: () => {
+                                 // An expanded auto recap collapses back to its dim row;
+                                 // a manual /recap closes outright.
+                                 if (recap.auto) {
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -152,12 +152,23 @@
+  * The live turn-timer segment. Mounted only while `working`, so the
+  * animation clock subscription exists exactly for the turn's duration.
+  */
++/**
++ * dsh-overrides 48: the timer text padded to a STABLE width. formatDuration
++ * saw-tooths on every boundary ('59s'(3) → '1m'(2) → '1m 1s'(5) → '2m'(2)),
++ * re-laying-out the powerline segment (and the row) once a second — the
++ * footer-gap §3 jitter. Padding to 7 covers everything under 10h
++ * ('59m 59s' = 7); longer turns just re-pad to the new bucket.
++ */
++export function stableTimerText(durationMs, width = 7) {
++    return formatDuration(durationMs).padStart(width, ' ');
++}
+ function TurnTimerSegment({ turnStart }) {
+     const [, time] = useAnimationFrame(60);
+     const [themeName] = useTheme();
+     const theme = getTheme(themeName);
+     const elapsed = Math.max(0, Date.now() - (turnStart > 0 ? turnStart : Date.now()));
+-    const text = formatDuration(elapsed);
++    // dsh-overrides 48: stable width — the segment never re-flows on ticks.
++    const text = stableTimerText(elapsed);
+     // The brand shimmer pair (restored by dsh-overrides 28 under any theme):
+     // base mist blue, highlight Border Blue — same sweep ActivityLine runs.
+     const base = parseRGB(theme.claude) ?? { r: 125, g: 161, b: 222 };
+@@ -225,7 +236,8 @@
+     // (settings.yaml statusBar.timer, default on).
+     if (statusBar.timer && channel.working && channel.turnStart > 0) {
+         const elapsed = Math.max(0, Date.now() - channel.turnStart);
+-        const timerWidth = 2 + stringWidth(formatDuration(elapsed)) + 2;
++        // dsh-overrides 48: the budget counts the PADDED text (stable).
++        const timerWidth = 2 + stringWidth(stableTimerText(elapsed)) + 2;
+         add('timer', 'toolCardBackgroundDim', timerWidth, _jsx(PowerlineSegment, { bg: "toolCardBackgroundDim", fg: "claude", plain: plain, children: _jsx(TurnTimerSegment, { turnStart: channel.turnStart }) }, "timer"));
+     }
+     // Overflow: drop segments right-to-left (timer, ctx, git, cwd — the model
+@@ -631,7 +643,7 @@
+     const sparkRow = _jsx(SparkRow, { channel: channel, columns: columns });
+     return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [sparkRow, barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
+                         ? (current !== null && current.startsWith('segment:') ? null : current)
+-                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: powerlineTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: powerlineRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
++                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: powerlineTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: powerlineRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
+ }
+ /**
+  * The supplemental-row readout for a hovered footer field. Technical label

@@ -1,0 +1,97 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+
+# Code Mode SDK runtime: dsh-tui 0.10.0-beta.4 mounts its own code-runtime
+# entry (dsh-tui-code-runtime) in the package's cordis.patch.yml. Do NOT
+# insert #code-runtime here: the bundle layer applies before this profile
+# layer, so the package's disabled-guard does not see our entry, both mount,
+# and the second registration crashes the boot ("service codeRuntime has been
+# registered"). With 0.9.3 the insert was required; with 0.10.0-beta.4 it must
+# stay removed.
+
+# Permission: dsh = workspace-write + approval never (no prompts inside cwd).
+# dsh+ still uses DSH_PERMISSION_MODE=danger-full-access (set by wrapper).
+# Difference between dsh and dsh+ is only the directory scope (cwd vs full).
+- id: approval
+  config:
+    policy: never
+
+# workspace-write + approval=never matches no built-in preset, and
+# PermissionPresetService throws at boot ("composed sandbox and approval
+# defaults match no preset; configure defaultPreset explicitly"). The presets
+# table below replaces the built-in dict wholesale: keep both built-ins and
+# add an exact match for our knobs. Without defaultPreset set, each wrapper
+# derives its own preset: dsh -> workspace-write-noask, dsh+ ->
+# danger-full-access.
+- id: permission
+  config:
+    presets:
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+        name: workspace-write
+        description: Write inside the workspace and permitted temporary directories; wider retries require approval.
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+        name: danger-full-access
+        description: Full file access without approval prompts.
+      workspace-write-noask:
+        sandbox: workspace-write
+        approval: never
+        name: workspace-write-noask
+        description: Write inside the workspace and permitted temporary directories without approval prompts.
+
+# Lazy MCP: disable the auto-takeover manager (it would hide TaskGate too) and
+# instead wire the 7 non-permanent servers as explicit lazy servers.
+# TaskGate stays a direct stdio client in the machine-wide ~/.dsh/cordis.patch.yml.
+- id: mcp-lazy-manager
+  disabled: true
+
+- insert:
+    - id: mcp-lazy-codegraph
+      name: '@yilinxiao/dsh-mcp-lazy'
+      config:
+        transport: stdio
+        serverName: codegraph
+        command: /home/user/.dsh/bin/mcp-stderr-to-log
+        args: [codegraph, /home/user/.local/bin/codegraph, serve, --mcp, --no-watch]
+        autoActivate: false
+        releaseOnTurnEnd: true
+        routingHints: [code graph, codegraph, граф кода, code]
+
+    - id: mcp-lazy-context-mode
+      name: '@yilinxiao/dsh-mcp-lazy'
+      config:
+        transport: stdio
+        serverName: context-mode
+        command: /home/user/.dsh/bin/mcp-stderr-to-log
+        args: [context-mode, /home/user/.nvm/versions/node/v22.23.2/bin/npx, -y, context-mode]
+        autoActivate: false
+        releaseOnTurnEnd: true
+        routingHints: [context, sandbox, index, агрегация]
+
+    # Example lazy MCP servers — replace paths with your actual server locations.
+    # Personal servers (soc, termseer, desktop-snapshot) removed: wire your own.
+    - id: mcp-lazy-tavily
+      name: '@yilinxiao/dsh-mcp-lazy'
+      config:
+        transport: stdio
+        serverName: tavily
+        command: /home/user/.dsh/bin/mcp-stderr-to-log
+        args: [tavily, /home/user/.local/bin/tavily-mcp-wrapper.sh]
+        autoActivate: false
+        releaseOnTurnEnd: true
+        routingHints: [web search, поиск, tavily, search, research]
+
+    - id: mcp-lazy-deep-research
+      name: '@yilinxiao/dsh-mcp-lazy'
+      config:
+        transport: stdio
+        serverName: deep-research
+        command: /home/user/.dsh/bin/mcp-stderr-to-log
+        args: [deep-research, /usr/bin/python3, /home/user/.local/bin/deep-research-server.py]
+        autoActivate: false
+        releaseOnTurnEnd: true
+        routingHints: [deep research, рисёч, research]

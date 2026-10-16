@@ -1,0 +1,8 @@
+#!/bin/bash
+# mcp-stderr-to-log <name> <cmd> [args...] — exec cmd с stderr → ~/.dsh/logs/mcp-<name>.stderr.log
+# Абсолютные пути: dsh-mcp-client вычищает ambient env (PATH/HOME могут отсутствовать).
+name="$1"; shift
+# Resolve HOME at runtime — dsh-mcp-client strips ambient env (HOME may be absent)
+: "${HOME:=$(getent passwd "$(id -u)" | cut -d: -f6)}"
+/bin/mkdir -p "$HOME/.dsh/logs"
+exec "$@" 2>>"$HOME/.dsh/logs/mcp-${name}.stderr.log"

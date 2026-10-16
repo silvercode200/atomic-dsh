@@ -1,0 +1,64 @@
+# Goal:      компакт todo-панели + fold-хинт в заголовке
+# Family:    TG.01
+# Status:    live
+# Files:     lib/types/components/GoalTodoPanel.js,
+#            lib/types/components/HelpMenu.js, lib/types/i18n.js
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-04, W1 — стартовый реестр 0.10.0-beta.4
+
+--- a/lib/types/components/GoalTodoPanel.js
++++ b/lib/types/components/GoalTodoPanel.js
+@@ -3,6 +3,8 @@
+ import { Box, Text } from '../ui.js';
+ import { t } from '../i18n.js';
+ import { modLabel } from '../utils/modifiers.js';
++import { effectiveCombos } from '../utils/keymap.js';
++const todoFoldMod = () => (effectiveCombos('todoFold')[0]?.raw ?? 'ctrl+m').replace(/m$/, '');
+ /** Maximum todo rows shown before the overflow line. */
+ const MAX_TODOS = 8;
+ const PHASE_LABEL = {
+@@ -124,8 +126,8 @@
+     // Collapsed preview: the live task when one runs, else the next open row.
+     const preview = allTodos.find(todo => todo.status === 'in_progress')
+         ?? allTodos.find(todo => todo.status !== 'completed');
+-    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, paddingTop: 1, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "\uD83C\uDFAF " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "\u2502 " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["\u2713 ", doneCount, "/", allTodos.length] }), collapsed && preview !== undefined && (_jsx(Box, { flexGrow: 1, flexShrink: 1, marginLeft: 1, children: preview.status === 'in_progress' ? (_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { color: "suggestion", children: "\u25CF " }), preview.content] })) : (_jsxs(Text, { wrap: "truncate", dimColor: true, children: ["\u25CB ", preview.content] })) }))] }), !collapsed && (_jsxs(Box, { flexDirection: "column", children: [visible.map((todo, index) => {
++    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "\uD83C\uDFAF " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "\u2502 " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["\u2713 ", doneCount, "/", allTodos.length] }), !collapsed && (_jsxs(Text, { dimColor: true, children: [" \u00b7 ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })), collapsed && preview !== undefined && (_jsx(Box, { flexGrow: 1, flexShrink: 1, marginLeft: 1, children: preview.status === 'in_progress' ? (_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { color: "suggestion", children: "\u25CF " }), preview.content] })) : (_jsxs(Text, { wrap: "truncate", dimColor: true, children: ["\u25CB ", preview.content] })) }))] }), !collapsed && (_jsxs(Box, { flexDirection: "column", children: [visible.map((todo, index) => {
+                                 const last = index === visible.length - 1 && hidden === 0;
+                                 return (_jsxs(Box, { flexDirection: "row", children: [_jsx(BranchPrefix, { last: last }), _jsx(TodoGlyph, { status: todo.status }), _jsx(Text, { wrap: "truncate", dimColor: todo.status === 'completed', children: todo.content })] }, index));
+-                            }), hidden > 0 && (_jsxs(Box, { flexDirection: "row", children: [_jsx(BranchPrefix, { last: true }), _jsxs(Text, { dimColor: true, children: ["\u2026 ", hidden, " more"] })] })), _jsxs(Text, { dimColor: true, children: ["  ", t('goal-todo-fold-hint', { mod: modLabel })] })] }))] }))] }));
++                            }), hidden > 0 && (_jsxs(Box, { flexDirection: "row", children: [_jsx(BranchPrefix, { last: true }), _jsxs(Text, { dimColor: true, children: ["\u2026 ", hidden, " more"] })] }))] }))] }))] }));
+ }
+--- a/lib/types/components/HelpMenu.js
++++ b/lib/types/components/HelpMenu.js
+@@ -4,6 +4,8 @@
+ import { localizedDescription } from '../commands.js';
+ import { t } from '../i18n.js';
+ import { modLabel } from '../utils/modifiers.js';
++import { effectiveCombos } from '../utils/keymap.js';
++const todoFoldMod = () => (effectiveCombos('todoFold')[0]?.raw ?? 'ctrl+m').replace(/m$/, '');
+ /**
+  * The `?` help menu, mirroring Claude Code's `PromptInputHelpMenu.tsx`
+  * (three-column shortcut layout, trimmed to the keys dsh-tui actually binds).
+@@ -17,7 +19,7 @@
+ export function HelpMenu({ commands, viewportHeight, viewportWidth, scrollRef, onCommandPick, }) {
+     const chrome = commands.filter(command => !command.skill);
+     const primaryShortcuts = (_jsxs(Box, { flexDirection: "column", width: 26, flexShrink: 0, children: [_jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-for-commands') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-this-help') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-verbose-output', { mod: modLabel }) }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-open-trajectory', { mod: modLabel }) }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-search-history', { mod: modLabel }) }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-interrupt') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-exit') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-redraw', { mod: modLabel }) }) })] }));
+-    const secondaryShortcuts = (_jsxs(Box, { flexDirection: "column", width: 24, flexShrink: 0, children: [_jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-clear-input') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-history-nav') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-move-cursor') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-word-jumps', { mod: modLabel }) }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-complete-command') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-cycle-mode') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-open-editor') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-fold-todos', { mod: modLabel }) }) })] }));
++    const secondaryShortcuts = (_jsxs(Box, { flexDirection: "column", width: 24, flexShrink: 0, children: [_jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-clear-input') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-history-nav') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-move-cursor') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-word-jumps', { mod: modLabel }) }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-complete-command') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-cycle-mode') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-open-editor') }) }), _jsx(Box, { children: _jsx(Text, { dimColor: true, children: t('help-fold-todos', { mod: todoFoldMod() }) }) })] }));
+     const commandRows = chrome.map(command => (_jsx(HelpCommandRow, { command: command, onPick: onCommandPick }, command.name)));
+     const compactCommandRows = chrome.map(command => (_jsx(HelpCommandRow, { command: command, onPick: onCommandPick }, command.name)));
+     const commandList = (_jsxs(Box, { flexDirection: "column", flexShrink: 0, children: [_jsx(Text, { dimColor: true, children: t('help-commands-title') }), commandRows] }));
+--- a/lib/types/i18n.js
++++ b/lib/types/i18n.js
+@@ -568,8 +568,8 @@
+     'help-complete-command': { zh: 'tab 补全命令', en: 'tab to complete command' },
+     'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
+     'help-open-editor': { zh: 'ctrl+g 打开编辑器', en: 'ctrl+g to open editor' },
+-    'help-fold-todos': { zh: '{{mod}}q 折叠待办', en: '{{mod}}q to fold todos' },
+-    'goal-todo-fold-hint': { zh: '{{mod}}q 折叠', en: '{{mod}}q to fold' },
++    'help-fold-todos': { zh: '{{mod}}m 折叠待办', en: '{{mod}}m to fold todos' },
++    'goal-todo-fold-hint': { zh: '{{mod}}m 折叠', en: '{{mod}}m to fold' },
+     'help-commands-title': { zh: '命令：', en: 'commands:' },
+     'help-scroll-hint': {
+         zh: '↑/↓ 滚动 · PgUp/PgDn 翻页 · Home/End 首尾 · Esc 关闭',

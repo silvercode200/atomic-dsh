@@ -1,0 +1,310 @@
+# Goal:      animationsMode.js: гейт эффектов + дыхание рамки
+# Family:    EF.02
+# Status:    live
+# Files:     lib/types/animationsMode.js, lib/types/tuiDisplayPrefs.js,
+#            lib/types/dsh-adapter/channel.js, lib/types/dsh-adapter/plugin.js,
+#            lib/types/components/EffortInputBorder.js,
+#            lib/types/components/PromptInput.js
+# Evidence:  reports/live42-frames/; facts/patches-C.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 LIVE42
+
+--- a/lib/types/animationsMode.js
++++ b/lib/types/animationsMode.js
+@@ -0,0 +1,89 @@
++/**
++ * dsh-overrides 33: process-wide gate + per-effect registry for the LIVE42
++ * animation wave. Mirrors minimalMode.js: the channel's setAppearance pushes
++ * the normalized settings values here, leaf components read effectEnabled()
++ * instead of threading the channel through four render layers.
++ *
++ * Modes (`dsh-tui.appearance.animations`, env DSH_TUI_ANIMATIONS on top):
++ *   full   — every effect on (default);
++ *   custom — per-effect opt-out via `dsh-tui.appearance.effects`
++ *            `{<key>: boolean}`; an UNSET key means ON (opt-out semantics);
++ *   off    — the whole wave static.
++ * DSH_TUI_REDUCED_MOTION=1 disables everything over any mode (the upstream
++ * spinner reduced-motion is prop-threaded with no global source; this env
++ * is the wave's reduced-motion channel).
++ *
++ * Effect registry (each animation site reads its own flag):
++ *   inputBorderBreath (33), todoPulse (34), todoProgressBar (34),
++ *   headerGlimmer (34), ctxBarBreath (34), toolCardShimmer (35),
++ *   spinnerRainbow (30), spinnerGlimmer (28).
++ */
++import { interpolateColor, toRGBColor } from './components/Spinner/spinnerUtils.js';
++/** The LIVE42 effect registry (single source of truth for schema + panel). */
++export const EFFECT_KEYS = [
++    'inputBorderBreath',
++    'todoPulse',
++    'todoProgressBar',
++    'headerGlimmer',
++    'ctxBarBreath',
++    'toolCardShimmer',
++    'spinnerRainbow',
++    'spinnerGlimmer',
++];
++const ANIMATION_MODES = new Set(['full', 'custom', 'off']);
++const EFFECT_KEY_SET = new Set(EFFECT_KEYS);
++let animationsSetting; // 'full' | 'custom' | 'off' | undefined
++let effectsSetting; // {key: boolean} partial (custom mode)
++/** @internal channel-owned setter; also called once at boot. */
++export function setAnimationsMode(mode) {
++    animationsSetting = ANIMATION_MODES.has(mode) ? mode : undefined;
++}
++/** @internal channel-owned setter for the custom-mode per-effect map. */
++export function setEffectsMode(effects) {
++    const out = {};
++    if (effects !== null && typeof effects === 'object' && !Array.isArray(effects)) {
++        for (const key of EFFECT_KEYS) {
++            if (typeof effects[key] === 'boolean')
++                out[key] = effects[key];
++        }
++    }
++    effectsSetting = out;
++}
++/** The active mode with env precedence resolved ('full' default). */
++export function animationsMode() {
++    const env = process.env.DSH_TUI_ANIMATIONS;
++    if (ANIMATION_MODES.has(env))
++        return env;
++    return animationsSetting ?? 'full';
++}
++/** Whether ANY of the wave's animations may run (mode !== off). */
++export function animationsEnabled() {
++    return animationsMode() !== 'off';
++}
++/**
++ * Whether a specific effect may animate. reduced-motion > mode > per-key.
++ * @param key - One of EFFECT_KEYS; unknown keys answer false (fail-static).
++ */
++export function effectEnabled(key) {
++    if (process.env.DSH_TUI_REDUCED_MOTION === '1')
++        return false;
++    if (!EFFECT_KEY_SET.has(key))
++        return false;
++    const mode = animationsMode();
++    if (mode === 'off')
++        return false;
++    if (mode === 'full')
++        return true;
++    // custom: unset key means ON (opt-out)
++    return effectsSetting?.[key] !== false;
++}
++/**
++ * Idle-breathing color: a slow cosine (t=0 sits exactly on `base`,
++ * t=periodMs/2 on `highlight`, t=periodMs back on `base`) interpolating
++ * between the two colors. `time` is the shared animation clock's elapsed ms.
++ * @returns An `rgb(r,g,b)` string for Ink's color prop.
++ */
++export function breathingColor(base, highlight, time, periodMs) {
++    const phase = (1 - Math.cos((time / periodMs) * 2 * Math.PI)) / 2;
++    return toRGBColor(interpolateColor(base, highlight, phase));
++}
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -4,6 +4,9 @@
+ // exactly the same forms a theme file may (customTheme does not import
+ // this module, so the edge adds no cycle).
+ import { isValidThemeColor } from './customTheme.js';
++// dsh-overrides 33: effect-map normalization lives with the registry
++// (animationsMode has no imports back into this module — no cycle).
++import { EFFECT_KEYS } from './animationsMode.js';
+ 
+ /** Defaults keep the essential route/context information visible. */
+ export const DEFAULT_STATUS_BAR = Object.freeze({
+@@ -70,13 +73,35 @@
+ // values normalize here so every consumer (StatusLine) sees the enum or
+ // undefined — never a free-form string.
+ const POWERLINE_STYLES = new Set(['full', 'plain', 'off']);
++// dsh-overrides 33: the LIVE42 animation-wave mode. 'full' = every
++// effect on (default); 'custom' = per-effect opt-out through the
++// `effects` map; 'off' = the whole wave static.
++const ANIMATIONS_STYLES = new Set(['full', 'custom', 'off']);
++/** Normalize an appearance.animations value to the enum, else undefined. */
++export function normalizeAnimationsStyle(value) {
++    return typeof value === 'string' && ANIMATIONS_STYLES.has(value) ? value : undefined;
++}
+ /** Normalize an appearance.powerline value to the enum, else undefined. */
+ export function normalizePowerlineStyle(value) {
+     return typeof value === 'string' && POWERLINE_STYLES.has(value) ? value : undefined;
+ }
+ /**
++ * dsh-overrides 33: normalize the custom-mode effects map to known
++ * boolean keys only (unknown keys drop, non-booleans drop).
++ */
++function normalizeEffectsMap(value) {
++    const normalized = {};
++    if (value === null || typeof value !== 'object' || Array.isArray(value))
++        return normalized;
++    for (const key of EFFECT_KEYS) {
++        if (typeof value[key] === 'boolean')
++            normalized[key] = value[key];
++    }
++    return normalized;
++}
++/**
+  * Merge a partial `dsh-tui.appearance` settings value into the stable
+- * defaults (all three fields optional; invalid values drop per-field,
++ * defaults (all fields optional; invalid values drop per-field,
+  * same contract as normalizeStatusBar).
+  * - powerline: 'full' | 'plain' | 'off' (anything else → undefined);
+  * - theme: non-empty string after trim (availability is checked by the
+@@ -90,6 +115,8 @@
+         return normalized;
+     const input = value;
+     normalized.powerline = normalizePowerlineStyle(input.powerline);
++    normalized.animations = normalizeAnimationsStyle(input.animations);
++    normalized.effects = normalizeEffectsMap(input.effects);
+     if (typeof input.theme === 'string' && input.theme.trim() !== '')
+         normalized.theme = input.theme.trim();
+     if (typeof input.inputBorder === 'string' && isValidThemeColor(input.inputBorder.trim()))
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -46,6 +46,7 @@
+ import { listThemeCatalog } from '../themeCatalog.js';
+ import { modeDisplayName, resolveSessionModes } from '../sessionModes.js';
+ import { normalizeAppearance, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground } from '../tuiDisplayPrefs.js';
++import { setAnimationsMode, setEffectsMode } from '../animationsMode.js';
+ import { SubagentActivityStore } from './subagents.js';
+ import { BackgroundJobStore, formatJobDuration } from './jobs.js';
+ import { ActivityTracker } from 'dsh-working-activity/status';
+@@ -2279,7 +2280,14 @@
+         // dsh-overrides 31: appearance (powerline/theme/inputBorder) —
+         // set by the plugin's settings apply; consumers read
+         // channel.appearance with per-field optional chaining.
+-        appearance: normalizeAppearance(options.appearance),
++        appearance: (() => {
++            const normalized = normalizeAppearance(options.appearance);
++            // dsh-overrides 33: boot-time mode/effect mirrors (channel-less
++            // consumers read the process-wide registry).
++            setAnimationsMode(normalized.animations);
++            setEffectsMode(normalized.effects);
++            return normalized;
++        })(),
+         activityEnabled: options.activity !== false,
+         contextBarEnabled: options.contextBar !== false,
+         agentPreset: options.agentPreset,
+@@ -4238,12 +4246,24 @@
+         // setStatusBar (a partial update keeps the other fields).
+         setAppearance(config) {
+             const next = normalizeAppearance({ ...state.appearance, ...config });
++            const effectsChanged = (a, b) => {
++                const ka = Object.keys(a ?? {});
++                const kb = Object.keys(b ?? {});
++                return ka.length !== kb.length || ka.some(k => a[k] !== b[k]);
++            };
+             const changed = next.powerline !== state.appearance.powerline
+                 || next.theme !== state.appearance.theme
+-                || next.inputBorder !== state.appearance.inputBorder;
++                || next.inputBorder !== state.appearance.inputBorder
++                || next.animations !== state.appearance.animations
++                || effectsChanged(next.effects, state.appearance.effects);
+             if (!changed)
+                 return;
+             state.appearance = next;
++            // dsh-overrides 33: mirror the animation mode + effect map
++            // process-wide (minimalMode pattern) so leaf components read
++            // effectEnabled(key) without the channel.
++            setAnimationsMode(next.animations);
++            setEffectsMode(next.effects);
+             state.emit();
+         },
+         setActivityFrames(name) {
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -16,6 +16,8 @@
+ // theme preference layer (ThemeProvider reads it at boot, below the
+ // DSH_TUI_THEME env and above the /theme persistence).
+ import { setSettingsThemePref } from '../themePrefs.js';
++// dsh-overrides 33: the effect registry drives the schema's effects map.
++import { EFFECT_KEYS } from '../animationsMode.js';
+ import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js';
+ import { readModelPref } from '../modelPrefs.js';
+ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js';
+@@ -587,6 +589,13 @@
+                 powerline: Schema.union(['full', 'plain', 'off']).required(false),
+                 theme: Schema.string().required(false),
+                 inputBorder: Schema.string().required(false),
++                // dsh-overrides 33: LIVE42 animation-wave mode ('full' =
++                // all effects on; 'custom' = per-effect opt-out through
++                // `effects`; 'off' = the wave static). env DSH_TUI_
++                // ANIMATIONS stays on top, DSH_TUI_REDUCED_MOTION=1
++                // forces static regardless of the mode.
++                animations: Schema.union(['full', 'custom', 'off']).required(false),
++                effects: Schema.object(Object.fromEntries(EFFECT_KEYS.map(key => [key, Schema.boolean().required(false)]))).required(false),
+             }).required(false),
+             // Built-in action-shortcut overrides, one optional combo string per
+             // action (see src/utils/keymap.ts). Unset keeps the default binding
+--- a/lib/types/components/EffortInputBorder.js
++++ b/lib/types/components/EffortInputBorder.js
+@@ -21,10 +21,13 @@
+  * 窗口订阅（keepAlive），播完回到零开销静止边框。
+  */
+ import { useContext, useEffect, useReducer, useState } from 'react';
+-import { Box, Text } from '../ui.js';
++import { Box, Text, useAnimationFrame, useTheme } from '../ui.js';
+ import { ClockContext } from '../ink/components/ClockContext.js';
+ import { stringWidth } from '../ink/stringWidth.js';
+ import { IGNITION_TIMELINE, ignitionLineColors } from '../trajectory/effortIgnition.js';
++import { getTheme } from '../theme.js';
++import { parseRGB } from './Spinner/spinnerUtils.js';
++import { breathingColor, effectEnabled } from '../animationsMode.js';
+ /** 边框行（顶/底共用同一色段序列——同步变色）。顶行可在右圆角前插入
+  *  一个静态标签 chip（会话名），占用的列数从色段序列里扣掉，行宽不变。 */
+ function BorderRow({ left, right, runs, idleColor, label, }) {
+@@ -45,8 +48,27 @@
+     }
+     return (_jsx(Box, { width: "100%", height: 1, flexShrink: 0, overflow: "hidden", children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: idleColor, children: left }), clipped.map((run, i) => (_jsx(Text, { color: run.color, children: run.glyph }, i))), label !== undefined && (_jsx(Text, { backgroundColor: label.color, color: label.ink, children: ` ${label.text} ` })), label !== undefined && _jsx(Text, { color: idleColor, children: '─'.repeat(labelGap) }), _jsx(Text, { color: idleColor, children: right })] }) }));
+ }
+-export function EffortInputBorder({ effort, levels, columns, onLight, idleColor, topRightLabel, children, }) {
++export function EffortInputBorder({ effort, levels, columns, onLight, idleColor, topRightLabel, children, active = false, }) {
+     const clock = useContext(ClockContext);
++    // dsh-overrides 33: idle breathing — the resting border slowly fades
++    // between its accent color and a lighter halo (the theme's shimmer
++    // sibling when the accent has one, e.g. promptBorder↔promptBorder-
++    // Shimmer; otherwise a 35%-toward-white lift of the accent itself),
++    // driven by the shared ClockContext (no new timer source). While the
++    // turn runs (`active`) the breath is twice as fast. Gated by the
++    // effects registry (inputBorderBreath) + reduced-motion; a static
++    // accent (ANSI themes, effect off) renders exactly as before.
++    const [breathThemeName] = useTheme();
++    const breathBase = effectEnabled('inputBorderBreath') ? parseRGB(getTheme(breathThemeName)[idleColor] ?? idleColor) : null;
++    const breathShimmer = effectEnabled('inputBorderBreath') && breathBase !== null
++        ? parseRGB(getTheme(breathThemeName)[`${idleColor}Shimmer`] ?? getTheme(breathThemeName).promptBorderShimmer)
++        : null;
++    const breathe = breathBase !== null && breathShimmer !== null && breathBase !== breathShimmer;
++    const [, breathTime] = useAnimationFrame(breathe ? 60 : null);
++    const breathPeriod = active ? 1200 : 2400;
++    const idlePaint = breathe
++        ? breathingColor(breathBase, breathShimmer, breathTime, breathPeriod)
++        : idleColor;
+     const [overlay, setOverlay] = useState(null);
+     const [prevEffort, setPrevEffort] = useState(effort);
+     const [, forceRender] = useReducer((tick) => tick + 1, 0);
+@@ -79,12 +101,12 @@
+     // 顶/底共用的色段序列（同步）：扫光列取波形色，其余列回主题色。
+     const runs = [];
+     for (let index = 0; index < midWidth; index++) {
+-        const color = sweepColors[index] ?? idleColor;
++        const color = sweepColors[index] ?? idlePaint;
+         const last = runs[runs.length - 1];
+         if (last !== undefined && last.color === color)
+             last.glyph += '─';
+         else
+             runs.push({ glyph: '─', color });
+     }
+-    return (_jsxs(Box, { flexDirection: "column", alignItems: "flex-start", justifyContent: "flex-start", width: "100%", flexShrink: 0, children: [_jsx(BorderRow, { left: "\u256D", right: "\u256E", runs: runs, idleColor: idleColor, label: topRightLabel }), _jsx(Box, { flexShrink: 0, children: children }), _jsx(BorderRow, { left: "\u2570", right: "\u256F", runs: runs, idleColor: idleColor })] }));
++    return (_jsxs(Box, { flexDirection: "column", alignItems: "flex-start", justifyContent: "flex-start", width: "100%", flexShrink: 0, children: [_jsx(BorderRow, { left: "\u256D", right: "\u256E", runs: runs, idleColor: idlePaint, label: topRightLabel }), _jsx(Box, { flexShrink: 0, children: children }), _jsx(BorderRow, { left: "\u2570", right: "\u256F", runs: runs, idleColor: idlePaint })] }));
+ }
+--- a/lib/types/components/PromptInput.js
++++ b/lib/types/components/PromptInput.js
+@@ -2453,7 +2453,7 @@
+                                 : undefined, rows: peekVisualLines.map((row, index) => (_jsx(Text, { wrap: "truncate-end", children: row }, index))), onRowPick: () => {
+                                 updateFoldBlock(null);
+                                 setHovered(false);
+-                            } }) }))] })), lastNotification && (_jsx(Box, { height: 1, width: "100%", paddingLeft: 2, paddingRight: 1, flexDirection: "column", justifyContent: "flex-end", overflow: "hidden", children: _jsx(Box, { justifyContent: "flex-end", children: _jsx(Text, { color: lastNotification.color, dimColor: !lastNotification.color, wrap: "truncate", children: lastNotification.text }) }) })), _jsx(EffortInputBorder, { effort: channel.reasoningEffort, levels: channel.effortLevels, columns: columns, onLight: isLightThemeActive(themeName), idleColor: promptAccent, topRightLabel: topRightLabel, children: _jsxs(Box, { flexDirection: "row", alignItems: "flex-start", width: "100%", children: [_jsx(EffortChargeGlyph, { effort: channel.reasoningEffort, levels: channel.effortLevels, working: channel.working }), vimEnabled && (_jsxs(Text, { bold: true, color: vimInsert ? 'success' : 'warning', children: [vimInsert ? 'INSERT' : 'NORMAL', " "] })), _jsx(Box, { ref: expanded ? undefined : valueBoxRef, flexGrow: 1, flexShrink: 1, onClick: handleValueClick, onDragStart: handleDragStart, onDragMove: handleDragMove, onDragEnd: handleDragEnd, children: value.length === 0 ? (_jsxs(_Fragment, { children: [_jsx(Text, { inverse: true, children: " " }), _jsx(EffortTierBadge, { effort: channel.reasoningEffort, levels: channel.effortLevels, onLight: isLightThemeActive(themeName), columns: columns, leadingColumns: 3 })] })) : (_jsx(Box, { flexDirection: "column", children: rendered })) }), expandEnabled && (_jsx(Box, { flexShrink: 0, onClick: (event) => {
++                            } }) }))] })), lastNotification && (_jsx(Box, { height: 1, width: "100%", paddingLeft: 2, paddingRight: 1, flexDirection: "column", justifyContent: "flex-end", overflow: "hidden", children: _jsx(Box, { justifyContent: "flex-end", children: _jsx(Text, { color: lastNotification.color, dimColor: !lastNotification.color, wrap: "truncate", children: lastNotification.text }) }) })), _jsx(EffortInputBorder, { effort: channel.reasoningEffort, levels: channel.effortLevels, columns: columns, onLight: isLightThemeActive(themeName), idleColor: promptAccent, topRightLabel: topRightLabel, children: _jsxs(Box, { flexDirection: "row", alignItems: "flex-start", width: "100%", children: [_jsx(EffortChargeGlyph, { effort: channel.reasoningEffort, levels: channel.effortLevels, working: channel.working, active: channel.working === true }), vimEnabled && (_jsxs(Text, { bold: true, color: vimInsert ? 'success' : 'warning', children: [vimInsert ? 'INSERT' : 'NORMAL', " "] })), _jsx(Box, { ref: expanded ? undefined : valueBoxRef, flexGrow: 1, flexShrink: 1, onClick: handleValueClick, onDragStart: handleDragStart, onDragMove: handleDragMove, onDragEnd: handleDragEnd, children: value.length === 0 ? (_jsxs(_Fragment, { children: [_jsx(Text, { inverse: true, children: " " }), _jsx(EffortTierBadge, { effort: channel.reasoningEffort, levels: channel.effortLevels, onLight: isLightThemeActive(themeName), columns: columns, leadingColumns: 3 })] })) : (_jsx(Box, { flexDirection: "column", children: rendered })) }), expandEnabled && (_jsx(Box, { flexShrink: 0, onClick: (event) => {
+                                 event.stopImmediatePropagation();
+                                 toggleExpand();
+                             }, onMouseEnter: () => {

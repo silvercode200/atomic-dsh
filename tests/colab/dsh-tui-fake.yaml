@@ -1,0 +1,728 @@
+program: dsh-tui-fake
+# suite_version: 3 (2026-09-24, TG-DSH-DEMO-20260924): effects_group_title-ассерт двуязычный (Effects|Эффекты) — патч 63 перевёл заголовок группы, моноязычный RU-ассерт ложно падал на стеке 63+
+# suite_version: 2 (2026-09-20, TG-DSH-PATCH54-20260920, узел 3 — детектор-фикс)
+# v1 (2026-09-20, TG-DSH-PATCHE2E-20260920, узел 3 — colab-fake-suite)
+# v2: flicker-детектор analyze_series дифференцирован (после патча-54, r15):
+#   экранно-позиционный тоггл-счётчик (непусто→пусто→непусто, ≥3 строк) мерил
+#   СМЕСЬ дрожи и легитимного скольжения sticky-стрима (r11=37, r15=30 — не
+#   различает баг/фикс); классификация r11/r15 (flicker-classify.py) показала:
+#   возврата идентичного текста на ту же строку НЕТ в обеих сериях (0/113 и
+#   0/60 — окно монотонно съезжает вниз, контент на строке замещается), зато
+#   сигнатура осцилляции окна виртуализации (topPad-гашение, юзер-баг B1
+#   «почти весь экран пустой» = спейсер-зоны) резко разделяет серии: пустой
+#   прогон ≥3 рядов в контент-зоне в r11 = 19/20 кадров, в r15 (+p54) = 0/20.
+#   Новый вердикт: flicker = shake_rows≥3 (возврат идентичного текста — как
+#   задумано) ИЛИ spacer_frames≥2 (кадры со спейсер-зоной ≥3). Калибровка:
+#   старый детектор на r11 → RED (37≥3), новый на r11 → RED (spacer 19),
+#   новый на r15 → GREEN (0/0).
+# v2a (r16 → r17): long_done_poll — маркер ● начала ответа уезжает за верх
+#   экрана при длинном стриме (r16: после завершения генерации 0 видимых
+#   ●, счётчик не растёт, шаг ждал вечно; до r16 маскировался красным
+#   flicker-шагом, который шёл раньше и skip'ал хвост теста). Условие
+#   завершения дополнено инвариантом activity-строки «· total Ns»
+#   (любой спиннер-глагол, 20/20 кадров стрима содержат; исчезает при
+#   завершении turn'а).
+# v2b (r17b → r17c): long send + flight_poll слиты в одну VM-команду —
+#   транспортная задержка colab exec между раздельными шагами (r17b:
+#   26.7с на send + ~27с до старта poll) съедала эхо-окно стрима,
+#   NO_FLIGHT_WINDOW при живом стриме. Детекторы не менялись.
+# Фейк-E2E сьют: dsh TUI на Colab VM против ЛОКАЛЬНОЙ фейк-модели dsh-fake-llm
+# (127.0.0.1:8787, сценарии по маркеру SCENARIO:<name>) — ноль реальных токенов,
+# детерминированные ответы. Механика скопирована из tests/colab/dsh-tui-live.yaml
+# (suite v3): tmux-сессия на VM (send-keys + capture-pane), сравнения НА ГОСТЕ
+# (bash), честный rc, печать "DETECTOR <name>: ..." в stdout шага.
+#
+# ЗАВИСИМОСТИ ДЕПЛОЯ (без них сьют ляжет на boot/turn):
+#   1) scripts/colab-dsh-up.sh --fake-model — передаёт dsh-fake-llm на VM
+#      (/root/dsh-fake-llm, сервер PORT=8787 STREAM_TOTAL_MS=45000, health
+#      "ok":true), пишет providers.fake в /root/.dsh/settings.yaml (bg не
+#      трогает) и переключает agent-default-model на {provider: fake,
+#      model: fake-sonnet}. Прогон БЕЗ --fake-model возвращает bg-дефолт.
+#   2) сценарий waves (tools/dsh-fake-llm/scenarios/waves.json, реальные
+#      tool_use-спавны субагентов против фейк-модели) — файл пишет
+#      ПАРАЛЛЕЛЬНЫЙ агент (узел 1 ТГ); пока его нет, turn_waves честно
+#      фейлится по timeout (сервер молча fallback'ит маркер в short).
+#
+# ЗАПУСК ДРАЙВЕРОМ (узел 4/5 ТГ):
+#   scripts/colab-dsh-live-check.sh --fake-model \
+#     --suite tests/colab/dsh-tui-fake.yaml \
+#     --detectors d1_dup_pct,d3_timer_whole,d4_sep_collapse,d5_field_shred,d7_subagent_card,d7_waterfall_empty,tools_names_whole,ctx_single,blank_spike,descent,flicker,no_freeze \
+#     --label fake-e2e
+#
+# RED/GREEN-семантика (профиль current = патч-стек 1-53):
+#   D1 дубль pct-значения (патч 50) → d1_dup_pct;
+#   D3 клип таймера посреди числа (50) → d3_timer_whole;
+#   D4 склейка полей без ' · ' (51) → d4_sep_collapse;
+#   D5 шред полей до огрызков ≤2 симв. (51) → d5_field_shred;
+#   D7 шред заголовка карточки субагента + пустой waterfall (53) →
+#       d7_subagent_card, d7_waterfall_empty.
+#   Все обязаны быть ЗЕЛЁНЫМИ на закрытых патчах; падение = регрессия
+#   (reproduced=true в verdict драйвера). Пороги честные, не подогнаны:
+#   d4 «parts ≥ 2» ассертится ТОЛЬКО на w180 — на w120/w80 хвостовые
+#   ' · '-группы дропаются целиком ПО ДИЗАЙНУ патча 51 (probe-51: w76-w104
+#   без ' · ' вообще), там d4 = отсутствие склеек '·X'/'X·' и огрызков.
+#   Статус-строка = последний непустой ряд кадра (powerline-ряд, прижат
+#   вниз по footer_bottom_gap из live-сьюта); L38-подобный ряд полей
+#   токенов в проверках D1/D3/D4/D5 не участвует.
+lane: colab
+vars:
+  sess: dsh-fake
+  frames: /root/dsh-fake-frames
+  metrics: /root/dsh-fake/metrics.sh
+
+setup:
+  - run: 'mkdir -p $frames /root/dsh-fake && rm -f $frames/*.txt'
+    timeout: 180
+    idempotent: true  # auto-retry: блипы колаб-транспорта
+  - run: 'tmux kill-session -t $sess 2>/dev/null || true'
+    timeout: 180
+    ignore_error: true
+  # Пустая tmux-сессия ДО metrics_lib (панель = SHELL, без команды — как в
+  # live-сьюте: с "sleep 3600" send-keys уходил в stdin sleep). После /exit
+  # панель жива: pane_cmd = bash (exit_clean ждёт != node).
+  - run: 'tmux new-session -d -s $sess -x 180 -y 50'
+    timeout: 180
+  - run: 'tmux set -as terminal-overrides ",xterm-256color:Tc"'
+    timeout: 180
+    idempotent: true  # auto-retry: блипы колаб-транспорта
+  # Метрики кадра (awk/grep над tmux capture-pane): базовые метрики live-сьюта
+  # + статус-строка/детекторы D1/D3/D4/D5/D7 + покадровые серии для
+  # blank/descent/flicker/no_freeze. Внутренние переменные скрипта ≠
+  # переменным программы ($sess/$frames/$metrics): executor раскрывает
+  # $имена в тексте команды ДО отправки на VM (позиционные $1/$2/$3 он не
+  # трогает — проверено live-сьютом).
+  - id: metrics_lib
+    run: |
+      cat > /root/dsh-fake/metrics.sh <<'MEOF'
+      #!/usr/bin/env bash
+      # metrics.sh — метрики кадра TUI для SOC-программы dsh-tui-fake
+      # (базовые метрики dsh-tui-live + детекторы статус-бара D1/D3/D4/D5,
+      # карточки субагента D7, серии blank/descent/flicker/no_freeze).
+      set -euo pipefail
+      Metric="${1:?metric}"
+      Session="${2:?session}"
+      Frame() { tmux capture-pane -p -t "$Session"; }
+      # Статус-строка = последний непустой ряд (powerline-ряд под рамкой
+      # ввода; сьют live держит его прижатым вниз — footer_bottom_gap).
+      Status() { Frame | grep -v "^[[:space:]]*$" | tail -n1; }
+      case "$Metric" in
+        selftest) Frame | wc -l ;;
+        last_nonempty_row)
+          Frame | awk "NF {R=NR} END {print R+0}" ;;
+        pane_height)
+          tmux display-message -p -t "$Session" "#{pane_height}" ;;
+        input_bottom)
+          Frame | awk "/╰/ {R=NR} END {print R+0}" ;;
+        nonempty_below_input)
+          Frame | awk "/╰/ {B=NR} B && NR>B && NF {C++} END {print C+0}" ;;
+        empty_between)
+          Frame | awk "/╰/ {B=NR} NF {Last=NR} B && NR>B && !NF {Rows[NR]=1} END {C=0; for (R in Rows) if (R<Last) C++; print C+0}" ;;
+        count_sub)
+          Sub="${3:?substring}"
+          (Frame | grep -oF -- "$Sub" || true) | wc -l ;;
+        pane_cmd)
+          tmux display-message -p -t "$Session" "#{pane_current_command}" ;;
+        # --- статус-строка: D1/D3/D4/D5 (патчи 50/51) -------------------------
+        # D1 DUP-PCT: одинаковых pct-значений (N% / N.N%) в статус-строке нет
+        # (баг: '⚡41% … comp 124k left 41%'; патч 50 оставил pct только в ⚡).
+        pct_dup)
+          (Status | grep -oE "[0-9]+[.,]?[0-9]*%" || true) | sort | uniq -d | wc -l ;;
+        # D3 TIMER-CLIP: таймер не обрезан посреди секунд (' 1m 3' из ' 1m 35s')
+        # — в т.ч. в середине ряда. Полное значение кончается на 's' (за цифрами
+        # следует s), честный дроп патча 50/51 = сегмента нет вовсе.
+        timer_clip)
+          (Status | grep -cE "[0-9]+m [0-9]+([^0-9s]|$)" || true) ;;
+        # D4 SEP-COLLAPSE: голых склеек '·X'/'X·' нет (сепаратор умер →
+        # '·#1a2…'/'·cache'). Гейдж ▕██▋···▏ и его '···'-начинка не матчатся:
+        # · граничит там с ▏/·, не с alnum. Легитимный сепаратор ' · ' с
+        # пробелами тоже не матчится.
+        sep_glue)
+          (Status | grep -oE "·[A-Za-z0-9#]|[A-Za-z0-9#]·" || true) | wc -l ;;
+        # D5 ELLIPSIS-NOISE: огрызков-токенов нет: сироты-многоточия (… ……),
+        # срезанные слова (ca… hi… 42… 8…), точки вокруг 1-2 цифро-букв (…5…),
+        # голые 1-2 буквы (ng, hi). Легитим НЕ матчится: · ✦ ⎇ - — числа (33),
+        # 1m/36s/41%/82.4% (цифры-буквы длиннее или с %), '~/…/path' (… после /).
+        shred_tokens)
+          (Status | tr " " "\n" | grep -E "^[.…]{1,3}$|^[A-Za-z]{1,2}[.…]$|^[0-9A-Za-z]{1,2}[.…]+$|^[.…]+[0-9A-Za-z]{1,2}[.…]*$|^[A-Za-z]{1,2}$" || true) | wc -l ;;
+        # Число ' · '-сепараторов статус-строки (d4: на w180 ≥1, т.е. ≥2 частей).
+        sep_parts)
+          (Status | grep -oF " · " || true) | wc -l ;;
+        # --- карточка субагента: D7 (патч 53) ----------------------------------
+        # Шред заголовка: строки карточки ('ubagent') без огрызков
+        # haik/runni/runnin/ng/'tool s' (граница слова: 'haiku'/'running'
+        # целиком НЕ матчатся) и без склеек '·X'/'X·' (баг-рендер:
+        # 'haik·18s· 120  · 0    ·runni'). Починенный рендер:
+        # 'Subagent: … · haiku · 20s · 120 tok · 0 tools · running'.
+        card_shred)
+          (Frame | grep "ubagent" | grep -cE "(^|[^a-z])(haik|runni|runnin|ng|tool s)([^a-z]|$)|·[A-Za-z0-9#]|[A-Za-z0-9#]·" || true) ;;
+        # Пустой waterfall: ≥2 ПОДРЯД строк из одних │ и пробелов в зоне
+        # карточек (от ПЕРВОГО заголовка 'ubagent' до рамки ввода ╭ после
+        # ПОСЛЕДНЕГО — бары между несколькими карточками входят в зону;
+        # внутренние пустые ряды рамки ввода исключены границей ╭).
+        waterfall_empty)
+          Frm="$(Frame)"
+          CardFirst="$(printf "%s\n" "$Frm" | grep -n "ubagent" | head -1 | cut -d: -f1)"
+          CardLast="$(printf "%s\n" "$Frm" | grep -n "ubagent" | tail -1 | cut -d: -f1)"
+          if [ -z "$CardFirst" ]; then echo 0; exit 0; fi
+          Top="$(printf "%s\n" "$Frm" | awk -v c="$CardLast" "NR > c && /╭/ {print NR; exit}")"
+          Prev=-1; Run=0; Bad=0
+          for R in $(printf "%s\n" "$Frm" | grep -nE "^[ ]*│[ ]*(│[ ]*)*$" | cut -d: -f1); do
+            [ "$R" -ge "$CardFirst" ] || continue
+            if [ -n "$Top" ] && [ "$R" -ge "$Top" ]; then continue; fi
+            if [ $((R - Prev)) -eq 1 ]; then Run=$((Run+1)); else Run=1; fi
+            [ "$Run" -ge 2 ] && Bad=1
+            Prev="$R"
+          done
+          echo "$Bad" ;;
+        # --- покадровые серии (long-стрим) --------------------------------------
+        # Серия: N кадров с интервалом мс; каждый кадр → файл, метрики → TSV
+        # (формат v2 live-сьюта: idx empty_ratio content_rows first_nonempty
+        # last_nonempty).
+        snap_series)
+          OutDir="${3:?}"; Count="${4:?}"; Ms="${5:?}"; Prefix="${6:?}"
+          mkdir -p "$OutDir"; : > "$OutDir/$Prefix-series.tsv"
+          Iv=$((Ms / 1000)); [ "$Iv" -lt 1 ] && Iv=1
+          for ((I=1; I<=Count; I++)); do
+            F="$OutDir/$Prefix-$I.txt"
+            tmux capture-pane -p -t "$Session" > "$F"
+            awk -v idx="$I" '
+              { Rows[NR] = ($0 ~ /[^[:space:]]/) ? 1 : 0; Total = NR }
+              END {
+                Empty = 0; Content = 0; First = 0; Last = 0
+                for (r = 1; r <= Total; r++) {
+                  if (Rows[r]) { Content++; if (!First) First = r; Last = r }
+                  else Empty++
+                }
+                ratio = (Total > 0) ? Empty / Total : 1
+                printf "%d %.3f %d %d %d\n", idx, ratio, Content, First, Last
+              }' "$F" >> "$OutDir/$Prefix-series.tsv"
+            sleep "$Iv"; [ "$I" -lt "$Count" ] || break
+          done
+          echo "series_done: $Prefix count=$Count" ;;
+        # Анализ серии: blank_spike/descent/flicker + no_freeze (md5-дельты
+        # соседних кадров: живой стрим меняет кадры, фриз = одинаковые).
+        # flicker (suite v2, TG-DSH-PATCH54-20260920 узел 3): дифференцирован
+        # «дрожь» vs «скольжение» — экранно-позиционный тоггл-счётчик не
+        # различал баг/фикс (r11=37 тогглов, r15=30 при вылеченном баге):
+        #   (а) shake_rows: тоггл непусто→пусто→непусто на строке ri засчиты-
+        #       вается ТОЛЬКО при возврате идентичного текста (strip строк
+        #       кадров k и k+2 равны) — контент исчез и вернулся = дрожь;
+        #   (б) spacer_frames: кадры со спейсер-зоной ≥3 подряд пустых рядов
+        #       в контент-зоне (topPad-гашение при осцилляции окна виртуали-
+        #       зации — юзер-баг B1 «почти весь экран пустой»; хром-ряды:
+        #       рамка ввода, activity «· total Ns», статус-бар — исключены).
+        # Вердикт flicker = shake_rows≥3 ИЛИ spacer_frames≥2. Калибровка на
+        # живых сериях: r11 (баг) RED: shake=0/spacer=19; r15 (+p54) GREEN:
+        # shake=0/spacer=0; flicker_toggle_rows остаётся в выводе как
+        # диагностическое поле (сумма тогглов без текст-фильтра).
+        analyze_series)
+          OutDir="${3:?}"; Prefix="${4:?}"
+          python3 - "$OutDir" "$Prefix" <<'PYA'
+      import hashlib, json, os, sys
+      outdir, prefix = sys.argv[1], sys.argv[2]
+      tsv = os.path.join(outdir, prefix + "-series.tsv")
+      rows = []
+      with open(tsv) as f:
+          for line in f:
+              parts = line.split()
+              if len(parts) == 5:
+                  rows.append((int(parts[0]), float(parts[1]), int(parts[2]),
+                               int(parts[3]), int(parts[4])))
+      def frames():
+          fs = sorted([p for p in os.listdir(outdir)
+                       if p.startswith(prefix + "-") and p.endswith(".txt")],
+                      key=lambda p: int(p[len(prefix)+1:-4]))
+          return [os.path.join(outdir, p) for p in fs]
+      # хром-ряды кадра: рамка ввода, activity-строка (любой спиннер-глагол,
+      # инвариант «· total Ns»), статус-бар («· max ·»/« left »/«cache »)
+      CHROME = ("╭", "╰", "· total ", "· max ·", " left ", "cache ")
+      def is_chrome(s):
+          return s.startswith(("╭", "❯", "╰")) or any(h in s for h in CHROME)
+      verdict = {"blank_spike": False, "descent": False, "flicker": False,
+                 "samples": len(rows)}
+      has_content = any(r[1] <= 0.5 for r in rows)
+      run_blank = 0
+      for r in rows:
+          if r[1] > 0.5:
+              run_blank += 1
+              if run_blank >= 2 and has_content:
+                  verdict["blank_spike"] = True
+          else:
+              run_blank = 0
+      for a, b in zip(rows, rows[1:]):
+          if abs(a[2] - b[2]) <= 1 and abs(b[4] - a[4]) >= 5:
+              verdict["descent"] = True
+      fl = frames()
+      toggles = 0
+      shake = 0
+      spacer_frames = 0
+      max_blank_run = 0
+      grids = []
+      for p in fl:
+          with open(p, errors="replace") as fh:
+              lines = [l.strip() for l in fh.read().splitlines()]
+          grids.append(lines)
+          # (б) спейсер-зона: макс. пустой прогон между первым и последним
+          # контентным (не-хром) рядом кадра (в т.ч. над стриминг-строкой);
+          # прогон ≥3 = topPad-гашение окна; такие кадры считаются отдельно
+          content = [i for i, s in enumerate(lines) if s and not is_chrome(s)]
+          if not content:
+              continue
+          run = 0
+          frame_max = 0
+          for i in range(content[0], content[-1] + 1):
+              if not lines[i]:
+                  run += 1
+                  if run > frame_max:
+                      frame_max = run
+              else:
+                  run = 0
+          if frame_max > max_blank_run:
+              max_blank_run = frame_max
+          if frame_max >= 3:
+              spacer_frames += 1
+      if len(grids) >= 3:
+          h = min(len(g) for g in grids)
+          for ri in range(h):
+              for k in range(len(grids) - 2):
+                  a, b, c = grids[k][ri], grids[k+1][ri], grids[k+2][ri]
+                  if a and not b and c:
+                      toggles += 1
+                      if a == c:  # возврат идентичного текста = дрожь
+                          shake += 1
+                      break
+      verdict["flicker"] = shake >= 3 or spacer_frames >= 2
+      verdict["flicker_toggle_rows"] = toggles
+      verdict["shake_rows"] = shake
+      verdict["spacer_frames"] = spacer_frames
+      verdict["max_blank_run"] = max_blank_run
+      # no_freeze: соседние кадры различаются (md5), ≥3 изменений по ТЗ
+      digs = []
+      for p in fl:
+          with open(p, "rb") as fh:
+              digs.append(hashlib.md5(fh.read()).hexdigest())
+      verdict["frame_deltas"] = sum(1 for a, b in zip(digs, digs[1:]) if a != b)
+      print(json.dumps(verdict, ensure_ascii=False))
+      sys.exit(0 if not (verdict["blank_spike"] or verdict["descent"] or verdict["flicker"]) else 1)
+      PYA
+          ;;
+        # Робастный сброс перед сценариями с вводом. State-aware (probe
+        # 2026-09-20 на живой VM): панель настроек/хаба (/settings, /effects
+        # через патч 46) закрывается ДВУМЯ Esc (пока панель открыта, клавиши
+        # уходят в неё — PromptInput их не видит, Rewind-двойной-клик не
+        # армится); в чате двойной Esc на пустом инпуте = Rewind-пикер
+        # (r11-каскад: промпт ушёл в список Rewind, Enter откатил чат).
+        # Rewind помечен «Esc to exit», панель — «Plugin settings»/«Esc exit».
+        input_reset)
+          if Frame | grep -qE "Plugin settings|Esc exit"; then
+            tmux send-keys -t "$Session" Escape; sleep 0.25
+            tmux send-keys -t "$Session" Escape; sleep 0.4
+          fi
+          if Frame | grep -q "Esc to exit"; then
+            sleep 1; tmux send-keys -t "$Session" Escape; sleep 0.4
+          fi
+          if Frame | grep -q "Color theme"; then
+            tmux send-keys -t "$Session" Enter; sleep 0.6
+          fi
+          tmux send-keys -t "$Session" C-c; sleep 0.2
+          tmux send-keys -t "$Session" C-u; sleep 0.3
+          echo RESET_OK ;;
+        *) echo "unknown metric: $Metric" >&2; exit 2 ;;
+      esac
+      MEOF
+      chmod +x /root/dsh-fake/metrics.sh
+      v="$(bash /root/dsh-fake/metrics.sh selftest "$sess")"
+      echo "DETECTOR metrics_selftest: lines=$v expected>=1"
+      [ "$v" -ge 1 ]
+    timeout: 240
+  # Профиль читается НА ГОСТЕ из /root/.dsh-live-target; FAKE_LLM_KEY нужен
+  # dsh-клиенту (pi-ai требует непустой apiKey у anthropic-messages; сервер
+  # значение не проверяет). Трейсы watchdog/pin — для root-cause диагностики.
+  - id: launch_dsh
+    run: 'tmux send-keys -t $sess "FAKE_LLM_KEY=fake-local-key DSH_TUI_WD_TRACE=1 DSH_TUI_PIN_TRACE=1 dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-boot.err" Enter'
+    timeout: 180
+  # Опрос готовности: до 60×1с НА VM (рамка ввода ❯ или hint). Кадр → boot.txt.
+  - id: boot_poll
+    run: |
+      for i in $(seq 1 60); do
+        tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/boot.txt
+        if grep -qE "❯|for shortcuts" /root/dsh-fake-frames/boot.txt; then echo READY; exit 0; fi
+        sleep 1
+      done
+      echo NOT_READY
+      exit 1
+    timeout: 300
+
+tests:
+  # --- boot: рамка ввода в кадре ------------------------------------------------
+  - name: boot_ready
+    steps:
+      - run: 'cp $frames/boot.txt $frames/boot_copy.txt; v="$(bash $metrics count_sub $sess "❯")"; echo "DETECTOR boot_ready: input_frames=$v expected>=1 (0 = TUI не поднялся — fake-сервер/настройки?)"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+
+  # --- turn_short: ответ в кадре + ctx-поле ровно 1 (Дубль ctx = баг 3 live) ----
+  - name: turn_short
+    steps:
+      - run: 'tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; echo RESET'
+        timeout: 300
+      - run: 'tmux send-keys -t $sess "SCENARIO:short привет, ответь кратко" Enter; echo SENT'
+        timeout: 300
+      # ждём завершения turn: до 60×2с; маркер «●» (завершённый ответ, как
+      # content_turn_poll в live). Фейк-модель отвечает за секунды.
+      - id: short_poll
+        run: |
+          for i in $(seq 1 60); do
+            tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/short.txt
+            if grep -q "●" /root/dsh-fake-frames/short.txt; then echo TURN_DONE; exit 0; fi
+            sleep 2
+          done
+          echo "NO_ANSWER: turn не завершился за 120с (фейк-сервер жив? curl /health)"
+          exit 1
+        timeout: 300
+      - run: 'sleep 1; tmux capture-pane -p -t $sess > $frames/short.txt; v="$(bash $metrics count_sub $sess "фиктивная локальная модель")"; echo "DETECTOR turn_short: answer_in_frame=$v expected>=1 (0 = ответ сценария short не в кадре)"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics count_sub $sess "ctx ")"; echo "DETECTOR ctx_single: ctx_fields=$v expected=1 (2+ = дубль значения в статус-баре)"; [ "$v" = "1" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+
+  # --- turn_waves: карточки субагентов, D7 (патч 53) ----------------------------
+  # Спавн РЕАЛЬНЫЙ: fake-модель шлёт tool_use-сабагент-спавны, каждый
+  # субагент сам делает turn против фейк-модели. Зависит от сценария waves
+  # (scenarios/waves.json, параллельный агент) — см. шапку.
+  - name: turn_waves
+    steps:
+      - run: 'bash $metrics input_reset $sess'
+        idempotent: true  # сброс-последовательность повторяема (state-aware, промпты не шлёт)
+        timeout: 300
+      - run: 'base="$(tmux capture-pane -p -t $sess | grep -c "●")"; echo "$base" > /root/dsh-fake/waves-base.txt; tmux send-keys -t $sess "SCENARIO:waves запусти волну субагентов" Enter; echo SENT'
+        timeout: 300
+      # карточка в кадре: до 60×2с (спавн реальный, ходит через фейк-модель)
+      - id: waves_card_poll
+        run: |
+          for i in $(seq 1 60); do
+            tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/waves.txt
+            if grep -q "ubagent" /root/dsh-fake-frames/waves.txt; then echo CARD_VISIBLE; exit 0; fi
+            sleep 2
+          done
+          echo "NO_CARD: карточка субагента не появилась за 120с (сценарий waves отсутствует?)"
+          exit 1
+        timeout: 300
+      - run: 'sleep 5; tmux capture-pane -p -t $sess > $frames/waves.txt; tmux capture-pane -pe -t $sess > $frames/waves.ansi; v="$(bash $metrics count_sub $sess "ubagent")"; echo "DETECTOR d7_subagent_card: cards=$v expected>=1 (0 = карточки субагентов нет в кадре)"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # шред заголовка: огрызки haik/runni/runnin/ng/'tool s' и склейки '·X'
+      - run: 'v="$(bash $metrics card_shred $sess)"; echo "DETECTOR d7_subagent_card: card_shred_lines=$v expected=0 (>0 = шред заголовка карточки — «haik», «runni», «ng», склейки «haik·18s·»)"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # пустой waterfall: ≥2 подряд │-строк под заголовком карточки
+      - run: 'v="$(bash $metrics waterfall_empty $sess)"; echo "DETECTOR d7_waterfall_empty: empty_waterfall_runs=$v expected=0 (1 = ≥2 подряд пустых waterfall-строк «│ │ │»)"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # дождаться завершения волны (все субагенты закончили) — иначе следующий
+      # сценарий уйдёт в очередь активного turn'а
+      - id: waves_done_poll
+        run: |
+          base=$(cat /root/dsh-fake/waves-base.txt)
+          for w in $(seq 1 60); do
+            tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/waves-done.txt
+            n=$(grep -c "●" /root/dsh-fake-frames/waves-done.txt)
+            [ "$n" -gt "$base" ] && { echo WAVES_DONE; exit 0; }
+            sleep 2
+          done
+          echo "WAVES_TIMEOUT: волна субагентов не завершилась за 120с"
+          exit 1
+        timeout: 300
+
+  # --- turn_tools: имена тулз целиком (шред имён = D5-родственный дефект) -------
+  - name: turn_tools
+    steps:
+      - run: 'bash $metrics input_reset $sess'
+        idempotent: true  # сброс-последовательность повторяема (state-aware, промпты не шлёт)
+        timeout: 300
+      - run: 'base="$(tmux capture-pane -p -t $sess | grep -c "●")"; echo "$base" > /root/dsh-fake/tools-base.txt; tmux send-keys -t $sess "SCENARIO:tools запусти цикл инструментов" Enter; echo SENT'
+        timeout: 300
+      # tool-карточки: до 60×2с до «Bash» (первый tool_use цикла)
+      - id: tools_card_poll
+        run: |
+          for i in $(seq 1 60); do
+            tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/tools.txt
+            if grep -q "Bash" /root/dsh-fake-frames/tools.txt; then echo TOOL_VISIBLE; exit 0; fi
+            sleep 2
+          done
+          echo "NO_TOOL: tool-карточка не появилась за 120с"
+          exit 1
+        timeout: 300
+      - run: 'sleep 3; tmux capture-pane -p -t $sess > $frames/tools.txt; tmux capture-pane -pe -t $sess > $frames/tools.ansi; v="$(bash $metrics count_sub $sess "Bash")"; echo "DETECTOR tools_names_whole: bash=$v expected>=1"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics count_sub $sess "Read")"; echo "DETECTOR tools_names_whole: read=$v expected>=1"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics count_sub $sess "Write")"; echo "DETECTOR tools_names_whole: write=$v expected>=1 (имена тулз не шредятся)"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # дождаться конца цикла (Bash → Read → Write → финальный текст)
+      - id: tools_done_poll
+        run: |
+          base=$(cat /root/dsh-fake/tools-base.txt)
+          for w in $(seq 1 60); do
+            tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/tools-done.txt
+            n=$(grep -c "●" /root/dsh-fake-frames/tools-done.txt)
+            [ "$n" -gt "$base" ] && { echo TOOLS_DONE; exit 0; }
+            sleep 2
+          done
+          echo "TOOLS_TIMEOUT: цикл инструментов не завершился за 120с"
+          exit 1
+        timeout: 300
+
+  # --- statusbar_widths: D1/D3/D4/D5 + однострочность на 3 ширинах --------------
+  # Базовая 180 → 120 → 80 → вернуть 180. Кадр сохраняется на каждой ширине.
+  # parts ≥2 ассертится ТОЛЬКО на w180 (см. шапку: на узких ' · '-группы
+  # дропаются целиком по дизайну патча 51 — там части=1 легитимны).
+  - name: statusbar_widths
+    steps:
+      - run: 'bash $metrics input_reset $sess; sleep 1; tmux capture-pane -p -t $sess > $frames/status-w180.txt; tmux capture-pane -pe -t $sess > $frames/status-w180.ansi; echo CAPTURED_180'
+        idempotent: true  # сброс-последовательность повторяема (state-aware, промпты не шлёт)
+        timeout: 300
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics pct_dup $sess)"; echo "DETECTOR d1_dup_pct w180: dup_pct_values=$v expected=0 (>0 = дубль pct-значения в статус-строке, патч 50)"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics timer_clip $sess)"; echo "DETECTOR d3_timer_whole w180: timer_clipped=$v expected=0 (1 = таймер обрезан посреди числа «1m 3»)"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics sep_glue $sess)"; echo "DETECTOR d4_sep_collapse w180: glued_seps=$v expected=0 (>0 = склейка полей без « · », патч 51)"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics shred_tokens $sess)"; echo "DETECTOR d5_field_shred w180: shred_tokens=$v expected=0 (>0 = огрызки ≤2 симв./срезы «ca…»/«…5…», патч 51)"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics sep_parts $sess)"; echo "DETECTOR d4_sep_collapse w180: sep_parts=$v expected>=1 (0 = на w180 нет ни одного « · »-сепаратора — хвостовые группы не рендерятся)"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics nonempty_below_input $sess)"; echo "DETECTOR status_single_line w180: nonempty_below_input=$v expected=1 (2+ = статус-бар раздулся)"; [ "$v" = "1" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # --- w120 ---
+      - run: 'tmux resize-window -t $sess -x 120 -y 50; sleep 1.5; tmux capture-pane -p -t $sess > $frames/status-w120.txt; tmux capture-pane -pe -t $sess > $frames/status-w120.ansi; echo RESIZED_120'
+        timeout: 300
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics pct_dup $sess)"; echo "DETECTOR d1_dup_pct w120: dup_pct_values=$v expected=0"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics timer_clip $sess)"; echo "DETECTOR d3_timer_whole w120: timer_clipped=$v expected=0"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics sep_glue $sess)"; echo "DETECTOR d4_sep_collapse w120: glued_seps=$v expected=0"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics shred_tokens $sess)"; echo "DETECTOR d5_field_shred w120: shred_tokens=$v expected=0"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics nonempty_below_input $sess)"; echo "DETECTOR status_single_line w120: nonempty_below_input=$v expected=1"; [ "$v" = "1" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # --- w80 ---
+      - run: 'tmux resize-window -t $sess -x 80 -y 50; sleep 1.5; tmux capture-pane -p -t $sess > $frames/status-w80.txt; tmux capture-pane -pe -t $sess > $frames/status-w80.ansi; echo RESIZED_80'
+        timeout: 300
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics pct_dup $sess)"; echo "DETECTOR d1_dup_pct w80: dup_pct_values=$v expected=0"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics timer_clip $sess)"; echo "DETECTOR d3_timer_whole w80: timer_clipped=$v expected=0 (дроп таймера на w80 — легитимный бюджет-дроп патча 50/51)"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics sep_glue $sess)"; echo "DETECTOR d4_sep_collapse w80: glued_seps=$v expected=0"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics shred_tokens $sess)"; echo "DETECTOR d5_field_shred w80: shred_tokens=$v expected=0"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics nonempty_below_input $sess)"; echo "DETECTOR status_single_line w80: nonempty_below_input=$v expected=1"; [ "$v" = "1" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # вернуть базовую ширину для остальных сценариев
+      - run: 'tmux resize-window -t $sess -x 180 -y 50; sleep 1; echo RESTORED_180'
+        timeout: 300
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+
+  # --- turn_long_blank: покадровая серия длинной генерации ----------------------
+  # STREAM_TOTAL_MS=45000 (деплой): сэмплер 20×1с ловит активный стрим.
+  # no_freeze = кадры ИЗМЕНЯЮТСЯ (md5-дельты ≥3) — живой стрим против фриза.
+  - name: turn_long_blank
+    steps:
+      - run: 'bash $metrics input_reset $sess; sleep 0.5; echo RESET'
+        idempotent: true  # сброс-последовательность повторяема (state-aware, промпты не шлёт)
+        timeout: 300
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # Отправка + ожидание старта полёта — ОДНОЙ VM-командой (suite v2b,
+      # урок r17b): раздельные шаги гонялись транспортной задержкой colab
+      # exec (r17b: send-шаг 26.7с + poll стартовал на ~27с позже) — эхо-
+      # окно (~30с от старта стрима) успевало уехать за экран до первого
+      # capture → NO_FLIGHT_WINDOW при живом и завершившемся стриме.
+      # Слитый шаг: send-keys и опрос в одной транзакции — опрос стартует
+      # через мс после отправки; при отложенном старте команды turn
+      # начинается только внутри неё (self-consistent).
+      - id: long_send_flight
+        run: |
+          base="$(tmux capture-pane -p -t dsh-fake | grep -c "●")"
+          echo "$base" > /root/dsh-fake/long-base.txt
+          tmux send-keys -t dsh-fake "SCENARIO:long напиши длинный текст" Enter
+          for w in $(seq 1 30); do
+            tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/long-flight.txt
+            n=$(grep -c "●" /root/dsh-fake-frames/long-flight.txt)
+            if grep -q "SCENARIO:long" /root/dsh-fake-frames/long-flight.txt && [ "$n" -le "$base" ]; then echo IN_FLIGHT; exit 0; fi
+            sleep 1
+          done
+          echo NO_FLIGHT_WINDOW
+          exit 1
+        timeout: 180
+      # серия 20 кадров × 1с (~20с полёта из 45с бюджета long)
+      - run: 'bash $metrics snap_series $sess /root/dsh-fake 20 1000 long20; echo SAMPLED'
+        timeout: 240
+      # анализ: blank/descent/flicker + frame_deltas (no_freeze)
+      - id: long_analyze
+        run: |
+          out="$(bash /root/dsh-fake/metrics.sh analyze_series $sess /root/dsh-fake long20 2>/dev/null || true)"
+          echo "$out" > /root/dsh-fake-frames/long-verdict.json
+          echo "$out"
+          printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(1 if (d["blank_spike"] or d["descent"] or d["flicker"]) else 0)'
+        timeout: 240
+      - run: 'v="$(python3 -c "import json; print(json.load(open(\"/root/dsh-fake-frames/long-verdict.json\"))[\"blank_spike\"])")"; echo "DETECTOR blank_spike: fired=$v expected=False (пустых строк >50% ≥2 сэмплов подряд при живом контенте)"; [ "$v" = "False" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(python3 -c "import json; print(json.load(open(\"/root/dsh-fake-frames/long-verdict.json\"))[\"descent\"])")"; echo "DETECTOR descent: fired=$v expected=False (last_nonempty_row прыгает ≥5 строк без нового вывода)"; [ "$v" = "False" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(python3 -c "import json; print(json.load(open(\"/root/dsh-fake-frames/long-verdict.json\"))[\"flicker\"])")"; echo "DETECTOR flicker: fired=$v expected=False (suite v2: дрожь = возврат идентичного текста ≥3 строк ИЛИ спейсер-зона ≥3 пустых подряд ≥2 кадров; скольжение sticky-стрима — легитимно)"; [ "$v" = "False" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(python3 -c "import json; print(json.load(open(\"/root/dsh-fake-frames/long-verdict.json\"))[\"frame_deltas\"])")"; echo "DETECTOR no_freeze: frame_deltas=$v expected>=3 (<3 = кадры почти не меняются — стрим мёртв/фриз)"; [ "$v" -ge 3 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # дождаться конца long-генерации (45с бюджет + страховка). Маркер ●
+      # начала ответа при ДЛИННОМ стриме уезжает за верх экрана (r16: 0
+      # видимых ● в кадре после завершения) — счётчик ● не растёт и poll
+      # вечно ждёт (до r16 шаг маскировался красным flicker-шагом раньше).
+      # Второе условие завершения (r16, suite v2): activity-строка
+      # «· total Ns» — инвариант любого спиннер-глагола во время turn'а
+      # (проверено: 20/20 кадров стрима r11/r15 содержат, финальный кадр
+      # после завершения — нет). Стрим завершён = ● стало больше base ИЛИ
+      # activity-строки в кадре нет.
+      - id: long_done_poll
+        run: |
+          base=$(cat /root/dsh-fake/long-base.txt)
+          for w in $(seq 1 45); do
+            tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/long-done.txt
+            n=$(grep -c "●" /root/dsh-fake-frames/long-done.txt)
+            act=$(grep -c "· total" /root/dsh-fake-frames/long-done.txt)
+            if [ "$n" -gt "$base" ] || [ "$act" -eq 0 ]; then echo LONG_DONE; exit 0; fi
+            sleep 2
+          done
+          echo "LONG_TIMEOUT: long-генерация не завершилась за 90с (STREAM_TOTAL_MS=45000?)"
+          exit 1
+        timeout: 300
+
+  # --- slash_panels: /theme-пикер и /effects-панель -----------------------------
+  # Маркеры из live-сьюта: пикер = заголовок «Color theme», /effects (патч 46)
+  # = настройки на группе Эффекты → строки-тумблеры эффектов (inputBorderBreath).
+  - name: slash_panels
+    steps:
+      - run: 'bash $metrics input_reset $sess'
+        idempotent: true  # сброс-последовательность повторяема (state-aware, промпты не шлёт)
+        timeout: 300
+      - run: 'tmux send-keys -t $sess "/theme" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; echo THEME_OPENED'
+        timeout: 300
+      - run: 'tmux capture-pane -p -t $sess > $frames/theme_panel.txt; tmux capture-pane -pe -t $sess > $frames/theme_panel.ansi; v="$(bash $metrics count_sub $sess "Color theme")"; echo "DETECTOR panels_present: theme_picker=$v expected>=1 (0 = /theme не открыл пикер)"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'bash $metrics input_reset $sess'
+        idempotent: true  # сброс-последовательность повторяема (state-aware, промпты не шлёт)
+        timeout: 300
+      - run: 'tmux send-keys -t $sess "/effects" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; echo EFFECTS_OPENED'
+        timeout: 300
+      - run: 'tmux capture-pane -p -t $sess > $frames/effects_panel.txt; tmux capture-pane -pe -t $sess > $frames/effects_panel.ansi; v="$(bash $metrics count_sub $sess "inputBorderBreath")"; echo "DETECTOR panels_present: effects_panel=$v expected>=1 (0 = /effects не открыл группу Эффекты)"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics count_sub $sess "Effects")"; v2="$(bash $metrics count_sub $sess "Эффекты")"; echo "DETECTOR panels_present: effects_group_title=$v+$v2 expected>=1 (двуязычно: патч 63=Effects, pristine/стек<63=Эффекты)"; [ $((v + v2)) -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # закрыть панель (что бы ни было на экране)
+      - run: 'tmux send-keys -t $sess Escape; sleep 0.3; tmux send-keys -t $sess Escape; sleep 0.3; tmux send-keys -t $sess C-c; sleep 0.2; tmux send-keys -t $sess C-u; echo CLOSED'
+        timeout: 300
+
+  # --- turn_ctx90: usage ~90% окна (ctx-поле + D1 на реальном usage) ------------
+  # Фейк репортит usage (в отличие от bg с inputTokens:0) — ctx-поле живое.
+  # comp-бар НЕ обязателен (гейт pct>0 в StatusLine), ctx-число — конвертируемо.
+  - name: turn_ctx90
+    steps:
+      - run: 'bash $metrics input_reset $sess'
+        idempotent: true  # сброс-последовательность повторяема (state-aware, промпты не шлёт)
+        timeout: 300
+      - run: 'base="$(tmux capture-pane -p -t $sess | grep -c "●")"; echo "$base" > /root/dsh-fake/ctx90-base.txt; tmux send-keys -t $sess "SCENARIO:ctx90 заполни контекст на 90 процентов" Enter; echo SENT'
+        timeout: 300
+      - id: ctx90_poll
+        run: |
+          base=$(cat /root/dsh-fake/ctx90-base.txt)
+          for w in $(seq 1 60); do
+            tmux capture-pane -p -t dsh-fake > /root/dsh-fake-frames/ctx90.txt
+            n=$(grep -c "●" /root/dsh-fake-frames/ctx90.txt)
+            [ "$n" -gt "$base" ] && { echo TURN_DONE; exit 0; }
+            sleep 2
+          done
+          echo "NO_ANSWER: ctx90-turn не завершился за 120с"
+          exit 1
+        timeout: 300
+      - run: 'sleep 1; tmux capture-pane -p -t $sess > $frames/ctx90.txt; tmux capture-pane -pe -t $sess > $frames/ctx90.ansi; v="$(bash $metrics count_sub $sess "ctx ")"; echo "DETECTOR turn_ctx90: ctx_fields=$v expected>=1 (0 = ctx-поле не рендерится на usage фейк-модели)"; [ "$v" -ge 1 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      # ctx-число конвертируемо: сценарий даёт 235930 входных (~2xxk)
+      - run: 'v="$(tmux capture-pane -p -t $sess | grep -oE "ctx 2[0-9]+[.,0-9]*k" | head -1)"; echo "DETECTOR turn_ctx90: ctx_value=$v expected: ctx 2xxk (~236k из 262k, конвертируемо)"; [ -n "$v" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+      - run: 'v="$(bash $metrics pct_dup $sess)"; echo "DETECTOR d1_dup_pct ctx90: dup_pct_values=$v expected=0 (дубль pct на 90% контекста — юзер-паттерн D1)"; [ "$v" -eq 0 ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+
+  # --- exit_clean: /exit завершает dsh (панель = login shell) -------------------
+  # ctx90-стрим (45с) может ещё идти, когда детекторы уже отработали:
+  # /exit при живом стриме игнорируется/очередится (r11: NOT_EXITED).
+  # Сначала ждём конца стрима (activity-строка гаснет), потом /exit.
+  - name: exit_clean
+    steps:
+      - id: exit_stream_wait
+        run: |
+          for w in $(seq 1 60); do
+            if ! tmux capture-pane -p -t dsh-fake | grep -q "Still thinking"; then
+              echo STREAM_IDLE; exit 0
+            fi
+            sleep 2
+          done
+          echo "STREAM_STILL_BUSY: стрим не закончился за 120с — /exit при живом turn"
+          exit 1
+        timeout: 300
+      - run: 'bash $metrics input_reset $sess; tmux send-keys -t $sess "/exit" && sleep 1 && tmux send-keys -t $sess Enter; echo SENT'
+        idempotent: true  # сброс-последовательность повторяема (state-aware, промпты не шлёт)
+        timeout: 300
+      # честное ожидание: pane_cmd меняется с node на bash
+      - id: exit_poll
+        run: |
+          for w in $(seq 1 30); do
+            cmd="$(tmux display-message -p -t dsh-fake "#{pane_current_command}")"
+            if [ "$cmd" != "node" ]; then echo "EXITED pane_cmd=$cmd"; exit 0; fi
+            sleep 1
+          done
+          echo "NOT_EXITED: pane_cmd=$cmd (dsh не завершился)"
+          exit 1
+        timeout: 180
+      - run: 'v="$(bash $metrics pane_cmd $sess)"; echo "DETECTOR exit_clean: pane_cmd=$v expected!=node (node = dsh не завершился)"; [ "$v" != "node" ]'
+        timeout: 180
+        idempotent: true  # auto-retry: блипы колаб-транспорта
+
+teardown:
+  - run: 'tmux kill-session -t $sess 2>/dev/null || true'
+    timeout: 180
+    idempotent: true  # auto-retry: блипы колаб-транспорта
+    ignore_error: true

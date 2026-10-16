@@ -1,0 +1,57 @@
+# Goal:      низ экрана: убраны 3 пустые строки (hint/margins)
+# Family:    CH.02
+# Status:    live
+# Files:     lib/types/screens/StatusLine.js,
+#            lib/types/components/PromptInput.js,
+#            lib/types/components/LoadedContextPanel.js
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-04, W1 — стартовый реестр 0.10.0-beta.4
+
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -233,13 +233,15 @@
+                 }]
+             : []),
+     ];
++    // The "working" hint (`statusline-hint-working` = "esc to interrupt") is
++    // dropped entirely: while a turn runs the input is disabled anyway, so the
++    // line carried no actionable information — only an extra footer row that on
++    // short panes steals a transcript row above the input.
+     const hint = selectionActive
+         ? t('statusline-hint-select')
+-        : channel.working
+-            ? t('statusline-hint-working')
+-            : statusBar.shortcutHint && !helpOpen
+-                ? t('statusline-hint-shortcuts')
+-                : '';
++        : statusBar.shortcutHint && !helpOpen
++            ? t('statusline-hint-shortcuts')
++            : '';
+     const activity = channel.workingActivity;
+     const showActivity = statusBar.activity &&
+         !channel.working &&
+--- a/lib/types/components/PromptInput.js
++++ b/lib/types/components/PromptInput.js
+@@ -2377,7 +2377,11 @@
+             setPromptEditorNode(null);
+         };
+     }, []);
+-    return (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [floatersOpen && (_jsxs(OverlayAbove, { maxHeight: Math.max(terminalRows - 6, 1), children: [helpOpen && (_jsx(Box, { marginBottom: 1, children: _jsx(HelpMenu, { commands: channel.commandList, viewportHeight: helpViewportHeight, viewportWidth: columns, scrollRef: helpScrollRef, onCommandPick: (name) => {
++    // The leading gap above the input frame was a full blank row (marginTop 1).
++    // On short panes that row reads as stray whitespace wedged between the
++    // spinner/status row and the frame; the EffortInputBorder top border already
++    // separates the input from the transcript visually.
++    return (_jsxs(Box, { flexDirection: "column", marginTop: 0, children: [floatersOpen && (_jsxs(OverlayAbove, { maxHeight: Math.max(terminalRows - 6, 1), children: [helpOpen && (_jsx(Box, { marginBottom: 1, children: _jsx(HelpMenu, { commands: channel.commandList, viewportHeight: helpViewportHeight, viewportWidth: columns, scrollRef: helpScrollRef, onCommandPick: (name) => {
+                                 // 点击命令行 = 填入 /name 并关闭帮助（Tab 补全的鼠标等价）
+                                 updateFoldBlock(null);
+                                 setInput(`/${name} `);
+--- a/lib/types/components/LoadedContextPanel.js
++++ b/lib/types/components/LoadedContextPanel.js
+@@ -28,5 +28,5 @@
+     const [hovered, setHovered] = React.useState(false);
+     if (summary === '')
+         return null;
+-    return (_jsxs(Box, { flexDirection: "column", marginTop: 1, marginBottom: 1, children: [_jsx(Box, { paddingX: 1, backgroundColor: open || hovered ? 'userMessageBackgroundHover' : undefined, onClick: onToggle, onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false), children: _jsxs(Text, { bold: open, wrap: "truncate", children: [open ? '▼' : '▶', " ", _jsxs(Text, { dimColor: true, children: ["\uFF08Ctrl+P", open ? t('context-panel-collapse') : t('context-panel-expand'), "\uFF09"] }), " ", t('context-loaded'), " \u00B7 ", summary] }) }), open && (_jsxs(Box, { flexDirection: "column", paddingX: 1, paddingTop: 1, children: [context.sections.length > 0 && (_jsx(Group, { title: t('context-panel-sections', { n: context.sections.length }), children: context.sections.map(section => (_jsx(Entry, { entry: section }, section.name))) })), context.files.length > 0 && (_jsx(Group, { title: t('context-panel-files', { n: context.files.length }), children: context.files.map(file => (_jsx(Text, { dimColor: true, children: file.displayPath }, file.displayPath))) })), context.contexts.length > 0 && (_jsx(Group, { title: t('context-panel-runtime', { n: context.contexts.length }), children: context.contexts.map(entry => (_jsx(Entry, { entry: entry }, entry.name))) })), context.skills.length > 0 && (_jsx(Group, { title: t('context-panel-skills', { n: context.skills.length }), children: context.skills.map(skill => (_jsxs(Box, { flexDirection: "column", children: [_jsx(Text, { bold: true, dimColor: true, children: skill.name }), _jsx(Text, { dimColor: true, wrap: "wrap", children: skill.description })] }, skill.name))) })), context.tools.length > 0 && (_jsx(Group, { title: t('context-panel-tools', { n: context.tools.length }), children: context.tools.map(tool => (_jsxs(Box, { flexDirection: "column", children: [_jsx(Text, { bold: true, dimColor: true, children: tool.name }), _jsx(Text, { dimColor: true, wrap: "wrap", children: truncateContextText(tool.description, 160) })] }, tool.name))) })), _jsx(Text, { dimColor: true, children: "\u00B7 /context" })] }))] }));
++    return (_jsxs(Box, { flexDirection: "column", marginTop: 1, marginBottom: open ? 1 : 0, children: [_jsx(Box, { paddingX: 1, backgroundColor: open || hovered ? 'userMessageBackgroundHover' : undefined, onClick: onToggle, onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false), children: _jsxs(Text, { bold: open, wrap: "truncate", children: [open ? '▼' : '▶', " ", _jsxs(Text, { dimColor: true, children: ["\uFF08Ctrl+P", open ? t('context-panel-collapse') : t('context-panel-expand'), "\uFF09"] }), " ", t('context-loaded'), " \u00B7 ", summary] }) }), open && (_jsxs(Box, { flexDirection: "column", paddingX: 1, paddingTop: 1, children: [context.sections.length > 0 && (_jsx(Group, { title: t('context-panel-sections', { n: context.sections.length }), children: context.sections.map(section => (_jsx(Entry, { entry: section }, section.name))) })), context.files.length > 0 && (_jsx(Group, { title: t('context-panel-files', { n: context.files.length }), children: context.files.map(file => (_jsx(Text, { dimColor: true, children: file.displayPath }, file.displayPath))) })), context.contexts.length > 0 && (_jsx(Group, { title: t('context-panel-runtime', { n: context.contexts.length }), children: context.contexts.map(entry => (_jsx(Entry, { entry: entry }, entry.name))) })), context.skills.length > 0 && (_jsx(Group, { title: t('context-panel-skills', { n: context.skills.length }), children: context.skills.map(skill => (_jsxs(Box, { flexDirection: "column", children: [_jsx(Text, { bold: true, dimColor: true, children: skill.name }), _jsx(Text, { dimColor: true, wrap: "wrap", children: skill.description })] }, skill.name))) })), context.tools.length > 0 && (_jsx(Group, { title: t('context-panel-tools', { n: context.tools.length }), children: context.tools.map(tool => (_jsxs(Box, { flexDirection: "column", children: [_jsx(Text, { bold: true, dimColor: true, children: tool.name }), _jsx(Text, { dimColor: true, wrap: "wrap", children: truncateContextText(tool.description, 160) })] }, tool.name))) })), _jsx(Text, { dimColor: true, children: "\u00B7 /context" })] }))] }));
+ }

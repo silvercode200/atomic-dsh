@@ -1,0 +1,58 @@
+# Goal:      idle-петля пустого чата: гейт useAnimationFrame
+# Family:    TG.04
+# Status:    live
+# Files:     lib/types/components/GoalTodoPanel.js
+# Evidence:  TG-DSH-THEMEDEMO-20260926 узел 2;
+#            reports/colab-themedemo-golden-20260926T181149Z/
+# Upstream:  not-applicable
+# Added:     2026-09-26 (TG-DSH-THEMEDEMO-20260926 узел 2)
+
+# 71-todo-idle-gate (TG-DSH-THEMEDEMO-20260926, node 2, 2026-09-26)
+# Goal:      погасить 7.8Гц idle-петлю пустого чата (RCA fix-3, трейс
+#            10:12–10:18: n≈467 анимационных кадров/минуту в полностью
+#            пустой сессии). GoalTodoPanel монтируется безусловно (Chat
+#            футер) и рендерит null в пустом чате, но hooks всё равно
+#            работают: подписка useAnimationFrame(120) держала общий
+#            ClockContext frame-clock живым всю idle-сессию — пустые
+#            анимационные коммиты каждые ceil(120/16)*16=128мс = 7.8Гц.
+#            Гейт по фактическому источнику пустоты раннего return null:
+#            allTodos.length > 0 && (todoProgressBar || headerGlimmer).
+#            Единственный консьюмер headerTime (TodoProgressBar) сидит
+#            внутри showTodoSection-блока — при нуле туду нет живого
+#            сигнала для покраски, null выключает подписку и clock
+#            тикает до нуля keep-alive-подписчиков и останавливается.
+#            Нет over-gating: с туду панель дышит как раньше.
+# Family:    E (visual/animation); порядковая схема — см. патч 70. Зона
+#            хунка примыкает к маркеру патча 34 (header glimmer) —
+#            применяется ПОСЛЕ 34/47, контекст = post-47.
+# Status:    live (RED→GREEN idle-loop: empty 23→0 кадров, todos 24 кадра
+#            — нет over-gating)
+# Files:     lib/types/components/GoalTodoPanel.js (useAnimationFrame gate,
+#            post47 ~307)
+# Evidence:  .tmp-probes/schel-fix-20260926/idle-empty.txt (frames=0),
+#            idle-todos.txt (frames=24) — TaskGate TG-DSH-THEMEDEMO-20260926
+#            node 2.
+# Upstream:  not-applicable
+# Added:     2026-09-26, волна TG-DSH-THEMEDEMO-20260926 (узел 2).
+#
+--- a/lib/types/components/GoalTodoPanel.js
++++ b/lib/types/components/GoalTodoPanel.js
+@@ -304,8 +304,17 @@
+     // breathe toolDotTask↔todoActiveShimmer on the shared clock (120ms;
+     // static color when the LIVE42 gate is off). Runs even collapsed so
+     // the fold header keeps a visible live-progress signal.
++    // dsh-overrides 71: gate on todo presence. The panel mounts
++    // unconditionally (Chat footer) and renders null in an empty chat,
++    // but hooks still run — this 120ms subscription kept the shared
++    // ClockContext frame clock alive through the whole idle session
++    // (empty animation commits every ceil(120/16)*16 = 128ms = 7.8Hz,
++    // trace 10:12-10:18: n≈467/min, RCA (д)). headerTime's only consumer
++    // (TodoProgressBar) sits inside the showTodoSection block, so with
++    // zero todos there is no live signal to paint — pass null and the
++    // clock ticks down to zero keep-alive subscribers and stops.
+     const [glThemeName] = useTheme();
+-    const [, headerTime] = useAnimationFrame(effectEnabled('todoProgressBar') || effectEnabled('headerGlimmer') ? 120 : null);
++    const [, headerTime] = useAnimationFrame(allTodos.length > 0 && (effectEnabled('todoProgressBar') || effectEnabled('headerGlimmer')) ? 120 : null);
+     React.useEffect(() => {
+         // Tick only while the goal is open; a complete goal freezes the last
+         // elapsed reading instead of counting past the finish line.

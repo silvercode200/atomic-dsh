@@ -1,0 +1,35 @@
+# Goal:      supplemental-строка только при контенте
+# Family:    IL.01
+# Status:    live
+# Files:     lib/types/screens/StatusLine.js
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-04, W1 — стартовый реестр 0.10.0-beta.4
+
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -244,17 +244,13 @@
+         ...(ctxNode !== undefined ? [{ key: 'context', id: 'ctx', node: ctxNode }] : []),
+     ];
+     const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined;
+-    // The supplemental row is PERMANENTLY mounted (height pinned to 1)
+-    // whenever the footer carries hoverable chrome — mounting it from nothing
+-    // on hover is what made the footer grow mid-gesture and shoved the
+-    // transcript up (user feedback). Idle it may sit blank: a stable footer
+-    // outranks a reclaimable row, and hovering only ever swaps this line's
+-    // content. Minimal mode keeps the old contract — no hover details, the
+-    // row appears only for real content (which its defaults never produce).
+-    const showSupplementalRow = (!channel.minimal && (hasStatusFields || barVisible)) ||
+-        showActivity ||
+-        showTrajectory ||
+-        hint !== '';
++    // Supplemental row mounts only when it carries real content (hover
++    // detail, hint, activity, trajectory). The upstream build kept it
++    // permanently reserved (height 1) whenever the footer had hoverable
++    // chrome to stop the footer growing mid-gesture, but on short/mobile
++    // screens that reserved blank row read as stray empty lines under the
++    // input — reclaiming the row beats the transient grow on hover.
++    const showSupplementalRow = detail !== null || hint !== '' || showActivity || showTrajectory;
+     return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
+                         ? (current !== null && current.startsWith('segment:') ? null : current)
+                         : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] })) : null, showSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));

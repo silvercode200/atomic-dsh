@@ -1,0 +1,161 @@
+# Goal:      ретро-мини-бары прогресса в tool-карточках
+# Family:    EF.06
+# Status:    live
+# Files:     lib/types/toolProgress.js, lib/types/animationsMode.js,
+#            lib/types/effectsCatalog.js,
+#            lib/types/components/messages/AssistantToolUseMessage.js
+# Evidence:  TG-DSH-TUI-HUB-20260918 узел 2; reports/hub-frames/
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (TG-DSH-TUI-HUB-20260918 узел 2)
+
+--- a/lib/types/toolProgress.js
++++ b/lib/types/toolProgress.js
+@@ -0,0 +1,86 @@
++/**
++ * dsh-overrides 41: measurable-tool progress — parse the FINAL output of a
++ * finished tool call for the known progress patterns (curl, wget, python
++ * tqdm) and render a sub-cell mini-bar into the tool card.
++ *
++ * HONEST SCOPE (the node's investigation, reports/hub-wave-20260918.md):
++ * the channel does NOT stream a running tool's output — tool/result lands
++ * once, on completion (channel.js case 'tool/result'; assistant/chunk only
++ * carries text/reasoning/call-ARGUMENTS). So this is a RETROSPECTIVE bar:
++ * the last-known progress from the finished output, next to the elapsed
++ * time — not a live download feed. The card's elapsed clock is the only
++ * live signal while the tool runs.
++ */
++
++/** Extract the LAST curl/wget/tqdm progress reading from a tool output. */
++export function parseToolProgress(text) {
++    if (typeof text !== 'string' || text === '')
++        return undefined;
++    const lines = text.split(/\r?\n/);
++    // last matching line wins — the tail carries the freshest reading
++    for (let i = lines.length - 1; i >= 0; i--) {
++        const hit = parseLine(lines[i]);
++        if (hit !== undefined)
++            return hit;
++    }
++    return undefined;
++}
++
++function clampPercent(value) {
++    if (!Number.isFinite(value))
++        return undefined;
++    return Math.max(0, Math.min(100, Math.round(value)));
++}
++
++function parseLine(line) {
++    // curl classic columnar: " 45 12.3M 0 45 5600k 0 0:00:02 0:00:02 2700k"
++    // (percent-total received-xfer total-xfer avg-speed … current-speed)
++    const curlCols = /^\s*(\d{1,3})\s+[\d.]+[KMGT]?i?B?\s+\d+\s+[\d.]+[KMGT]?\s+/.exec(line);
++    if (curlCols !== null && +curlCols[1] <= 100) {
++        // curl prints its speeds as bare scaled numbers (2700k, 8.1M) after
++        // the two time columns — and sometimes with an explicit /s suffix.
++        // curl scales with LOWERCASE k/M suffixes — accept both cases.
++        const speed = (/\d+:\d+:\d+\s+([\d.]+[KMGTkmgt](?:B)?\/s)/.exec(line)?.[1])
++            ?? (/\d+:\d+:\d+\s+\d+:\d+:\d+\s+([\d.]+[KMGTkmgt])\s*$/.exec(line)?.[1]);
++        return { kind: 'curl', percent: clampPercent(+curlCols[1]), speed };
++    }
++    // curl progress-bar tail: "## 100%[===>] 12.58M  5.60MB/s" (and friends)
++    const curlBar = /(\d{1,3})%\s*\[/.exec(line);
++    if (curlBar !== null && /=>*\]/.test(line) && /[\d.]+[KMGT]?B\/s/.test(line)) {
++        return {
++            kind: 'curl',
++            percent: clampPercent(+curlBar[1]),
++            speed: /([\d.]+[KMGT]B\/s)/.exec(line)?.[1],
++        };
++    }
++    // wget: "[=====>   ] 12,345  45.6M/s  (27%)" — the trailing percent wins
++    const wget = /\[[=>\s]*\]\s+[\d,.]+\s+([\d.]+[KMGT]?B?\/s)?\s*\((\d{1,3})%\)/.exec(line);
++    if (wget !== null) {
++        return { kind: 'wget', percent: clampPercent(+wget[2]), speed: wget[1] };
++    }
++    // tqdm: " 57%|█████▎  | 57/100 [00:03<00:02, 19.1it/s]"
++    const tqdm = /(\d{1,3})%\s*\|[#█▏▎▍▌▋▊▉ ]*\|\s*\d+\/\d+\s*\[[^\]]*,\s*([\d.]+\s*\w+\/s)\]/.exec(line);
++    if (tqdm !== null) {
++        return { kind: 'tqdm', percent: clampPercent(+tqdm[1]), speed: tqdm[2].replace(/\s+/g, '') };
++    }
++    // wget without speed: "[====>  ] 12,345/45,678  27%" or "(27%)" forms
++    const wgetPlain = /\[[=>\s]*\]\s+[\d,.]+\/[\d,.]+\s+\(?(\d{1,3})%\)?/.exec(line);
++    if (wgetPlain !== null) {
++        return { kind: 'wget', percent: clampPercent(+wgetPlain[1]), speed: undefined };
++    }
++    return undefined;
++}
++
++const SUB = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
++
++/** Sub-cell mini-bar for a parsed progress (eighths, patch-40 mechanics). */
++export function toolProgressCells(progress, cells = 8) {
++    const frac = progress?.percent === undefined ? 0 : progress.percent / 100;
++    if (cells <= 0)
++        return { fill: '', track: '' };
++    const eighths = Math.round(frac * cells * 8);
++    const whole = Math.min(cells, Math.floor(eighths / 8));
++    const rem = whole < cells ? eighths % 8 : 0;
++    const fill = '█'.repeat(whole) + (rem > 0 ? SUB[rem] : '');
++    return { fill, track: '·'.repeat(Math.max(0, cells - fill.length)) };
++}
+--- a/lib/types/animationsMode.js
++++ b/lib/types/animationsMode.js
+@@ -35,6 +35,9 @@
+     'headerTextGradient',
+     'subCellBars',
+     'barGradientFill',
++    // dsh-overrides 41: measurable-tool progress mini-bars (retrospective
++    // parse of the finished output — see toolProgress.js for the scope).
++    'toolProgressBars',
+ ];
+ const ANIMATION_MODES = new Set(['full', 'custom', 'off']);
+ const EFFECT_KEY_SET = new Set(EFFECT_KEYS);
+--- a/lib/types/effectsCatalog.js
++++ b/lib/types/effectsCatalog.js
+@@ -20,6 +20,8 @@
+     headerTextGradient: 'Заголовок панели задач залит градиентом, ползущим по буквам',
+     subCellBars: 'Бары прогресса сглаживаются восьмыми долями ячеек (▏▎▍▌▋▊▉)',
+     barGradientFill: 'Заливка бара контекста — градиент вдоль клеток',
++    // dsh-overrides 41: tool-progress wave.
++    toolProgressBars: 'Мини-бар прогресса в карточке инструмента (curl/wget/tqdm — итоговый разбор вывода)',
+ };
+ /**
+  * The description for a registry key, or the key itself (with a warn) when
+--- a/lib/types/components/messages/AssistantToolUseMessage.js
++++ b/lib/types/components/messages/AssistantToolUseMessage.js
+@@ -6,6 +6,8 @@
+ import { getTheme } from '../../theme.js';
+ import { parseRGB } from '../Spinner/spinnerUtils.js';
+ import { breathingColor, effectEnabled } from '../../animationsMode.js';
++// dsh-overrides 41: measurable-tool progress (curl/wget/tqdm).
++import { parseToolProgress, toolProgressCells } from '../../toolProgress.js';
+ import { stringWidth } from '../../ink/stringWidth.js';
+ import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js';
+ import { ToolUseLoader } from '../ToolUseLoader.js';
+@@ -318,6 +320,13 @@
+     const [titleThemeName] = useTheme();
+     const titleBreathes = isRunning && headerIsTerminal && effectEnabled('toolCardShimmer');
+     const [viewportRef, titleTime] = useAnimationFrame(isRunning ? (titleBreathes ? 120 : 1000) : null);
++    // dsh-overrides 41: retrospective progress from the finished output
++    // (curl/wget/tqdm tail patterns). The channel does not stream a
++    // running tool's output — this reads the SETTLED result (the
++    // investigation note in reports/hub-wave-20260918.md).
++    const toolProgress = effectEnabled('toolProgressBars') && !isRunning
++        ? parseToolProgress(result ?? displayArgs)
++        : undefined;
+     let terminalTitleColor;
+     if (titleBreathes) {
+         const theme = getTheme(titleThemeName);
+@@ -397,7 +406,12 @@
+     return (_jsx(Box, { ref: viewportRef, flexDirection: "row", justifyContent: "space-between", marginTop: addMargin ? 1 : 0, width: "100%", onClick: onClick, 
+         // Only selection paints a highlight; the configured treatment applies
+         // to an ordinary card. Diff line tints stay - they are content, not chrome.
+-        backgroundColor: isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground, onMouseEnter: interactive ? () => setHovered(true) : undefined, onMouseLeave: interactive ? () => setHovered(false) : undefined, children: _jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [_jsxs(Box, { flexDirection: "row", flexWrap: "nowrap", minWidth: minWidth, children: [_jsx(ToolUseLoader, { shouldAnimate: isRunning, isUnresolved: isRunning, isError: isError, toolName: tool.name }), _jsx(HeaderTitle, { name: name, title: headerTitle, isTerminal: headerIsTerminal, folded: foldedHeader, displayArgs: displayArgs, argsLanguage: argsLanguage, nameColor: toolNameColor(tool.name), filePath: filePath, onOpenFile: onOpenFile, titleColor: terminalTitleColor }), !isRunning && (_jsx(Box, { flexWrap: "nowrap", children: _jsx(Text, { dimColor: !hovered, children: elapsedText }) })), hovered && (_jsx(Box, { flexShrink: 0, children: _jsx(Text, { dimColor: true, children: isExpanded ? '▴' : '▾' }) }))] }), useSplitDiff && view?.card === 'diff' ? (_jsxs(Box, { flexDirection: "row", children: [_jsx(Box, { width: 3, flexShrink: 0, children: _jsx(Text, { dimColor: true, children: GUTTER_FIRST }) }), _jsx(SplitDiffView, { diffs: view.diffs, width: columns - 4, maxRows: DIFF_BODY_MAX_LINES, verbose: verbose, toolBackground: ordinaryToolBackground, reveal: revealable ? { key: `${revealKey}:split` } : undefined })] })) : (shownLines.map((line, index) => (_jsxs(Box, { flexDirection: "row", children: [_jsx(Box, { width: 3, flexShrink: 0, children: _jsx(Text, { color: line.tone === 'add'
++        backgroundColor: isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground, onMouseEnter: interactive ? () => setHovered(true) : undefined, onMouseLeave: interactive ? () => setHovered(false) : undefined, children: _jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [_jsxs(Box, { flexDirection: "row", flexWrap: "nowrap", minWidth: minWidth, children: [_jsx(ToolUseLoader, { shouldAnimate: isRunning, isUnresolved: isRunning, isError: isError, toolName: tool.name }), _jsx(HeaderTitle, { name: name, title: headerTitle, isTerminal: headerIsTerminal, folded: foldedHeader, displayArgs: displayArgs, argsLanguage: argsLanguage, nameColor: toolNameColor(tool.name), filePath: filePath, onOpenFile: onOpenFile, titleColor: terminalTitleColor }), !isRunning && (_jsx(Box, { flexWrap: "nowrap", children: _jsx(Text, { dimColor: !hovered, children: elapsedText }) })), hovered && (_jsx(Box, { flexShrink: 0, children: _jsx(Text, { dimColor: true, children: isExpanded ? '▴' : '▾' }) }))] }), toolProgress !== undefined ? (_jsxs(Box, { paddingLeft: 1, flexDirection: "row", children: [
++                        _jsx(Text, { color: "claude", children: "⤓ " }),
++                        _jsx(Text, { color: toolProgress.percent !== undefined && toolProgress.percent >= 100 ? 'success' : 'claude', children: toolProgressCells(toolProgress, 8).fill }),
++                        _jsx(Text, { dimColor: true, children: [toolProgressCells(toolProgress, 8).track, toolProgress.percent !== undefined ? ` ${toolProgress.percent}%` : '', toolProgress.speed !== undefined ? ` · ${toolProgress.speed}` : '', ` · ${toolProgress.kind} (итог)`] })
++                    ] })) : null,
++useSplitDiff && view?.card === 'diff' ? (_jsxs(Box, { flexDirection: "row", children: [_jsx(Box, { width: 3, flexShrink: 0, children: _jsx(Text, { dimColor: true, children: GUTTER_FIRST }) }), _jsx(SplitDiffView, { diffs: view.diffs, width: columns - 4, maxRows: DIFF_BODY_MAX_LINES, verbose: verbose, toolBackground: ordinaryToolBackground, reveal: revealable ? { key: `${revealKey}:split` } : undefined })] })) : (shownLines.map((line, index) => (_jsxs(Box, { flexDirection: "row", children: [_jsx(Box, { width: 3, flexShrink: 0, children: _jsx(Text, { color: line.tone === 'add'
+                                     ? 'diffAddedWord'
+                                     : line.tone === 'del'
+                                         ? 'diffRemovedWord'

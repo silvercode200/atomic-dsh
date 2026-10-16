@@ -1,0 +1,46 @@
+# Machine-wide dsh patch layer — applied on top of EVERY profile
+# ($DSH_HOME/cordis.patch.yml, outranks per-profile cordis.patch.yml).
+#
+# «Постоянный MCP»: TaskGate и Octa монтируются здесь напрямую (stdio,
+# всегда видим модели). Остальные 7 MCP-серверов ленивые — подключаются
+# через @yilinxiao/dsh-mcp-lazy в профилях (web/dsh-tui) как explicit servers
+# с autoActivate:false; в headless — прямым stdio (полный toolset для скриптов).
+#
+# Actual paths (lazy servers — см. profile cordis.patch.yml):
+#   taskgate:         /home/user/.local/bin/run-taskgate-mcp.sh
+#   codegraph:        /home/user/.local/bin/codegraph  serve --mcp --no-watch
+#   context-mode:     /home/user/.nvm/versions/node/v22.23.2/bin/npx  -y context-mode
+#   tavily:           /home/user/.local/bin/tavily-mcp-wrapper.sh
+#   deep-research:    /usr/bin/python3 /home/user/.local/bin/deep-research-server.py
+# (soc, termseer, desktop-snapshot — personal servers, wire your own)
+
+# Stderr MCP-серверов отводим в файл единым враппером
+# /home/user/.dsh/bin/mcp-stderr-to-log <name> <cmd> [args...]:
+# StdioClientTransport (@modelcontextprotocol/sdk) по умолчанию наследует stderr
+# дочернего процесса в терминал TUI — сырые WARNING поверх ink-кадров ломают
+# frame-diffing (ghost-строки, задвоения, наложения на поле ввода).
+# command = враппер; args = [<имя-сервера>, <исходный command>, <исходные args...>].
+# Логи: ~/.dsh/logs/mcp-<name>.stderr.log
+
+- insert:
+    - id: mcp-taskgate
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: taskgate
+        transport: stdio
+        command: /home/user/.dsh/bin/mcp-stderr-to-log
+        args:
+          - taskgate
+          - /home/user/.local/bin/run-taskgate-mcp.sh
+        failOnStartupError: false
+
+    - id: mcp-octa
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: octa
+        transport: stdio
+        command: /home/user/.dsh/bin/mcp-stderr-to-log
+        args:
+          - octa
+          - /home/user/.local/bin/run-octa-mcp.sh
+        failOnStartupError: false

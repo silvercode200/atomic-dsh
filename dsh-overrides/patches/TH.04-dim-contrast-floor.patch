@@ -1,0 +1,163 @@
+# Goal:      контраст-пол для dim/inactive-текста ThemedText (MKS4 баг-4 +
+#            E5-семья): theme.inactive — ЦВЕТ, не SGR-2 dim; невыделенные
+#            пункты слэш-меню (CommandSuggestions dimColor:true) и явные
+#            color="inactive" (Settings-чипы, Ledger, hubSettings,
+#            EffectsPanel, ScrollbarGutter, TimelineRail, SettingsExamples,
+#            ListItem) наследуют его дословно. Тема юзера tokyonight-moon:
+#            inactive #444a73 на appBackground #000000 = 2.4:1 (после
+#            квантования chalk в 256-палитру — 3.47:1, палитра 60 #5f5f87),
+#            ниже WCAG AA 4.5:1 — пункты «невидимы, пока не переведёшь
+#            выделение» (RED-74-detector: 4/4 < 4.5, RC=1). flooredInactive
+#            (theme) поднимает inactive к theme.text бинпоиском (24 итер.,
+#            lerp, минимальный t) до ≥5.0:1 — запас 0.5 над AA на
+#            квантование chalk (детектор сьюта меряет AA 4.5 на квантованном
+#            коде). Дефолтная тема inactive #8D95A6 = 6.98:1 — пол не
+#            срабатывает, цвет не меняется; непарсибельные цвета
+#            (ansi:/ansi256/пусто) проходят как есть; bg = parsable
+#            theme.appBackground, иначе #000000; текст < 5.0 → вернуть text;
+#            мемоизация WeakMap по объекту темы. Точки: dimColor-ветка
+#            ThemedText (баг-4) + resolveColor ключ 'inactive' (E5). Остальные
+#            ключи БЕЗ пола — их контрастная политика = визуальный оверхол
+#            (#61). CommandSuggestions/theme.js/ink не тронуты.
+# Family:    TH.04
+# Status:    live
+# Files:     lib/types/components/design-system/ThemedText.js
+# Evidence:  TG-DSH-MKS4-20260928 узел 4;
+#            reports/mks4-visual-bugs-20260928/FIX-SPEC-74.md,
+#            RED-74-detector.txt (run 215635: lowcontrast=4, RC=1),
+#            FIX-74-NOTES.md, FIX-74-CYCLE-LOG.txt
+# Upstream:  not-applicable
+# Added:     2026-09-29 (TG-DSH-MKS4-20260928 узел 4)
+
+--- a/lib/types/components/design-system/ThemedText.js
++++ b/lib/types/components/design-system/ThemedText.js
+@@ -9,6 +9,106 @@
+  * set it to `text` on hover).
+  */
+ export const TextHoverColorContext = React.createContext(undefined);
++// DSH-P74-DIM-CONTRAST-FLOOR: theme.inactive is a COLOR (resolved here),
++// not SGR-2 dim — every dimColor:true consumer (CommandSuggestions' unselected
++// slash-menu rows) and every explicit color="inactive" consumer (Settings
++// chips, Ledger, hubSettings, EffectsPanel, ScrollbarGutter, TimelineRail,
++// SettingsExamples, ListItem — the E5 dim family) inherits it verbatim, so a
++// theme whose inactive sits near the background renders that text invisible
++// (tokyonight-moon inactive on #000000: 2.4:1 raw, 3.47:1 after chalk's
++// 256-palette quantization — below WCAG AA 4.5:1, MKS4 bug-4). flooredInactive
++// lifts inactive toward theme.text until the contrast reaches 5.0:1 — 0.5
++// above AA to absorb palette quantization. Themes already at/above the floor
++// keep their exact inactive (default #8D95A6 = 6.98:1, unchanged); unparsable
++// colors (ansi:, ansi256(), '') pass through untouched; memoized per theme
++// object (colors are render-invariant, the search runs once per theme).
++const INACTIVE_CONTRAST_FLOOR = 5.0;
++const inactiveFloorCache = new WeakMap();
++/** Parse #rgb/#rrggbb/#rrggbbaa (alpha ignored) or rgb(r,g,b) into [r,g,b]. */
++function parseThemeColor(value) {
++    if (typeof value !== 'string') {
++        return undefined;
++    }
++    let m = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(value);
++    if (m !== null) {
++        const r = Number(m[1]), g = Number(m[2]), b = Number(m[3]);
++        return r > 255 || g > 255 || b > 255 ? undefined : [r, g, b];
++    }
++    m = /^#(?:([0-9a-fA-F]{3})|([0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?)$/.exec(value);
++    if (m === null) {
++        return undefined;
++    }
++    const hex = m[1] !== undefined ? m[1].replace(/./g, (c) => c + c) : m[2];
++    const n = parseInt(hex, 16);
++    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
++}
++/** WCAG relative luminance of an [r,g,b] triple. */
++function wcagLuminance([r, g, b]) {
++    const lin = (c) => {
++        const s = c / 255;
++        return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
++    };
++    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
++}
++/** WCAG contrast ratio between two [r,g,b] triples. */
++function contrastRatio(a, b) {
++    const la = wcagLuminance(a), lb = wcagLuminance(b);
++    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
++}
++/**
++ * theme.inactive lifted to at least INACTIVE_CONTRAST_FLOOR against the app
++ * background (defaults to #000000 when the theme carries no parsable
++ * appBackground). Already-readable palettes return their inactive unchanged;
++ * when even theme.text cannot reach the floor, text is the best the palette
++ * can do; otherwise a 24-iteration binary search finds the smallest blend
++ * toward text that clears it. Light themes work the same way — text is dark
++ * there, so the blend darkens toward readable ink. Unparsable values
++ * (ansi:, ansi256(), '') pass through as-is.
++ */
++function flooredInactive(theme) {
++    const inc = theme.inactive;
++    if (typeof inc !== 'string') {
++        return inc;
++    }
++    const cached = inactiveFloorCache.get(theme);
++    if (cached !== undefined) {
++        return cached;
++    }
++    let result = inc;
++    const incRgb = parseThemeColor(inc);
++    if (incRgb !== undefined) {
++        const bg = parseThemeColor(theme.appBackground) ?? [0, 0, 0];
++        const tgt = parseThemeColor(theme.text);
++        if (contrastRatio(incRgb, bg) < INACTIVE_CONTRAST_FLOOR && tgt !== undefined) {
++            if (contrastRatio(tgt, bg) < INACTIVE_CONTRAST_FLOOR) {
++                result = theme.text;
++            }
++            else {
++                // Contrast along the inc→tgt mix is unimodal in t (single min where
++                // mix luminance crosses bg); t=0 fails (inc) and t=1 passes (tgt), so the
++                // passing t-set is [t*, 1]: binary-search the smallest passing t.
++                const mixAt = (t) => {
++                    const mix = [0, 1, 2].map((k) => Math.round(incRgb[k] + (tgt[k] - incRgb[k]) * t));
++                    return { mix, ok: contrastRatio(mix, bg) >= INACTIVE_CONTRAST_FLOOR };
++                };
++                let lo = 0, hi = 1; // t=1 passes: tgt itself clears the floor
++                for (let i = 0; i < 24; i++) {
++                    const t = (lo + hi) / 2;
++                    if (mixAt(t).ok) {
++                        hi = t;
++                    }
++                    else {
++                        lo = t;
++                    }
++                }
++                const { mix } = mixAt(hi); // hi was tested passing — deterministic
++                result = `rgb(${mix[0]},${mix[1]},${mix[2]})`;
++            }
++        }
++    }
++    inactiveFloorCache.set(theme, result);
++    return result;
++}
+ /** Resolves a color value that may be a theme key to a raw Color. */
+ function resolveColor(color, theme) {
+     if (!color)
+@@ -20,7 +120,12 @@
+         color.startsWith('ansi:')) {
+         return color;
+     }
+-    // It's a theme key - resolve it ('' means "no color" in that theme)
++    // It's a theme key - resolve it ('' means "no color" in that theme);
++    // 'inactive' additionally passes through the contrast floor above
++    // (explicit color="inactive" consumers — the E5 dim family).
++    if (color === 'inactive') {
++        return flooredInactive(theme) || undefined;
++    }
+     return theme[color] || undefined;
+ }
+ /**
+@@ -36,7 +141,7 @@
+     const resolvedColor = !color && hoverColor
+         ? theme[hoverColor]
+         : dimColor
+-            ? theme.inactive
++            ? flooredInactive(theme)
+             : resolveColor(color, theme);
+     const resolvedBackgroundColor = resolveColor(backgroundColor, theme);
+     return (_jsx(Text, { ref: ref, color: resolvedColor, backgroundColor: resolvedBackgroundColor, bold: bold, italic: italic, underline: underline, strikethrough: strikethrough, inverse: inverse, wrap: wrap, children: children }));

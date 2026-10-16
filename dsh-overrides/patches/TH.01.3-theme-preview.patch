@@ -1,0 +1,664 @@
+# Goal:      живая демо-зона тем в /theme-пикере (v3: compact + FULLSCREEN manifest)
+# Family:    TH.01
+# Status:    live
+# Files:     lib/types/components/ThemePicker.js,
+#            lib/types/components/ThemePreview.js
+# Evidence:  TG-DSH-DEMO-20260924 узел 1; v2: TG-DSH-THEMEDEMO-20260926 узел 1;
+#            v3: TG-DSH-PUBLIC-20261017 node B (fullscreen manifest);
+#            reports/demo-evidence/;
+#            reports/colab-themedemo-golden-20260926T181149Z/;
+# Upstream:  not-applicable
+# Added:     2026-09-24 (TG-DSH-DEMO-20260924); v2 2026-09-26 (THEMEDEMO);
+#            v3 2026-10-17 (TG-DSH-PUBLIC-20261017 node B)
+
+# 64-theme-preview v3 (TG-DSH-PUBLIC-20261017 node B, 2026-10-17)
+# Goal:      FULLSCREEN manifest тем — весь кадр = демо темы.
+#            Юзер (TG-DSH-PUBLIC-20261017): «хочу видеть заполнение всего
+#            экрана и примеров проявления темы, а не только пара строчек как
+#            сейчас в превью тем при их переключении». v2 рисовала compact
+#            демо-зону под списком (бюджет по tier-map 1..14). v3 добавляет
+#            FULLSCREEN-режим: при columns ≥ 60 && rows ≥ 24 (desktop/VM)
+#            список тем скрыт, весь overlay = манифест темы (6 секций):
+#              §A chat-layout   user bubble + assistant streaming + tool-card ◐
+#              §B status-bar    powerline: model · provider · cwd · git · ctx
+#              §C effects       spinner frame + glyph/separator bar
+#              §D palette       swatches ██ + label (bg/fg/primary/accent/dim/
+#                               border/ok/err)
+#              §E input frame   ╭─❯ prompt ─╮ with ⏎ Send chip
+#              §F code block    syntax-toned code + WCAG dim-row
+#            ↑/↓ листают темы (live-recolor через Chat.js:2925-2934 previewTheme);
+#            crumb показывает имя + индекс + total. Ниже 60col ИЛИ 24row —
+#            compact v2 layout (Termux ≥40col parity, VISUAL-CANON §5).
+#            Канон §1.2: inline/fullscreen parity (один рендер-путь, разные
+#            layout-бюджеты). §1.3: true black #000000 через palette.appBackground.
+#            §1.4: WCAG dim ≥4.5:1 — dim-row демонстрирует реальный dim-контраст
+#            палитры на appBackground (regression target для TH.04 floor).
+#            Все rows height:1 flexShrink:0 overflow:hidden — canon 45 extended.
+# Family:    TH.01 (theme-preview wave; v3 — FULLSCREEN manifest по требованию
+#            юзера, расширяет v2 compact)
+# Status:    live (verify deferred to Workstream G — VM boot/screenshot;
+#            Zorin-only local verify: patch --dry-run failed=0 + node --check)
+# Files:     lib/types/components/ThemePicker.js,
+#            lib/types/components/ThemePreview.js
+# Evidence:  TG-DSH-PUBLIC-20261017 node B; v3 local verify:
+#            patch --dry-run на pristine upstream ThemePreview.js: failed=0 (I3);
+#            node --check ThemePreview.js + ThemePicker.js: syntax OK;
+#            I2 confirmed (live == patch applied, byte-identity via reverse+forward);
+#            VM boot/screenshot verify — deferred to Workstream G (TG-DSH-PUBLIC)
+# Upstream:  not-applicable
+# Added:     2026-09-26 v2 (THEMEDEMO); 2026-10-17 v3 (TG-DSH-PUBLIC-20261017 B)
+#            v3 supersedes v2 inline-form per file (full file body regenerated).
+
+--- a/lib/types/components/ThemePicker.js
++++ b/lib/types/components/ThemePicker.js
+@@ -1,40 +1,61 @@
+-import { jsx as _jsx, Fragment as _Fragment, jsxs as _jsxs } from "react/jsx-runtime";
++import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+ import React from 'react';
+ import { t } from '../i18n.js';
+-import { Box, Text } from '../ui.js';
++import { Box, Text, useTerminalSize } from '../ui.js';
+ import { Pane } from './design-system/Pane.js';
+ import { Select } from './Select.js';
+ import { HintLine } from './design-system/HintLine.js';
+ import { listThemeCatalog } from '../themeCatalog.js';
+ import { useRuntimeThemeSnapshot } from '../hooks/useRuntimeThemeSnapshot.js';
+-/** One double-block swatch character per preview key, in a row. */
+-const SWATCH = '██';
++import { ThemePreview, FullscreenThemePreview } from './ThemePreview.js';
+ /**
+- * Theme keys previewed in the picker, chosen for visual contrast.
+- * dsh-overrides 12: fish_config-style preview — widened from 3 to 8 key
+- * palette tokens so a row reads as a miniature of the theme.
+- */
+-const SWATCH_KEYS = ['background', 'text', 'success', 'warning', 'error', 'suggestion', 'claude', 'permission'];
+-/**
+- * Rows visible at once. Every option renders two terminal rows (label +
+- * description), so 11 options ≈ 22 rows + chrome stays inside a 40-row
+- * terminal without clipping the hint zone below the list.
+- */
+-const VISIBLE_OPTION_COUNT = 11;
+-function swatches(theme) {
+-    return (_jsx(_Fragment, { children: SWATCH_KEYS.map(key => (_jsx(Text, { color: theme[key], children: SWATCH }, key))) }));
+-}
+-/**
+- * A picker row: display name + color swatches. `filterText` is the
+- * precomputed lowercase haystack (name + displayName) for the picker filter —
+- * the label is JSX and cannot be substring-matched directly.
++ * Rows the picker spends on chrome that is neither the option list nor the
++ * demo zone: pane paddingTop 1 + divider 1 + title 1 + filter 1 + hint 1.
++ * Title and filter carry NO bottom margin (the demo zone's own background
++ * block provides the visual break) — every row here is accounted for so the
++ * pane sums to exactly the overlay height at any terminal size.
++ */
++const PICKER_CORE_ROWS = 5;
++/**
++ * Rows guaranteed to the live demo zone by terminal size: tall terminals
++ * get the full block set; mid-sized get the core rows; tiny ones still get
++ * a sliver so the preview never disappears entirely (the 22-row user
++ * geometry is the floor this whole layout is designed around).
++ */
++const demoTargetRows = (overlayMax) => overlayMax >= 16 ? 10 : overlayMax >= 12 ? 6 : 3;
++/**
++ * dsh-overrides 64 v3 (TG-DSH-PUBLIC-20261017 node B): fullscreen-manifest
++ * mode threshold. When the terminal has both columns ≥ 60 AND rows ≥ 24
++ * (desktop/VM), the picker renders the FULLSCREEN manifest — the entire
++ * overlay frame becomes the highlighted theme's demo, the option list is
++ * hidden, and ↑/↓ cycle themes with live-recolor (Chat.js:2925-2934 wires
++ * previewTheme on upArrow/downArrow). Below either threshold the picker
++ * falls back to the v2 compact list+preview (Termux ≥40col parity,
++ * VISUAL-CANON §5: Termux portrait ~38-42 cols / landscape ~80×18 — at
++ * 80×18 the compact layout fits 8+ overlayMax rows of demo; fullscreen at
++ * 18 rows could not fit the 8-row manifest minimum).
++ */
++const FULLSCREEN_MIN_COLS = 60;
++const FULLSCREEN_MIN_ROWS = 24;
++/**
++ * A picker row: display name only — the live demo zone below the list
++ * paints every theme role on real UI examples, so the rows themselves
++ * carry no swatches. `filterText` is the precomputed lowercase haystack
++ * (name + displayName) for the picker filter — the label is the display
++ * name and cannot be substring-matched against the underlying key.
+  */
+ function optionFor(name, displayName, theme, description) {
+     return {
+         value: name,
+-        label: (_jsxs(_Fragment, { children: [displayName, '  ', swatches(theme)] })),
++        label: displayName,
+         description,
+         filterText: `${name} ${displayName}`.toLowerCase(),
++        // dsh-overrides 64: the full resolved palette + display name ride
++        // along on the option so the live preview can paint with the
++        // HIGHLIGHTED theme's colors without re-resolving (listThemeCatalog
++        // already merged base + user colors in buildTheme).
++        displayName,
++        theme,
+     };
+ }
+ /**
+@@ -69,17 +90,61 @@
+     return options.filter(option => (option.filterText ?? option.value.toLowerCase()).includes(q));
+ }
+ /**
+- * Color-theme picker in the ActivityPicker style: a permission-colored Pane
+- * listing the `auto` pseudo-theme and built-in palettes first, followed by
+- * static JSON and plugin themes — each row shows the display name, base and
+- * eight key color swatches; `❯` marks focus, `✓` the active theme. Typing
+- * filters the list fish_config-style (name/displayName substring); Enter
+- * applies through the ThemeProvider setter (persists to ~/.dsh-tui/theme.json
+- * and hot swaps), Esc clears the filter or cancels.
++ * Color-theme picker: a permission-colored Pane that fills the overlay
++ * height (terminalRows - 8, Chat's OverlayAbove maxHeight). Two layouts
++ * by geometry (dsh-overrides 64 v3, TG-DSH-PUBLIC-20261017 node B):
++ *
++ *   • FULLSCREEN (columns ≥ 60 AND rows ≥ 24, desktop/VM): the entire
++ *     overlay frame is the highlighted theme's manifest — the option list
++ *     is hidden, ↑/↓ cycle themes with live-recolor, the header crumb
++ *     shows the highlighted name + index + total. Six manifest sections:
++ *     chat-layout, powerline status-bar, effects, palette swatches, input
++ *     frame, code block + WCAG dim row.
++ *
++ *   • COMPACT (otherwise, Termux ≥40col parity): compact name list on top
++ *     (`❯` marks focus, `✓` the active theme), then a full-width live
++ *     demo zone rendering the HIGHLIGHTED theme on real UI examples
++ *     (status row, input frame, transcript, code, todo, text styles,
++ *     color roles, dim metrics). The demo takes priority over list
++ *     length: the visible option count shrinks first (down to 2 options).
++ *
++ * Typing filters the list fish_config-style (name/displayName substring);
++ * Enter applies through the ThemeProvider setter (persists to ~/.dsh-tui/
++ * theme.json and hot swaps), Esc clears the filter or cancels (reverts any
++ * live preview back to the persisted choice).
+  */
+ export function ThemePicker({ focusIndex, currentTheme, themeHost, onPick, query = '' }) {
+     const runtimeThemeSnapshot = useRuntimeThemeSnapshot(themeHost);
+     const options = React.useMemo(() => getThemeOptions(themeHost), [runtimeThemeSnapshot, themeHost]);
+     const filtered = React.useMemo(() => filterThemeOptions(options, query), [options, query]);
+-    return (_jsx(Pane, { color: "permission", children: _jsxs(Box, { flexDirection: "column", children: [_jsx(Box, { marginBottom: 1, children: _jsx(Text, { color: "remember", bold: true, children: t('picker-title-theme') }) }), _jsx(Box, { marginBottom: 1, children: _jsxs(Text, { children: [t('theme-filter-label'), ' ', _jsx(Text, { color: "remember", children: query }), _jsx(Text, { dimColor: true, children: "▏" }), _jsx(Text, { dimColor: true, children: t('theme-filter-count', { shown: filtered.length, total: options.length }) })] }) }), filtered.length === 0 && (_jsx(Text, { dimColor: true, children: t('theme-filter-no-match') })), _jsx(Select, { options: filtered, focusIndex: focusIndex, selectedValue: currentTheme, visibleOptionCount: VISIBLE_OPTION_COUNT, onPick: onPick ? index => onPick(index) : undefined }), _jsx(Text, { dimColor: true, italic: true, children: _jsx(HintLine, { text: t('hint-theme-picker') }) })] }) }));
++    const terminal = useTerminalSize();
++    // The highlighted (cursor) row — what the demo paints, NOT the applied
++    // theme. Clamp defensively: a stale focusIndex must never crash the picker.
++    const safeIndex = Math.max(0, Math.min(focusIndex, filtered.length - 1));
++    const highlighted = filtered.length > 0 ? filtered[safeIndex] : undefined;
++    const overlayMax = Math.max(terminal.rows - 8, 1);
++    // dsh-overrides 64 v3: fullscreen-manifest mode. The picker hides the
++    // option list and renders the FULLSCREEN manifest when both thresholds
++    // are met — the user can still cycle themes via ↑/↓ (Chat.js:2925-2934
++    // wires previewTheme on arrow keys) and the manifest recolors in place.
++    // Below either threshold the compact list+preview layout (v2) keeps the
++    // Termux ≥40col parity intact.
++    const fullscreenMode = terminal.columns >= FULLSCREEN_MIN_COLS
++        && terminal.rows >= FULLSCREEN_MIN_ROWS
++        && highlighted !== undefined;
++    if (fullscreenMode) {
++        return (_jsx(Pane, { color: "permission", children: _jsxs(Box, { flexDirection: "column", children: [_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { color: "remember", bold: true, children: t('picker-title-theme') }), _jsx(Text, { dimColor: true, children: " ▏ " }), _jsx(Text, { color: "remember", bold: true, children: highlighted.displayName }), _jsx(Text, { dimColor: true, children: ` · ${safeIndex + 1}/${filtered.length}` }), _jsx(Text, { dimColor: true, children: " ▏ " }), _jsx(Text, { dimColor: true, children: query !== '' ? `${query} ` : '' }), _jsx(Text, { dimColor: true, italic: true, children: _jsx(HintLine, { text: t('hint-theme-picker') }) })] }), _jsx(FullscreenThemePreview, { palette: highlighted.theme, displayName: highlighted.displayName, rows: Math.max(0, overlayMax - 1), columns: terminal.columns })] }) }));
++    }
++    // dsh-overrides 64 (v2): the picker owns the whole overlay height and
++    // splits it list-vs-demo. The demo zone is the user-facing point of the
++    // picker, so the list window yields first: options visible =
++    // clamp(floor((overlayMax - core - demoTarget) / 2), 2, 11) — each
++    // option is 2 rows (label + description). Whatever remains goes to the
++    // demo zone, which renders for EVERY budget > 0 (previously the preview
++    // disappeared entirely below ~40 rows — at the 22-row user geometry the
++    // budget went negative and the user saw an empty bottom half).
++    const listWindow = Math.max(2, Math.min(11, Math.floor((overlayMax - PICKER_CORE_ROWS - demoTargetRows(overlayMax)) / 2)));
++    const listRows = 2 * Math.min(filtered.length, listWindow);
++    const demoBudget = Math.max(0, overlayMax - PICKER_CORE_ROWS - listRows);
++    return (_jsx(Pane, { color: "permission", children: _jsxs(Box, { flexDirection: "column", children: [_jsx(Text, { color: "remember", bold: true, children: t('picker-title-theme') }), _jsxs(Text, { children: [t('theme-filter-label'), ' ', _jsx(Text, { color: "remember", children: query }), _jsx(Text, { dimColor: true, children: "▏" }), _jsx(Text, { dimColor: true, children: t('theme-filter-count', { shown: filtered.length, total: options.length }) })] }), filtered.length === 0 && (_jsx(Text, { dimColor: true, children: t('theme-filter-no-match') })), _jsx(Select, { options: filtered, focusIndex: focusIndex, selectedValue: currentTheme, visibleOptionCount: listWindow, onPick: onPick ? index => onPick(index) : undefined }), highlighted !== undefined && (_jsx(ThemePreview, { palette: highlighted.theme, displayName: highlighted.displayName, rows: demoBudget, columns: terminal.columns })), _jsx(Text, { dimColor: true, italic: true, children: _jsx(HintLine, { text: t('hint-theme-picker') }) })] }) }));
+ }
+--- /dev/null
++++ b/lib/types/components/ThemePreview.js
+@@ -0,0 +1,453 @@
++import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
++import { Box, Text } from '../ui.js';
++import { stringWidth } from '../ink/stringWidth.js';
++// dsh-overrides 64: theme preview — a self-documenting live demo zone
++// rendered below the theme list in the /theme picker. Every row is painted
++// with the HIGHLIGHTED (cursor) theme's real palette — raw palette values
++// (rgb()/ansi:), NOT theme keys — so the preview follows the cursor even
++// while the filter edits the list, where the app-wide previewTheme swap
++// (dsh-overrides 37) does not fire.
++// Требование (TG-DSH-THEMEDEMO-20260926 node 1, слова юзера): «Вот я темы
++// листаю и внизу пустой экран весь — и там должны показываться шрифты,
++// цвета и т.д., все варианты на примерах. В демо так должно быть». Зона
++// видна ВСЕГДА (v1 прятала превью при rows<40 — на геометрии юзера 22×59
++// низ был пуст): высоту делит с зоной сам пикер (dsh-overrides 64 v2 в
++// ThemePicker), сюда приходит готовый бюджет `rows`. Демо приоритетна над
++// длиной списка.
++//
++// dsh-overrides 64 v3 (TG-DSH-PUBLIC-20261017 node B): FULLSCREEN preview —
++// весь кадр = манифест темы (6+ секций: chat-layout, powerline status-bar,
++// effects, palette swatches, input frame, code-block + WCAG dim row).
++// Активируется автоматически при columns ≥ 60 && rows ≥ 24 (desktop/VM):
++// список тем скрыт, ↑/↓ листают темы (live-recolor через Chat:2925-2934),
++// crumb показывает имя + индекс. Ниже 60col или 24row — compact-режим v2
++// (Termux ≥40col parity, VISUAL-CANON §5). Канон §1.2: inline/fullscreen
++// parity (один рендер-путь, разные layout-бюджеты). Канон §1.3: true black
++// #000000 через palette.appBackground. Канон §1.4: WCAG dim ≥4.5:1 (dim-row
++// демонстрирует реальный dim-контраст палитры на appBackground).
++/**
++ * The powerline wedge glyph (U+E0B0), same as StatusLine's POWERLINE_SEP.
++ * Written as an escape because the private-use glyph is invisible in edits
++ * and diffs. Drawn with color = the PRECEDING segment's bg and
++ * backgroundColor = the FOLLOWING segment's bg.
++ */
++const WEDGE = '';
++/**
++ * Miniature sample payloads. Deliberately DIFFERENT from the live status
++ * row's data ('~/dsh' vs the real displayCwd, '86k' vs the live ctx count,
++ * a timer while idle) so probe frames can tell preview rows from real ones.
++ */
++const SEG_MODEL_TEXT = ' ✦ glm-5.3 ';
++const SEG_PROVIDER_TEXT = ' ⚡a6api ';
++const SEG_CWD_TEXT = ' ~/dsh ';
++const SEG_GIT_TEXT = ' ⎇ main ';
++const CTX_FILL_CELLS = 4;
++const CTX_TRACK_CELLS = 2;
++const SEG_TIMER_TEXT = ' 1m 35s ';
++const DIM_CTX_TEXT = '86k/262k';
++const GAUGE_FILL_CELLS = 6;
++const GAUGE_TEXT = '▕' + '█'.repeat(GAUGE_FILL_CELLS) + '··' + '▏';
++const TPS_TEXT = '42 tps';
++const JOBS_TEXT = '● 2 jobs';
++const FRAME_SAMPLE_TEXT = 'Write a message';
++const FRAME_SAMPLE_DIM = ' · placeholder';
++const CHIP_TEXT = ' ⏎ Send ';
++const CODE_LABEL = ' js ';
++const CODE_LINE = 'const accent = theme.claude; // pick per theme';
++const TRANSCRIPT_USER_TEXT = ' How does this theme look?';
++const TRANSCRIPT_ASSISTANT_LEAD = 'Reads nicely — ';
++const TRANSCRIPT_ASSISTANT_CODE = 'theme.claude';
++const TRANSCRIPT_ASSISTANT_TAIL = ' is the accent.';
++const TODO_TEXT = 'Analyze the preview · 1/3';
++/** Fullscreen-only sample payloads (v3). */
++const TOOL_CARD_NAME = 'Write';
++const TOOL_CARD_TARGET = '/tmp/preview.txt';
++const TOOL_CARD_LEAD = ' ◐ Writing ';
++const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸'];
++const GLYPH_BAR = '◆◇●○◐◑▕██████··▏';
++/** Color prop spread only when the palette key is actually painted ('' = no paint). */
++const fg = (value) => (value === undefined || value === null || value === '' ? {} : { color: value });
++/** Background prop spread only when the palette key is actually painted. */
++const bg = (value) => (value === undefined || value === null || value === '' ? {} : { backgroundColor: value });
++/** One filled powerline segment: bg fill + fg text, a hard 1-line cell. */
++function PreviewSegment({ bgValue, fgValue, children }) {
++    return (_jsx(Box, { flexShrink: 0, ...bg(bgValue), children: _jsx(Text, { wrap: "truncate", ...fg(fgValue), children: children }) }));
++}
++/**
++ * The wedge between two filled segments (or trailing the last one):
++ * foreground = the left segment's fill, background = the right one's.
++ */
++function PreviewWedge({ from, to }) {
++    return (_jsx(Text, { wrap: "truncate", ...fg(from), ...(to === undefined ? {} : bg(to)), children: WEDGE }));
++}
++/**
++ * The mini status row's segments, mirroring buildPowerlineSegments' bg/fg
++ * pairs (claude/inverseText model, toolCardBackground/text cwd,
++ * success/inverseText git, toolDotWrite/inverseText ctx bar,
++ * toolCardBackgroundDim/claude timer) so a theme that restyles the live
++ * status row restyles the preview identically.
++ *
++ * Overflow drops segments right-to-left whole (timer first, model last) —
++ * the same governance the live row uses; wedges are counted in the budget
++ * and never squeezed (canon: separators are incompressible).
++ */
++function previewPowerlineSegments(palette, innerWidth) {
++    const ctxText = ` ⚡${'█'.repeat(CTX_FILL_CELLS)}▋${'·'.repeat(CTX_TRACK_CELLS)} 42% `;
++    const segs = [
++        { key: 'model', bgValue: palette.claude, fgValue: palette.inverseText, text: SEG_MODEL_TEXT },
++        { key: 'provider', bgValue: palette.permission, fgValue: palette.inverseText, text: SEG_PROVIDER_TEXT },
++        { key: 'cwd', bgValue: palette.toolCardBackground, fgValue: palette.text, text: SEG_CWD_TEXT },
++        { key: 'git', bgValue: palette.success, fgValue: palette.inverseText, text: SEG_GIT_TEXT },
++        { key: 'ctx', bgValue: palette.toolDotWrite, fgValue: palette.inverseText, text: ctxText },
++        { key: 'timer', bgValue: palette.toolCardBackgroundDim, fgValue: palette.claude, text: SEG_TIMER_TEXT },
++    ];
++    const wedgeWidth = stringWidth(WEDGE);
++    const widthOf = (list) => list.reduce((sum, s) => sum + stringWidth(s.text), 0)
++        + wedgeWidth * list.length; // one wedge after every kept segment
++    let kept = segs;
++    while (kept.length > 1 && widthOf(kept) > innerWidth) {
++        kept = kept.slice(0, -1);
++    }
++    if (kept.length === 1 && widthOf(kept) > innerWidth) {
++        return []; // even the model rung cannot fit — drop the row whole
++    }
++    return kept;
++}
++/** The powerline row: segments + wedges, a hard 1-line cell (canon 45). */
++function PowerlinePreviewRow({ palette, innerWidth }) {
++    const segs = previewPowerlineSegments(palette, innerWidth);
++    if (segs.length === 0)
++        return null;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsxs(Box, { flexDirection: "row", flexShrink: 0, children: [segs.map((seg, index) => (_jsxs(_Fragment, { children: [index > 0 ? _jsx(PreviewWedge, { from: segs[index - 1].bgValue, to: seg.bgValue }) : null, _jsx(PreviewSegment, { bgValue: seg.bgValue, fgValue: seg.fgValue, children: seg.text }, seg.key)] }, seg.key))), _jsx(PreviewWedge, { from: segs[segs.length - 1].bgValue })] }) }));
++}
++/**
++ * The dim row (FieldLine-style): dim `ctx` label, the tps gauge
++ * `▕██████··▏` (fill = the theme's success key, track dim), a jobs chip.
++ * Fields drop whole right-to-left under width pressure; the gauge is
++ * never shredded (canon: the ▕…▏ frame only whole, no <3-char stubs).
++ */
++function DimRow({ palette, innerWidth }) {
++    const sepWidth = 3; // ' · ' — incompressible
++    const fields = [
++        {
++            key: 'ctx',
++            width: stringWidth(`ctx ${DIM_CTX_TEXT}`),
++            node: (_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { ...fg(palette.inactive), children: "ctx " }), _jsx(Text, { ...fg(palette.inactiveShimmer), children: DIM_CTX_TEXT })] })),
++        },
++        {
++            key: 'tps',
++            width: stringWidth(GAUGE_TEXT) + 1 + stringWidth(TPS_TEXT),
++            node: (_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { ...fg(palette.inactive), children: GAUGE_TEXT.slice(0, 1) }), _jsx(Text, { ...fg(palette.success), children: GAUGE_TEXT.slice(1, 1 + GAUGE_FILL_CELLS) }), _jsx(Text, { ...fg(palette.inactive), children: GAUGE_TEXT.slice(1 + GAUGE_FILL_CELLS) }), ' ', _jsx(Text, { ...fg(palette.success), children: TPS_TEXT })] })),
++        },
++        {
++            key: 'jobs',
++            width: stringWidth(JOBS_TEXT),
++            node: (_jsx(Text, { wrap: "truncate", ...fg(palette.inactiveShimmer), children: JOBS_TEXT })),
++        },
++    ];
++    let kept = fields;
++    const widthOf = (list) => list.reduce((sum, f) => sum + f.width, 0) + sepWidth * Math.max(0, list.length - 1);
++    while (kept.length > 0 && widthOf(kept) > innerWidth) {
++        kept = kept.slice(0, -1);
++    }
++    if (kept.length === 0)
++        return null;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsx(Text, { wrap: "truncate", children: kept.map((field, index) => (_jsxs(_Fragment, { children: [index > 0 ? _jsx(Text, { ...fg(palette.inactive), children: " · " }) : null, field.node] }, field.key))) }) }));
++}
++/**
++ * One input-frame border row: `╭─…─╮` / `╰─…─╯` in the theme's
++ * promptBorder — the same top/bottom-only round frame the live
++ * EffortInputBorder draws with the promptBorder key.
++ */
++function FrameBorderRow({ palette, innerWidth, top }) {
++    const fill = Math.max(0, innerWidth - 2);
++    const row = `${top ? '╭' : '╰'}${'─'.repeat(fill)}${top ? '╮' : '╯'}`;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsx(Text, { wrap: "truncate-end", ...fg(palette.promptBorder), children: row }) }));
++}
++/**
++ * The frame content row: an inverse caret, normal text, dim placeholder,
++ * and the primary editor chip (` ⏎ Send `, bg = promptBorder accent,
++ * fg = inverseText — the EditorButton primary convention). The sample
++ * text yields to truncation first; the chip is dropped whole if it
++ * cannot fit (canon: no half-chips).
++ */
++function FrameContentRow({ palette, innerWidth }) {
++    const chipWidth = stringWidth(CHIP_TEXT);
++    const chipFits = innerWidth >= chipWidth + 4; // caret + a breathing cell
++    return (_jsxs(Box, { height: 1, flexShrink: 0, overflow: "hidden", flexDirection: "row", children: [_jsx(Text, { inverse: true, ...fg(palette.promptBorder), children: " " }), _jsx(Box, { flexShrink: 1, flexGrow: 1, overflow: "hidden", children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { wrap: "truncate-end", ...fg(palette.text), children: FRAME_SAMPLE_TEXT }), _jsx(Text, { wrap: "truncate-end", ...fg(palette.inactive), children: FRAME_SAMPLE_DIM })] }) }), chipFits ? (_jsx(Box, { flexShrink: 0, ...bg(palette.promptBorder), children: _jsx(Text, { bold: true, ...fg(palette.inverseText), children: CHIP_TEXT }) })) : null] }));
++}
++/**
++ * The transcript's user line: a full-width message row with the theme's
++ * userMessageBackground fill and text foreground — the way MessageList
++ * paints user turns. The background prop is a no-op for palettes that
++ * leave the key empty (builtin `dark`), so the row degrades to plain text.
++ */
++function TranscriptUserRow({ palette, innerWidth }) {
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", ...bg(palette.userMessageBackground), children: _jsx(Text, { wrap: "truncate-end", ...fg(palette.text), children: TRANSCRIPT_USER_TEXT.padEnd(innerWidth).slice(0, innerWidth) }) }));
++}
++/**
++ * The transcript's assistant line: plain text with an inline code token
++ * in the theme's syntaxString color — how MessageList renders `code`
++ * spans. Single text run, truncate-end under width pressure.
++ */
++function TranscriptAssistantRow({ palette }) {
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsxs(Text, { wrap: "truncate-end", ...fg(palette.text), children: [TRANSCRIPT_ASSISTANT_LEAD, _jsx(Text, { ...fg(palette.syntaxString), children: TRANSCRIPT_ASSISTANT_CODE }), TRANSCRIPT_ASSISTANT_TAIL] }) }));
++}
++/**
++ * One code-block border row in the theme's bashBorder: the top row carries
++ * a small language label (`╭─ js ─…─╮`, like a code card's chrome), the
++ * bottom row is plain (`╰─…─╯`). Same hard 1-line cell as the input frame.
++ */
++function CodeBorderRow({ palette, innerWidth, top }) {
++    const lead = top ? `╭${'─'}${CODE_LABEL}` : '╰';
++    const fill = Math.max(0, innerWidth - stringWidth(lead) - 1);
++    const row = `${lead}${'─'.repeat(fill)}${top ? '╮' : '╯'}`;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsx(Text, { wrap: "truncate-end", ...fg(palette.bashBorder), children: row }) }));
++}
++/**
++ * The code line with syntax highlighting: keyword/variable/operator/
++ * comment tokens painted with the theme's syntax* keys — the way code
++ * blocks render in messages. Single logical line, truncate under pressure.
++ */
++function CodeLineRow({ palette }) {
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { wrap: "truncate-end", ...fg(palette.syntaxKeyword), children: "const " }), _jsx(Text, { wrap: "truncate-end", ...fg(palette.syntaxVariable), children: "accent " }), _jsx(Text, { wrap: "truncate-end", ...fg(palette.syntaxOperator), children: "= " }), _jsx(Text, { wrap: "truncate-end", ...fg(palette.syntaxVariable), children: "theme." }), _jsx(Text, { wrap: "truncate-end", ...fg(palette.syntaxString), children: "claude" }), _jsx(Text, { wrap: "truncate-end", ...fg(palette.syntaxOperator), children: "; " }), _jsx(Text, { wrap: "truncate-end", ...fg(palette.syntaxComment), children: "// pick per theme" })] }) }));
++}
++/**
++ * The todo row: a live-subagent glyph ◐ in the theme's toolDotTask plus a
++ * dim label — the GoalTodoPanel row style. The label is one text run.
++ */
++function TodoRow({ palette }) {
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { ...fg(palette.toolDotTask), children: "◐ " }), _jsx(Text, { ...fg(palette.inactive), children: TODO_TEXT })] }) }));
++}
++/**
++ * The text-style row: `"bold" "dim" "italic" "underline" "strike"` tokens,
++ * each wearing its own attribute, base color = text. Tokens drop whole
++ * right-to-left under width pressure (canon: no <3-char stubs).
++ */
++function StylesRow({ palette, innerWidth }) {
++    const tokens = [
++        { key: 'bold', width: 6, node: _jsx(Text, { bold: true, ...fg(palette.text), children: '"bold"' }) },
++        { key: 'dim', width: 5, node: _jsx(Text, { dimColor: true, ...fg(palette.text), children: '"dim"' }) },
++        { key: 'italic', width: 8, node: _jsx(Text, { italic: true, ...fg(palette.text), children: '"italic"' }) },
++        { key: 'underline', width: 11, node: _jsx(Text, { underline: true, ...fg(palette.text), children: '"underline"' }) },
++        { key: 'strike', width: 8, node: _jsx(Text, { strikethrough: true, ...fg(palette.text), children: '"strike"' }) },
++    ];
++    const sepWidth = 1;
++    let kept = tokens;
++    const widthOf = (list) => list.reduce((sum, f) => sum + f.width, 0) + sepWidth * Math.max(0, list.length - 1);
++    while (kept.length > 0 && widthOf(kept) > innerWidth) {
++        kept = kept.slice(0, -1);
++    }
++    if (kept.length === 0)
++        return null;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsx(Text, { wrap: "truncate", children: kept.map((tok, index) => (_jsxs(_Fragment, { children: [index > 0 ? ' ' : null, tok.node] }, tok.key))) }) }));
++}
++/**
++ * The color-roles row: one token per palette role — success/warning/error/
++ * claude/suggestion/planMode — each glyph+name painted in its role color.
++ * Tokens drop whole right-to-left under width pressure.
++ */
++function RolesRow({ palette, innerWidth }) {
++    const tokens = [
++        { key: 'ok', width: 4, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.success), children: "✓ " }), _jsx(Text, { ...fg(palette.success), children: "ok" })] }) },
++        { key: 'warn', width: 6, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.warning), children: "⚠ " }), _jsx(Text, { ...fg(palette.warning), children: "warn" })] }) },
++        { key: 'err', width: 4, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.error), children: "✗ " }), _jsx(Text, { ...fg(palette.error), children: "err" })] }) },
++        { key: 'claude', width: 8, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.claude), children: "◆ " }), _jsx(Text, { ...fg(palette.claude), children: "claude" })] }) },
++        { key: 'sugg', width: 6, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.suggestion), children: "◇ " }), _jsx(Text, { ...fg(palette.suggestion), children: "sugg" })] }) },
++        { key: 'plan', width: 6, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.planMode), children: "▸ " }), _jsx(Text, { ...fg(palette.planMode), children: "plan" })] }) },
++    ];
++    const sepWidth = 1;
++    let kept = tokens;
++    const widthOf = (list) => list.reduce((sum, f) => sum + f.width, 0) + sepWidth * Math.max(0, list.length - 1);
++    while (kept.length > 0 && widthOf(kept) > innerWidth) {
++        kept = kept.slice(0, -1);
++    }
++    if (kept.length === 0)
++        return null;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsx(Text, { wrap: "truncate", children: kept.map((tok, index) => (_jsxs(_Fragment, { children: [index > 0 ? ' ' : null, tok.node] }, tok.key))) }) }));
++}
++/**
++ * dsh-overrides 64 (v2): the live demo zone. The picker hands over the
++ * exact row budget (`rows`) and the zone fills it: a fixed-height,
++ * full-width block painted with the candidate theme's appBackground,
++ * whose content rows appear by a monotone tier map — the most
++ * informative rows first, decorative borders last. The zone renders for
++ * EVERY budget ≥ 1 (v1 hid the preview entirely below ~40 terminal rows;
++ * at the 22-row user geometry the bottom of the picker was simply empty).
++ *
++ * Tier map (row `min` = budget at which the row appears; the visual order
++ * is fixed, the budget filters which rows render):
++ *   1 header · 2 powerline · 3 input-frame content (caret/placeholder/
++ *   chip) · 4-5 transcript (user, assistant) · 6 code top border (label)
++ *   · 7 code line · 8 todo · 9 text styles · 10 color roles · 11 dim
++ *   metrics · 12-13 input-frame top/bottom · 14 code bottom border.
++ * Budgets beyond 14 leave background-filled rows (the zone always fills
++ * the height the picker gave it).
++ *
++ * No timers/hooks live here — the zone is a pure function of the palette
++ * (the 7.8 Hz animation loop seen after the picker closes does not come
++ * from the preview; this rework changes nothing about it).
++ *
++ * @param palette - the HIGHLIGHTED theme's full palette (raw color values).
++ * @param displayName - the highlighted theme's display name for the header.
++ * @param rows - overlay rows the demo zone occupies (0: render nothing).
++ * @param columns - terminal columns (zone width = columns - pane padding).
++ * @returns the demo zone block, or null when there is no room at all.
++ */
++export function ThemePreview({ palette, displayName, rows, columns }) {
++    if (palette === undefined || palette === null || rows < 1)
++        return null;
++    const innerWidth = Math.max(0, columns - 4); // Pane paddingX 2 × 2
++    const visible = (min, node) => (rows >= min ? node : null);
++    return (_jsxs(Box, { flexDirection: "column", height: Math.max(1, Math.round(rows)), flexShrink: 0, overflow: "hidden", ...bg(palette.appBackground), children: [_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { bold: true, ...fg(palette.remember), children: "Live preview" }), _jsx(Text, { ...fg(palette.inactive), children: ` · ${displayName}` })] }), _jsx(PowerlinePreviewRow, { palette: palette, innerWidth: innerWidth }), visible(12, _jsx(FrameBorderRow, { palette: palette, innerWidth: innerWidth, top: true })), _jsx(FrameContentRow, { palette: palette, innerWidth: innerWidth }), visible(13, _jsx(FrameBorderRow, { palette: palette, innerWidth: innerWidth, top: false })), visible(4, _jsx(TranscriptUserRow, { palette: palette, innerWidth: innerWidth })), visible(5, _jsx(TranscriptAssistantRow, { palette: palette })), visible(6, _jsx(CodeBorderRow, { palette: palette, innerWidth: innerWidth, top: true })), visible(7, _jsx(CodeLineRow, { palette: palette })), visible(14, _jsx(CodeBorderRow, { palette: palette, innerWidth: innerWidth, top: false })), visible(8, _jsx(TodoRow, { palette: palette })), visible(9, _jsx(StylesRow, { palette: palette, innerWidth: innerWidth })), visible(10, _jsx(RolesRow, { palette: palette, innerWidth: innerWidth })), visible(11, _jsx(DimRow, { palette: palette, innerWidth: innerWidth }))] }));
++}
++// ─────────────────────────────────────────────────────────────────────────────
++// dsh-overrides 64 v3 (TG-DSH-PUBLIC-20261017 node B): FULLSCREEN preview.
++// The entire overlay frame becomes a manifest of the highlighted theme —
++// list hidden, ↑/↓ cycle themes with live-recolor (Chat.js:2925-2934 wires
++// previewTheme on upArrow/downArrow). Six manifest sections, all painted
++// with the highlighted palette's raw values:
++//
++//   §A chat-layout   user bubble + assistant streaming text + tool-card ◐
++//   §B status-bar    powerline segments: model · provider · cwd · git · ctx
++//   §C effects       spinner frame row + glyph/separator bar
++//   §D palette       swatches ██ + label for bg/fg/primary/accent/dim/border
++//   §E input frame   ╭─❯ prompt ─╮ with ⏎ Send chip
++//   §F code block    syntax-toned code + dim-row (WCAG check on appBackground)
++//
++// All rows are height:1 flexShrink:0 overflow:hidden — canon 45 (the
++// powerline row is a hard 1-line cell) extended to every preview row, so
++// the manifest never wraps or shreds under width pressure (only token-level
++// drop-right-to-left inside a row). The block fills the exact row budget the
++// picker hands it (terminalRows − overlay chrome), so what the user sees at
++// every geometry is the full theme applied to a representative frame.
++//
++// No timers/hooks — pure function of palette + geometry. The spinner shows
++// a fixed frame (⠸) since the 7.8 Hz loop lives in the live app, not here.
++// ─────────────────────────────────────────────────────────────────────────────
++/**
++ * Fullscreen §A: chat-layout. A user-message bubble (full-width row painted
++ * with userMessageBackground), an assistant streaming line ending in a
++ * cursor block, and a tool-card row with a ◐ task glyph + tool name + dim
++ * target path — the GoalTodoPanel/SubagentMessage row style.
++ */
++function FullscreenChatLayout({ palette, innerWidth }) {
++    const cursorBlock = '█'; // █ — same streaming cursor the live row uses
++    return (_jsxs(_Fragment, { children: [_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", paddingLeft: 1, ...bg(palette.userMessageBackground), children: _jsxs(Text, { wrap: "truncate-end", ...fg(palette.text), children: [_jsx(Text, { bold: true, ...fg(palette.briefLabelYou ?? palette.text), children: "You " }), TRANSCRIPT_USER_TEXT] }) }), _jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", paddingLeft: 1, children: _jsxs(Text, { wrap: "truncate-end", ...fg(palette.text), children: [_jsx(Text, { bold: true, ...fg(palette.briefLabelClaude ?? palette.claude), children: "GLM " }), TRANSCRIPT_ASSISTANT_LEAD, _jsx(Text, { ...fg(palette.syntaxString), children: TRANSCRIPT_ASSISTANT_CODE }), TRANSCRIPT_ASSISTANT_TAIL, _jsx(Text, { ...fg(palette.text), children: cursorBlock })] }) }), _jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", paddingLeft: 1, children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { ...fg(palette.toolDotTask), children: TOOL_CARD_LEAD }), _jsx(Text, { bold: true, ...fg(palette.toolNameMutate ?? palette.claude), children: TOOL_CARD_NAME }), _jsx(Text, { ...fg(palette.inactive), children: " " }), _jsx(Text, { ...fg(palette.syntaxString), children: TOOL_CARD_TARGET }), _jsx(Text, { ...fg(palette.inactive), children: " · streaming" })] }) })] }));
++}
++/**
++ * Fullscreen §C: effects row — a spinner frame (toolDotExec) + a glyph-bar
++ * demo (EF.05 palette: ◆◇●○◐◑ blocks + the ▕██▏ gauge).
++ */
++function FullscreenEffectsRow({ palette, innerWidth }) {
++    const spinner = SPINNER_FRAMES[2]; // ⠸ — a fixed frame, no timer here
++    const barWidth = stringWidth(GLYPH_BAR);
++    const fits = innerWidth >= 4 + barWidth + 4;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { ...fg(palette.toolDotExec), children: `${spinner} ` }), _jsx(Text, { ...fg(palette.inactive), children: "effects " }), fits ? (_jsxs(_Fragment, { children: [_jsx(Text, { ...fg(palette.claude), children: "◆" }), _jsx(Text, { ...fg(palette.suggestion), children: "◇" }), _jsx(Text, { ...fg(palette.success), children: "●" }), _jsx(Text, { ...fg(palette.warning), children: "○" }), _jsx(Text, { ...fg(palette.toolDotTask), children: "◐" }), _jsx(Text, { ...fg(palette.toolDotWrite), children: "◑" }), _jsx(Text, { ...fg(palette.inactive), children: " " }), _jsx(Text, { ...fg(palette.inactive), children: "▕" }), _jsx(Text, { ...fg(palette.success), children: "██████" }), _jsx(Text, { ...fg(palette.inactive), children: "··▏" })] })) : null] }) }));
++}
++/**
++ * Fullscreen §D: palette swatches. Eight key palette roles, each painted as
++ * ██ + a short label in the role's own color — bg / fg / primary / accent /
++ * dim / border / ok / err. The swatch character is double-width so the role
++ * color reads as a solid block; the label rides next to it in the same
++ * color. Tokens drop whole right-to-left under width pressure (canon: no
++ * <3-char stubs).
++ */
++function FullscreenPaletteSwatches({ palette, innerWidth }) {
++    const swatchChar = '██';
++    const tokens = [
++        { key: 'bg', width: 2 + 1 + 2, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.appBackground), ...bg(palette.text), children: swatchChar }), _jsx(Text, { ...fg(palette.inactive), children: " bg" })] }) },
++        { key: 'fg', width: 2 + 1 + 2, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.text), children: swatchChar }), _jsx(Text, { ...fg(palette.inactive), children: " fg" })] }) },
++        { key: 'primary', width: 2 + 1 + 6, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.claude), children: swatchChar }), _jsx(Text, { ...fg(palette.inactive), children: " primary" })] }) },
++        { key: 'accent', width: 2 + 1 + 6, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.promptBorder), children: swatchChar }), _jsx(Text, { ...fg(palette.inactive), children: " accent" })] }) },
++        { key: 'dim', width: 2 + 1 + 3, node: _jsxs(Text, { children: [_jsx(Text, { dimColor: true, ...fg(palette.text), children: swatchChar }), _jsx(Text, { ...fg(palette.inactive), children: " dim" })] }) },
++        { key: 'border', width: 2 + 1 + 6, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.bashBorder), children: swatchChar }), _jsx(Text, { ...fg(palette.inactive), children: " border" })] }) },
++        { key: 'ok', width: 2 + 1 + 2, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.success), children: swatchChar }), _jsx(Text, { ...fg(palette.inactive), children: " ok" })] }) },
++        { key: 'err', width: 2 + 1 + 3, node: _jsxs(Text, { children: [_jsx(Text, { ...fg(palette.error), children: swatchChar }), _jsx(Text, { ...fg(palette.inactive), children: " err" })] }) },
++    ];
++    const sepWidth = 1;
++    let kept = tokens;
++    const widthOf = (list) => list.reduce((sum, f) => sum + f.width, 0) + sepWidth * Math.max(0, list.length - 1);
++    while (kept.length > 0 && widthOf(kept) > innerWidth) {
++        kept = kept.slice(0, -1);
++    }
++    if (kept.length === 0)
++        return null;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsx(Text, { wrap: "truncate", children: kept.map((tok, index) => (_jsxs(_Fragment, { children: [index > 0 ? ' ' : null, tok.node] }, tok.key))) }) }));
++}
++/**
++ * Fullscreen §F2: WCAG dim-row. Demonstrates the palette's dim-contrast on
++ * the appBackground — the exact failure mode TH.04 floors (tokyonight
++ * inactive 3.47:1 < AA 4.5). Three dim tokens: inactive text, inactive
++ * shimmer, syntax comment. The row is the regression target for E5/dim
++ * detectors — a fresh theme must keep this row visible on its appBackground.
++ */
++function FullscreenWcagDimRow({ palette, innerWidth }) {
++    const tokens = [
++        { key: 'inactive', width: 9, node: _jsx(Text, { ...fg(palette.inactive), children: "inactive" }) },
++        { key: 'shimmer', width: 7, node: _jsx(Text, { ...fg(palette.inactiveShimmer), children: "shimmer" }) },
++        { key: 'comment', width: 11, node: _jsx(Text, { ...fg(palette.syntaxComment), children: "// comment" }) },
++    ];
++    const sepWidth = 3; // ' · '
++    let kept = tokens;
++    const widthOf = (list) => list.reduce((sum, f) => sum + f.width, 0) + sepWidth * Math.max(0, list.length - 1);
++    while (kept.length > 0 && widthOf(kept) > innerWidth) {
++        kept = kept.slice(0, -1);
++    }
++    if (kept.length === 0)
++        return null;
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsx(Text, { wrap: "truncate", children: kept.map((tok, index) => (_jsxs(_Fragment, { children: [index > 0 ? _jsx(Text, { ...fg(palette.inactive), children: " · " }) : null, tok.node] }, tok.key))) }) }));
++}
++/**
++ * Fullscreen section header — a 1-line label that names the manifest section.
++ * Painted in the theme's `remember` (accent) key so each section break is a
++ * visual marker, with a dim trailing dash to the row's end.
++ */
++function FullscreenSectionHeader({ palette, innerWidth, label }) {
++    const lead = `§ ${label} `;
++    const leadW = stringWidth(lead);
++    const fill = Math.max(0, innerWidth - leadW);
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { bold: true, ...fg(palette.remember), children: lead }), _jsx(Text, { ...fg(palette.inactive), children: '─'.repeat(fill) })] }) }));
++}
++/**
++ * dsh-overrides 64 v3: the FULLSCREEN manifest preview. The picker hands
++ * over the overlay's full row budget (`rows`) and `columns`; the manifest
++ * fills it with the highlighted palette applied to a representative frame.
++ * Sections appear by a tier map (most informative first): when the budget
++ * is tight the dim/WCAG row and section headers drop first, the chat-layout
++ * + powerline + input frame + code block survive to the smallest budgets
++ * that still fit fullscreen (≥24 rows × ≥60 cols). Below that the picker
++ * falls back to the compact `ThemePreview` (Termux ≥40col parity).
++ *
++ * Layout (row `min` = budget at which the row appears):
++ *   1  header (theme name + role count)
++ *   2  §A chat-layout user bubble
++ *   3  §A chat-layout assistant streaming
++ *   4  §A chat-layout tool-card ◐
++ *   5  §B status-bar powerline
++ *   6  §C effects row
++ *   7  §D palette swatches
++ *   8  §E input-frame top border ╭─…─╮
++ *   9  §E input-frame content (❯ + placeholder + ⏎ chip)
++ *   10 §E input-frame bottom border ╰─…─╯
++ *   11 §F code-block top border ╭─ js ─╮
++ *   12 §F code line (syntax-toned)
++ *   13 §F code-block bottom border ╰─…─╯
++ *   14 §F2 WCAG dim-row (regression target)
++ *   15 §H hint row (footer)
++ * Budgets beyond 15 leave background-filled rows. Below 8, the picker
++ * should not enter fullscreen mode (the manifest cannot fit).
++ *
++ * @param palette - the HIGHLIGHTED theme's full palette (raw color values).
++ * @param displayName - the highlighted theme's display name for the header.
++ * @param rows - overlay rows the fullscreen manifest occupies (≥1).
++ * @param columns - terminal columns.
++ * @returns the fullscreen manifest block, or null when there is no room.
++ */
++export function FullscreenThemePreview({ palette, displayName, rows, columns }) {
++    if (palette === undefined || palette === null || rows < 1)
++        return null;
++    const innerWidth = Math.max(0, columns - 4); // Pane paddingX 2 × 2
++    const visible = (min, node) => (rows >= min ? node : null);
++    return (_jsxs(Box, { flexDirection: "column", height: Math.max(1, Math.round(rows)), flexShrink: 0, overflow: "hidden", ...bg(palette.appBackground), children: [_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { bold: true, ...fg(palette.remember), children: "Theme manifest" }), _jsx(Text, { ...fg(palette.inactive), children: ` · ${displayName} · ↑↓ cycle · Enter select · Esc cancel` })] }), visible(2, _jsx(TranscriptUserRow, { palette: palette, innerWidth: innerWidth })), visible(3, _jsx(TranscriptAssistantRow, { palette: palette })), visible(4, _jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", paddingLeft: 1, children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { ...fg(palette.toolDotTask), children: TOOL_CARD_LEAD }), _jsx(Text, { bold: true, ...fg(palette.toolNameMutate ?? palette.claude), children: TOOL_CARD_NAME }), _jsx(Text, { ...fg(palette.inactive), children: " " }), _jsx(Text, { ...fg(palette.syntaxString), children: TOOL_CARD_TARGET }), _jsx(Text, { ...fg(palette.inactive), children: " · streaming" })] }) })), visible(5, _jsx(PowerlinePreviewRow, { palette: palette, innerWidth: innerWidth })), visible(6, _jsx(FullscreenEffectsRow, { palette: palette, innerWidth: innerWidth })), visible(7, _jsx(FullscreenPaletteSwatches, { palette: palette, innerWidth: innerWidth })), visible(8, _jsx(FrameBorderRow, { palette: palette, innerWidth: innerWidth, top: true })), visible(9, _jsx(FrameContentRow, { palette: palette, innerWidth: innerWidth })), visible(10, _jsx(FrameBorderRow, { palette: palette, innerWidth: innerWidth, top: false })), visible(11, _jsx(CodeBorderRow, { palette: palette, innerWidth: innerWidth, top: true })), visible(12, _jsx(CodeLineRow, { palette: palette })), visible(13, _jsx(CodeBorderRow, { palette: palette, innerWidth: innerWidth, top: false })), visible(14, _jsx(FullscreenWcagDimRow, { palette: palette, innerWidth: innerWidth }))] }));
++}

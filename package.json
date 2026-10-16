@@ -1,0 +1,51 @@
+{
+  "name": "atomic-dsh",
+  "version": "0.10.0-beta.4-p76.1",
+  "description": "atomic dsh — self-contained terminal AI assistant. DeepSeek-powered TUI with 50+ themes, lazy MCP/skills, powerline status.",
+  "type": "module",
+  "license": "MIT",
+  "author": "silvercode200",
+  "homepage": "https://github.com/silvercode200/atomic-dsh#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/silvercode200/atomic-dsh.git"
+  },
+  "bugs": {
+    "url": "https://github.com/silvercode200/atomic-dsh/issues"
+  },
+  "keywords": [
+    "cli",
+    "terminal",
+    "tui",
+    "deepseek",
+    "ai",
+    "llm",
+    "ai-assistant",
+    "terminal-chat",
+    "themes",
+    "powerline",
+    "lazy-loading",
+    "mcp",
+    "ink",
+    "nodejs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "dsh": "dist/dsh-bin.js",
+    "dsh-setup": "bin/dsh-setup.js"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "themes/",
+    "plugins/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {},
+  "scripts": {
+    "prepublishOnly": "bash scripts/build-package.sh"
+  }
+}

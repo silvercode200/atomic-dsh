@@ -1,0 +1,54 @@
+# Goal:      пустая полоса свёрнутых тодо: ScrollBox contentJustify
+# Family:    IL.07
+# Status:    live
+# Files:     lib/types/ink/components/ScrollBox.js, lib/types/screens/Chat.js
+# Evidence:  reports/todofold-space-20260913/; facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-13, W3 (todofold space)
+
+--- a/lib/types/ink/components/ScrollBox.js	2026-09-13 18:02:10.770440581 +0300
++++ b/lib/types/ink/components/ScrollBox.js	2026-09-13 18:05:07.245948803 +0300
+@@ -17,7 +17,17 @@
+  *
+  * Works best inside a fullscreen (constrained-height root) Ink tree.
+  */
+-function ScrollBox({ children, ref, stickyScroll, ...style }) {
++// dsh-overrides 23: `contentJustify` opts the inner content box into a
++// justifyContent value (e.g. 'flex-end'). Chat's inline pinned frame keeps
++// the footer glued to the last terminal row; when the transcript is shorter
++// than the viewport, the freed rows used to open a blank band BETWEEN the
++// transcript end and the footer (collapsing the todo list grew the band by
++// exactly the list height — "alt+m does not give the area back"). Aligning
++// the content to the viewport bottom puts the slack ABOVE the transcript
++// instead, where it reads as ordinary empty terminal space. No-op whenever
++// the content fills the viewport (no slack for justifyContent to consume),
++// so scroll/culling behavior is untouched.
++function ScrollBox({ children, ref, stickyScroll, contentJustify, ...style }) {
+     const domRef = useRef(null);
+     // scrollTo/scrollBy bypass React: they mutate scrollTop on the DOM node,
+     // mark it dirty, and call the root's throttled scheduleRender directly.
+@@ -258,6 +268,6 @@
+             overflowY: 'scroll'
+         }, ...stickyScroll ? {
+             stickyScroll: true
+-        } : {}, children: _jsx(Box, { flexDirection: "column", flexGrow: 1, flexShrink: 0, width: "100%", children: children }) });
++        } : {}, children: _jsx(Box, { flexDirection: "column", flexGrow: 1, flexShrink: 0, width: "100%", ...(contentJustify ? { justifyContent: contentJustify } : {}), children: children }) });
+ }
+ export default ScrollBox;
+--- a/lib/types/screens/Chat.js	2026-09-13 18:02:10.772440632 +0300
++++ b/lib/types/screens/Chat.js	2026-09-13 18:06:43.382437161 +0300
+@@ -3391,7 +3391,13 @@
+                         seekRow(anchorUserRowId);
+                     else
+                         handle?.scrollToBottom();
+-                } })), _jsxs(Box, { flexDirection: "row", flexGrow: channel.rows.length > 0 ? 1 : 0, flexShrink: 1, width: "100%", children: [_jsxs(ScrollBox, { ref: setHandle, flexDirection: "column", flexGrow: 1, flexShrink: 1, stickyScroll: true, children: [_jsx(LogoHeader, { model: channel.model, effort: channel.reasoningEffort, cwd: channel.displayCwd, whale: channel.whale, 
++                } })), _jsxs(Box, { flexDirection: "row", flexGrow: channel.rows.length > 0 ? 1 : 0, flexShrink: 1, width: "100%", children: [_jsxs(ScrollBox, { ref: setHandle, flexDirection: "column", flexGrow: 1, flexShrink: 1, stickyScroll: true,
++                // dsh-overrides 23: pinned-frame slack goes ABOVE the
++                // transcript (content hugs the footer) — see ScrollBox's
++                // contentJustify doc. Without it, collapsing the todo list
++                // left a blank band between the transcript end and the
++                // footer that grew with every freed row.
++                contentJustify: inlinePinned ? 'flex-end' : undefined, children: [_jsx(LogoHeader, { model: channel.model, effort: channel.reasoningEffort, cwd: channel.displayCwd, whale: channel.whale,
+                                 // Resuming a long session skips the ~3.4s opening animation: it
+                                 // keeps firing low-frequency React commits that compete with the
+                                 // transcript mount batches (and the first wheel events) for the

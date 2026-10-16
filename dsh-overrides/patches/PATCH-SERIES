@@ -1,0 +1,85 @@
+# PATCH-SERIES — явный порядок применения патчей dsh-overrides.
+# Формат (RESEARCH C.3.4, миграция SUBSYS.FF.B): одна строка = один патч
+# (имя файла в dsh-overrides/patches/); строки «#...» и пустые игнорируются.
+# Этап 0: 1:1 с прежним лексикографическим порядком стека (76 патчей;
+# Phase 4 #61 additive +1=76 post-bigbang,
+# post-3D: MS.01 K5-line squash 8→3, byte-identity preserved),
+# без переименований). Дальше правится руками только при структурных
+# изменениях стека. Согласованность с *.patch (1:1) проверяет
+# scripts/apply-dsh-overrides.sh — расхождение = явный fail.
+CH.01.1-empty-screen.patch
+SB.01.1-glitch-toast.patch
+TG.01.1-compact-todos.patch
+SB.02.1-context-percent.patch
+IL.01.1-mobile-rows.patch
+CH.02.1-bottom-layout.patch
+PR.01.1-model-default.patch
+TR.01.1-cyrillic-alt.patch
+TG.05.1-todo-collapsed.patch
+IL.01.2-inline-stable.patch
+IL.02.1-inline-bottom-anchor.patch
+TH.01.1-theme-picker-filter.patch
+TG.06.1-subagent-todo-rows.patch
+TG.07.1-subagent-tree-rows.patch
+TG.08.1-todofold-collapse-fix.patch
+SB.03.1-status-provider.patch
+SB.04.1-status-mks-wave-c.patch
+PI.01.1-hotkeys-planmode.patch
+TG.02.1-fold-hint.patch
+PI.02.1-queue-slash.patch
+ID.01.1-hide-drift.patch
+PR.03.1-model-fork-render.patch
+IL.07.1-todofold-space.patch
+IL.05.1-fs-footer-bottom.patch
+IL.06.1-fs-height-stable.patch
+PI.03.1-scroll-menu-nogap.patch
+MS.01.1-scroll-menu-nogap.patch
+TG.09.1-subagent-visible.patch
+TH.02.1-shimmer-restore.patch
+SB.05.1-powerline-segments.patch
+EF.01.1-live-anim.patch
+PR.04.1-appearance-settings.patch
+CH.03.1-intro-mount-reanchor.patch
+EF.02.1-input-breathe.patch
+EF.03.1-live-panels.patch
+EF.04.1-tools-verbs.patch
+TH.03.1-app-background.patch
+TH.01.2-theme-live-preview.patch
+HB.01.1-effects-panel.patch
+HB.03.1-effects-detail.patch
+EF.05.1-glyph-bars.patch
+EF.06.1-tool-progress.patch
+EF.07.1-sparklines.patch
+EF.08.1-spinner-catalog.patch
+HB.08.1-customization-hub.patch
+SB.06.1-status-row-clamp.patch
+HB.04.1-settings-hub.patch
+HB.05.1-statusbar-blocks.patch
+SB.07.1-fix-jitter.patch
+ID.02.1-logo-version.patch
+SB.06.2-statusbar-dedup-wedge.patch
+HB.06.1-effects-refresh-survive.patch
+TG.03.1-subagent-card-shred.patch
+IL.03.1-inline-scrollback-clean.patch
+SB.08.1-statusbar-minimum-metric.patch
+TR.02.1-sync-output-killswitch.patch
+PR.02.1-compact-phase-visible.patch
+ID.03.1-fork-update-notice-off.patch
+TR.03.1-wezterm-version-gate.patch
+TR.04.1-geometry-trace-always-on.patch
+TR.05.1-theme-picker-kitty-input.patch
+HB.07.1-hub-settings-english.patch
+TH.01.3-theme-preview.patch
+HB.02.1-settings-effects-explanations.patch
+EF.02.2-animations-boolean-gate.patch
+MS.01.3-scroll-height-stabilize.patch
+IL.04.1-tooltip-inline-gate.patch
+EF.02.3-inputborder-breath-optin.patch
+IL.03.3-gap-under-status.patch
+TG.04.1-todo-idle-gate.patch
+HB.02.2-hub-theme-demo.patch
+CH.04-inline-frame-fullheight.patch
+TH.04-dim-contrast-floor.patch
+CH.05-inline-chrome-overlay.patch
+MS.01.4-yoga-insert-invalidate.patch
+TH.05.1-saturation-option.patch

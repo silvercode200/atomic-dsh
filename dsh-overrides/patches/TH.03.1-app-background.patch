@@ -1,0 +1,118 @@
+# Goal:      фон TUI из темы: appBackground (env>settings>theme)
+# Family:    TH.03
+# Status:    live
+# Files:     lib/types/tuiDisplayPrefs.js, lib/types/theme.js,
+#            lib/types/dsh-adapter/plugin.js, lib/types/screens/Chat.js
+# Evidence:  reports/live42-frames/; facts/patches-C.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 LIVE42
+
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -81,6 +81,23 @@
+ export function normalizeAnimationsStyle(value) {
+     return typeof value === 'string' && ANIMATIONS_STYLES.has(value) ? value : undefined;
+ }
++/**
++ * dsh-overrides 36: resolve the app background color. Theme-first
++ * design: the theme's `appBackground` key is the usual source (the
++ * themes script backfills every user theme); the settings value is an
++ * optional override; env DSH_TUI_BACKGROUND wins for tests/debugging.
++ * Each invalid layer is skipped (never throws); undefined = no paint.
++ * @returns A color string or undefined.
++ */
++export function resolveAppBackground(envValue, settingsValue, themeValue) {
++    if (typeof envValue === 'string' && isValidThemeColor(envValue))
++        return envValue;
++    if (typeof settingsValue === 'string' && isValidThemeColor(settingsValue))
++        return settingsValue;
++    if (typeof themeValue === 'string' && isValidThemeColor(themeValue))
++        return themeValue;
++    return undefined;
++}
+ /** Normalize an appearance.powerline value to the enum, else undefined. */
+ export function normalizePowerlineStyle(value) {
+     return typeof value === 'string' && POWERLINE_STYLES.has(value) ? value : undefined;
+@@ -117,6 +134,10 @@
+     normalized.powerline = normalizePowerlineStyle(input.powerline);
+     normalized.animations = normalizeAnimationsStyle(input.animations);
+     normalized.effects = normalizeEffectsMap(input.effects);
++    // dsh-overrides 36: the app background color (same validation forms
++    // as inputBorder — isValidThemeColor).
++    if (typeof input.background === 'string' && isValidThemeColor(input.background.trim()))
++        normalized.background = input.background.trim();
+     if (typeof input.theme === 'string' && input.theme.trim() !== '')
+         normalized.theme = input.theme.trim();
+     if (typeof input.inputBorder === 'string' && isValidThemeColor(input.inputBorder.trim()))
+--- a/lib/types/theme.js
++++ b/lib/types/theme.js
+@@ -97,6 +97,11 @@
+     toolDotTask: rgb('#D194AE'), // mist rose — subagent/jobs
+     // dsh-overrides 34: live-todo pulse firmware pair (lighter rose crest)
+     todoActiveShimmer: rgb('#E8CBDA'),
++    // dsh-overrides 36: app background key — THEMES carry it (the
++    // backgrounds script backfills every user theme); '' in the BASE
++    // palettes means "no paint" (resolveColor's empty-color convention)
++    // so a theme without the key keeps the terminal default.
++    appBackground: '',
+     syntaxKeyword: rgb('#78A0D6'), // muted anchor blue
+     syntaxString: rgb('#79AD91'), // mist green, distinct without neon saturation
+     syntaxComment: rgb('#74808D'), // neutral blue-grey
+@@ -203,6 +208,8 @@
+     toolDotTask: rgb('#B04A5A'),
+     // dsh-overrides 34: live-todo pulse firmware pair
+     todoActiveShimmer: rgb('#D8949F'),
++    // dsh-overrides 36: '' = no paint (see dark palette note).
++    appBackground: '',
+     syntaxKeyword: rgb('#3F68B5'), // clear primary blue without neon saturation
+     syntaxString: rgb('#3F805F'), // readable muted green
+     syntaxComment: rgb('#7D858F'), // neutral blue-grey
+@@ -312,6 +319,8 @@
+     toolDotTask: 'ansi:redBright',
+     // dsh-overrides 34: live-todo pulse firmware pair
+     todoActiveShimmer: 'ansi:magentaBright',
++    // dsh-overrides 36: '' = no paint (see dark palette note).
++    appBackground: '',
+     syntaxKeyword: 'ansi:blueBright',
+     syntaxString: 'ansi:greenBright',
+     syntaxComment: 'ansi:blackBright',
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -594,6 +594,10 @@
+                 // `effects`; 'off' = the wave static). env DSH_TUI_
+                 // ANIMATIONS stays on top, DSH_TUI_REDUCED_MOTION=1
+                 // forces static regardless of the mode.
++                // dsh-overrides 36: optional background override on top of
++                // the theme's appBackground key (env DSH_TUI_BACKGROUND is
++                // highest; see tuiDisplayPrefs.resolveAppBackground).
++                background: Schema.string().required(false),
+                 animations: Schema.union(['full', 'custom', 'off']).required(false),
+                 effects: Schema.object(Object.fromEntries(EFFECT_KEYS.map(key => [key, Schema.boolean().required(false)]))).required(false),
+             }).required(false),
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -13,6 +13,9 @@
+ import { hasPath } from '../dsh-adapter/settingsEditor.js';
+ import { planReload } from '../reload.js';
+ import { AlternateScreen, Box, Text, useInput, ScrollBox, useTheme, useTerminalSize } from '../ui.js';
++// dsh-overrides 36: app background resolution (theme-first).
++import { resolveAppBackground } from '../tuiDisplayPrefs.js';
++import { getTheme } from '../theme.js';
+ import * as tuiKit from '../ui.js';
+ import { POINTER } from '../cc/figures.js';
+ import { isPlainReturnInput, modLabel } from '../utils/modifiers.js';
+@@ -3404,7 +3407,13 @@
+     // session "breathing"). Anchoring the column to flex-end pins the footer
+     // block to the last terminal row in fullscreen exactly like patch 11's
+     // inline pinned frame (which keeps its height/flexShrink constraints).
+-    return (_jsxs(Box, { ref: wakeTickRef, flexDirection: "column", flexGrow: 1, width: "100%", ...(inlinePinned || fullscreen ? { justifyContent: "flex-end", ...(inlinePinned ? { height: terminalRows, flexShrink: 0 } : {}) } : {}), children: [!isSticky && anchorUserText && (_jsx(StickyPromptHeader, { text: anchorUserText, onClick: () => {
++    // dsh-overrides 36: app background — the root surface paints with the
++    // theme's appBackground (backfilled into every user theme by
++    // dsh-overrides/scripts/apply-theme-backgrounds.py), optionally
++    // overridden by settings appearance.background, always overridden by
++    // env DSH_TUI_BACKGROUND. undefined = the terminal's own default.
++    const appBackground = resolveAppBackground(process.env.DSH_TUI_BACKGROUND, channel.appearance?.background, getTheme(themeName).appBackground);
++    return (_jsxs(Box, { ref: wakeTickRef, backgroundColor: appBackground, flexDirection: "column", flexGrow: 1, width: "100%", ...(inlinePinned || fullscreen ? { justifyContent: "flex-end", ...(inlinePinned ? { height: terminalRows, flexShrink: 0 } : {}) } : {}), children: [!isSticky && anchorUserText && (_jsx(StickyPromptHeader, { text: anchorUserText, onClick: () => {
+                     // Click snaps the pinned prompt to the viewport top (CC's
+                     // StickyPromptHeader). Jump by the SAME content coordinate the
+                     // rail's tick uses (timeline turn top = the prompt TEXT top):

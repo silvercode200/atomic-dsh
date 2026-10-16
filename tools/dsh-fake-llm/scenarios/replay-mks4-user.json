@@ -1,0 +1,861 @@
+{
+  "name": "replay-mks4-user",
+  "description": "session replay: session.jsonl.zstd — 1 ход(ов), 206 чанков, медиана паузы 25мс, сгенерирован 2026-10-08T09:47:54.616Z",
+  "delayMs": 4180,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  },
+  "replay": {
+    "kind": "session-replay",
+    "source": "/home/user/.dsh/sessions/--home-oleg-xeon-Programms-deepseek_harness--/f6957da1-beb2-4961-9ce5-3509d662ecd9/session.jsonl.zstd",
+    "generatedAt": "2026-10-08T09:47:54.616Z",
+    "speed": 1,
+    "maxDelay": null,
+    "turnCount": 1,
+    "chunkCount": 206,
+    "turns": [
+      {
+        "turn": 1,
+        "userText": "clear",
+        "delayMs": 4180,
+        "segments": [
+          {
+            "thinking": [
+              {
+                "text": "Комп",
+                "afterMs": 21
+              },
+              {
+                "text": "акци",
+                "afterMs": 26
+              },
+              {
+                "text": "я: с",
+                "afterMs": 25
+              },
+              {
+                "text": "вожу",
+                "afterMs": 26
+              },
+              {
+                "text": " раз",
+                "afterMs": 24
+              },
+              {
+                "text": "гово",
+                "afterMs": 25
+              },
+              {
+                "text": "р к ",
+                "afterMs": 27
+              },
+              {
+                "text": "комп",
+                "afterMs": 23
+              },
+              {
+                "text": "актн",
+                "afterMs": 25
+              },
+              {
+                "text": "ому ",
+                "afterMs": 26
+              },
+              {
+                "text": "резю",
+                "afterMs": 25
+              },
+              {
+                "text": "ме, ",
+                "afterMs": 53
+              },
+              {
+                "text": "сохр",
+                "afterMs": 0
+              },
+              {
+                "text": "аняя",
+                "afterMs": 23
+              },
+              {
+                "text": " зад",
+                "afterMs": 29
+              },
+              {
+                "text": "ачи,",
+                "afterMs": 26
+              },
+              {
+                "text": " реш",
+                "afterMs": 24
+              },
+              {
+                "text": "ения",
+                "afterMs": 23
+              },
+              {
+                "text": " и о",
+                "afterMs": 25
+              },
+              {
+                "text": "ткры",
+                "afterMs": 25
+              },
+              {
+                "text": "тые ",
+                "afterMs": 26
+              },
+              {
+                "text": "пунк",
+                "afterMs": 24
+              },
+              {
+                "text": "ты.",
+                "afterMs": 30
+              }
+            ]
+          },
+          {
+            "text": [
+              {
+                "text": "Свод",
+                "afterMs": 30
+              },
+              {
+                "text": "ка д",
+                "afterMs": 25
+              },
+              {
+                "text": "иало",
+                "afterMs": 342
+              },
+              {
+                "text": "га (",
+                "afterMs": 1
+              },
+              {
+                "text": "комп",
+                "afterMs": 1
+              },
+              {
+                "text": "акци",
+                "afterMs": 2
+              },
+              {
+                "text": "я):\n",
+                "afterMs": 0
+              },
+              {
+                "text": "- по",
+                "afterMs": 1
+              },
+              {
+                "text": "льзо",
+                "afterMs": 1
+              },
+              {
+                "text": "вате",
+                "afterMs": 0
+              },
+              {
+                "text": "ль г",
+                "afterMs": 1
+              },
+              {
+                "text": "оняе",
+                "afterMs": 0
+              },
+              {
+                "text": "т TU",
+                "afterMs": 1
+              },
+              {
+                "text": "I на",
+                "afterMs": 1
+              },
+              {
+                "text": " fak",
+                "afterMs": 0
+              },
+              {
+                "text": "e-мо",
+                "afterMs": 19
+              },
+              {
+                "text": "дели",
+                "afterMs": 9
+              },
+              {
+                "text": ", пр",
+                "afterMs": 31
+              },
+              {
+                "text": "овер",
+                "afterMs": 32
+              },
+              {
+                "text": "яя с",
+                "afterMs": 11
+              },
+              {
+                "text": "тату",
+                "afterMs": 28
+              },
+              {
+                "text": "с-ба",
+                "afterMs": 22
+              },
+              {
+                "text": "р и ",
+                "afterMs": 27
+              },
+              {
+                "text": "пове",
+                "afterMs": 30
+              },
+              {
+                "text": "рхно",
+                "afterMs": 34
+              },
+              {
+                "text": "сти;",
+                "afterMs": 16
+              },
+              {
+                "text": "\n",
+                "afterMs": 22
+              },
+              {
+                "text": "- ис",
+                "afterMs": 31
+              },
+              {
+                "text": "тори",
+                "afterMs": 23
+              },
+              {
+                "text": "я ко",
+                "afterMs": 22
+              },
+              {
+                "text": "ротк",
+                "afterMs": 27
+              },
+              {
+                "text": "ая, ",
+                "afterMs": 27
+              },
+              {
+                "text": "ключ",
+                "afterMs": 21
+              },
+              {
+                "text": "евые",
+                "afterMs": 29
+              },
+              {
+                "text": " фак",
+                "afterMs": 20
+              },
+              {
+                "text": "ты: ",
+                "afterMs": 26
+              },
+              {
+                "text": "геом",
+                "afterMs": 24
+              },
+              {
+                "text": "етри",
+                "afterMs": 43
+              },
+              {
+                "text": "я юз",
+                "afterMs": 7
+              },
+              {
+                "text": "ера ",
+                "afterMs": 26
+              },
+              {
+                "text": "47×4",
+                "afterMs": 27
+              },
+              {
+                "text": "3, i",
+                "afterMs": 26
+              },
+              {
+                "text": "nlin",
+                "afterMs": 26
+              },
+              {
+                "text": "e-ре",
+                "afterMs": 32
+              },
+              {
+                "text": "жим;",
+                "afterMs": 25
+              },
+              {
+                "text": "\n",
+                "afterMs": 26
+              },
+              {
+                "text": "- от",
+                "afterMs": 19
+              },
+              {
+                "text": "крыт",
+                "afterMs": 26
+              },
+              {
+                "text": "ые п",
+                "afterMs": 28
+              },
+              {
+                "text": "ункт",
+                "afterMs": 22
+              },
+              {
+                "text": "ы: ч",
+                "afterMs": 26
+              },
+              {
+                "text": "исто",
+                "afterMs": 25
+              },
+              {
+                "text": "та с",
+                "afterMs": 26
+              },
+              {
+                "text": "крол",
+                "afterMs": 29
+              },
+              {
+                "text": "лбек",
+                "afterMs": 32
+              },
+              {
+                "text": "а и ",
+                "afterMs": 40
+              },
+              {
+                "text": "види",
+                "afterMs": 103
+              },
+              {
+                "text": "мост",
+                "afterMs": 7
+              },
+              {
+                "text": "ь фа",
+                "afterMs": 6
+              },
+              {
+                "text": "з.\n",
+                "afterMs": 2
+              },
+              {
+                "text": "Стри",
+                "afterMs": 95
+              },
+              {
+                "text": "м эт",
+                "afterMs": 1
+              },
+              {
+                "text": "ой с",
+                "afterMs": 0
+              },
+              {
+                "text": "водк",
+                "afterMs": 7
+              },
+              {
+                "text": "и ме",
+                "afterMs": 79
+              },
+              {
+                "text": "длен",
+                "afterMs": 1
+              },
+              {
+                "text": "ный ",
+                "afterMs": 4
+              },
+              {
+                "text": "— ок",
+                "afterMs": 120
+              },
+              {
+                "text": "но к",
+                "afterMs": 1
+              },
+              {
+                "text": "омпа",
+                "afterMs": 1
+              },
+              {
+                "text": "кции",
+                "afterMs": 14
+              },
+              {
+                "text": " дли",
+                "afterMs": 2
+              },
+              {
+                "text": "тся ",
+                "afterMs": 99
+              },
+              {
+                "text": "деся",
+                "afterMs": 10
+              },
+              {
+                "text": "тки ",
+                "afterMs": 4
+              },
+              {
+                "text": "секу",
+                "afterMs": 10
+              },
+              {
+                "text": "нд, ",
+                "afterMs": 76
+              },
+              {
+                "text": "чтоб",
+                "afterMs": 2
+              },
+              {
+                "text": "ы де",
+                "afterMs": 1
+              },
+              {
+                "text": "тект",
+                "afterMs": 3
+              },
+              {
+                "text": "ор у",
+                "afterMs": 29
+              },
+              {
+                "text": "спел",
+                "afterMs": 57
+              },
+              {
+                "text": " сня",
+                "afterMs": 1
+              },
+              {
+                "text": "ть к",
+                "afterMs": 23
+              },
+              {
+                "text": "адры",
+                "afterMs": 45
+              },
+              {
+                "text": " сер",
+                "afterMs": 2
+              },
+              {
+                "text": "един",
+                "afterMs": 33
+              },
+              {
+                "text": "ы ок",
+                "afterMs": 21
+              },
+              {
+                "text": "на.",
+                "afterMs": 18
+              },
+              {
+                "text": "Свод",
+                "afterMs": 18
+              },
+              {
+                "text": "ка д",
+                "afterMs": 25
+              },
+              {
+                "text": "иало",
+                "afterMs": 29
+              },
+              {
+                "text": "га (",
+                "afterMs": 34
+              },
+              {
+                "text": "комп",
+                "afterMs": 31
+              },
+              {
+                "text": "акци",
+                "afterMs": 23
+              },
+              {
+                "text": "я):\n",
+                "afterMs": 27
+              },
+              {
+                "text": "- по",
+                "afterMs": 8
+              },
+              {
+                "text": "льзо",
+                "afterMs": 31
+              },
+              {
+                "text": "вате",
+                "afterMs": 21
+              },
+              {
+                "text": "ль г",
+                "afterMs": 29
+              },
+              {
+                "text": "оняе",
+                "afterMs": 31
+              },
+              {
+                "text": "т TU",
+                "afterMs": 26
+              },
+              {
+                "text": "I на",
+                "afterMs": 36
+              },
+              {
+                "text": " fak",
+                "afterMs": 8
+              },
+              {
+                "text": "e-мо",
+                "afterMs": 34
+              },
+              {
+                "text": "дели",
+                "afterMs": 24
+              },
+              {
+                "text": ", пр",
+                "afterMs": 17
+              },
+              {
+                "text": "овер",
+                "afterMs": 26
+              },
+              {
+                "text": "яя с",
+                "afterMs": 31
+              },
+              {
+                "text": "тату",
+                "afterMs": 26
+              },
+              {
+                "text": "с-ба",
+                "afterMs": 31
+              },
+              {
+                "text": "р и ",
+                "afterMs": 59
+              },
+              {
+                "text": "пове",
+                "afterMs": 1
+              },
+              {
+                "text": "рхно",
+                "afterMs": 86
+              },
+              {
+                "text": "сти;",
+                "afterMs": 8
+              },
+              {
+                "text": "\n",
+                "afterMs": 1
+              },
+              {
+                "text": "- ис",
+                "afterMs": 71
+              },
+              {
+                "text": "тори",
+                "afterMs": 4
+              },
+              {
+                "text": "я ко",
+                "afterMs": 5
+              },
+              {
+                "text": "ротк",
+                "afterMs": 10
+              },
+              {
+                "text": "ая, ",
+                "afterMs": 70
+              },
+              {
+                "text": "ключ",
+                "afterMs": 7
+              },
+              {
+                "text": "евые",
+                "afterMs": 47
+              },
+              {
+                "text": " фак",
+                "afterMs": 1
+              },
+              {
+                "text": "ты: ",
+                "afterMs": 79
+              },
+              {
+                "text": "геом",
+                "afterMs": 1
+              },
+              {
+                "text": "етри",
+                "afterMs": 0
+              },
+              {
+                "text": "я юз",
+                "afterMs": 31
+              },
+              {
+                "text": "ера ",
+                "afterMs": 39
+              },
+              {
+                "text": "47×4",
+                "afterMs": 5
+              },
+              {
+                "text": "3, i",
+                "afterMs": 31
+              },
+              {
+                "text": "nlin",
+                "afterMs": 51
+              },
+              {
+                "text": "e-ре",
+                "afterMs": 1
+              },
+              {
+                "text": "жим;",
+                "afterMs": 34
+              },
+              {
+                "text": "\n",
+                "afterMs": 26
+              },
+              {
+                "text": "- от",
+                "afterMs": 31
+              },
+              {
+                "text": "крыт",
+                "afterMs": 0
+              },
+              {
+                "text": "ые п",
+                "afterMs": 30
+              },
+              {
+                "text": "ункт",
+                "afterMs": 35
+              },
+              {
+                "text": "ы: ч",
+                "afterMs": 11
+              },
+              {
+                "text": "исто",
+                "afterMs": 29
+              },
+              {
+                "text": "та с",
+                "afterMs": 31
+              },
+              {
+                "text": "крол",
+                "afterMs": 41
+              },
+              {
+                "text": "лбек",
+                "afterMs": 33
+              },
+              {
+                "text": "а и ",
+                "afterMs": 1
+              },
+              {
+                "text": "види",
+                "afterMs": 39
+              },
+              {
+                "text": "мост",
+                "afterMs": 12
+              },
+              {
+                "text": "ь фа",
+                "afterMs": 18
+              },
+              {
+                "text": "з.\n",
+                "afterMs": 52
+              },
+              {
+                "text": "Стри",
+                "afterMs": 22
+              },
+              {
+                "text": "м эт",
+                "afterMs": 15
+              },
+              {
+                "text": "ой с",
+                "afterMs": 18
+              },
+              {
+                "text": "водк",
+                "afterMs": 58
+              },
+              {
+                "text": "и ме",
+                "afterMs": 1
+              },
+              {
+                "text": "длен",
+                "afterMs": 21
+              },
+              {
+                "text": "ный ",
+                "afterMs": 21
+              },
+              {
+                "text": "— ок",
+                "afterMs": 26
+              },
+              {
+                "text": "но к",
+                "afterMs": 23
+              },
+              {
+                "text": "омпа",
+                "afterMs": 24
+              },
+              {
+                "text": "кции",
+                "afterMs": 26
+              },
+              {
+                "text": " дли",
+                "afterMs": 44
+              },
+              {
+                "text": "тся ",
+                "afterMs": 6
+              },
+              {
+                "text": "деся",
+                "afterMs": 29
+              },
+              {
+                "text": "тки ",
+                "afterMs": 22
+              },
+              {
+                "text": "секу",
+                "afterMs": 35
+              },
+              {
+                "text": "нд, ",
+                "afterMs": 17
+              },
+              {
+                "text": "чтоб",
+                "afterMs": 24
+              },
+              {
+                "text": "ы де",
+                "afterMs": 31
+              },
+              {
+                "text": "тект",
+                "afterMs": 24
+              },
+              {
+                "text": "ор у",
+                "afterMs": 24
+              },
+              {
+                "text": "спел",
+                "afterMs": 25
+              },
+              {
+                "text": " сня",
+                "afterMs": 31
+              },
+              {
+                "text": "ть к",
+                "afterMs": 24
+              },
+              {
+                "text": "адры",
+                "afterMs": 26
+              },
+              {
+                "text": " сер",
+                "afterMs": 20
+              },
+              {
+                "text": "един",
+                "afterMs": 34
+              },
+              {
+                "text": "ы ок",
+                "afterMs": 15
+              },
+              {
+                "text": "на.",
+                "afterMs": 29
+              },
+              {
+                "text": "Свод",
+                "afterMs": 24
+              },
+              {
+                "text": "ка д",
+                "afterMs": 24
+              },
+              {
+                "text": "иало",
+                "afterMs": 30
+              },
+              {
+                "text": "га (",
+                "afterMs": 24
+              },
+              {
+                "text": "комп",
+                "afterMs": 0
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,304 @@
+# Goal:      глаголы спиннера (verbs-преференсы) + шиммер карточек
+# Family:    EF.04
+# Status:    live
+# Files:     lib/types/spinnerVerbsPrefs.js,
+#            lib/types/components/messages/AssistantToolUseMessage.js,
+#            lib/types/components/Spinner/SpinnerGlyph.js,
+#            lib/types/components/Spinner/SpinnerAnimationRow.js,
+#            lib/types/components/Spinner/GlimmerMessage.js,
+#            lib/types/components/WorkingSpinner.js, lib/types/screens/Chat.js,
+#            lib/types/dsh-adapter/channel.js, lib/types/dsh-adapter/plugin.js
+# Evidence:  reports/live42-frames/; facts/patches-C.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 LIVE42
+
+--- a/lib/types/spinnerVerbsPrefs.js
++++ b/lib/types/spinnerVerbsPrefs.js
+@@ -0,0 +1,50 @@
++/**
++ * dsh-overrides 35: user spinner-verb customization
++ * (settings.yaml `dsh-tui.spinnerVerbs {mode: replace|append, verbs[]}`).
++ *
++ * Pure normalization/resolution (no React, no channel): the plugin's apply
++ * chain normalizes the settings value, the channel stores it, and the
++ * spinner samples from resolveSpinnerVerbs(SPINNER_VERBS, custom) —
++ * 'append' (default) puts the user's verbs first so the sampling prefers
++ * them; 'replace' uses ONLY the user's list (falling back to the builtins
++ * when nothing valid survives cleaning).
++ */
++const VERB_MODES = new Set(['replace', 'append']);
++function cleanVerbs(verbs) {
++    if (!Array.isArray(verbs))
++        return [];
++    return verbs
++        .filter(v => typeof v === 'string' && v.trim() !== '')
++        .map(v => v.trim());
++}
++/**
++ * Normalize a raw settings value into `{mode, verbs}`, or undefined when
++ * the value carries no usable verbs (dead key — builtin sampling stands).
++ */
++export function normalizeSpinnerVerbs(value) {
++    if (value === null || typeof value !== 'object' || Array.isArray(value))
++        return undefined;
++    const verbs = cleanVerbs(value.verbs);
++    if (verbs.length === 0)
++        return undefined;
++    const mode = VERB_MODES.has(value.mode) ? value.mode : 'append';
++    return { mode, verbs };
++}
++/**
++ * Merge the builtin verb list with the user's custom list.
++ * @returns The effective sampling list.
++ */
++export function resolveSpinnerVerbs(builtin, custom) {
++    if (custom === undefined || custom === null)
++        return builtin;
++    const verbs = cleanVerbs(custom.verbs);
++    if (verbs.length === 0)
++        return builtin;
++    const mode = VERB_MODES.has(custom.mode) ? custom.mode : 'append';
++    if (mode === 'replace')
++        return verbs;
++    // append: user's verbs first, builtins deduped after (order-preserving)
++    const seen = new Set(verbs);
++    const tail = builtin.filter(v => !seen.has(v));
++    return [...verbs, ...tail];
++}
+--- a/lib/types/components/messages/AssistantToolUseMessage.js
++++ b/lib/types/components/messages/AssistantToolUseMessage.js
+@@ -1,7 +1,11 @@
+ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+ import React from 'react';
+ import { extname } from 'node:path';
+-import { Box, Text, useTerminalSize } from '../../ui.js';
++import { Box, Text, useTheme, useTerminalSize } from '../../ui.js';
++// dsh-overrides 35: running terminal-card title shimmer (tools-verbs).
++import { getTheme } from '../../theme.js';
++import { parseRGB } from '../Spinner/spinnerUtils.js';
++import { breathingColor, effectEnabled } from '../../animationsMode.js';
+ import { stringWidth } from '../../ink/stringWidth.js';
+ import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js';
+ import { ToolUseLoader } from '../ToolUseLoader.js';
+@@ -225,7 +229,7 @@
+     const first = title.slice(0, title.charCodeAt(firstEnd - 1) === 13 ? firstEnd - 1 : firstEnd);
+     return { first, hidden };
+ }
+-function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile }) {
++function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile, titleColor, }) {
+     // Hover tooltip: the header line truncates long paths/commands, so the
+     // full string (or the unfolded terminal script) pops up after a dwell.
+     // Empty content is a no-op inside the hook.
+@@ -240,7 +244,7 @@
+         return (_jsxs(_Fragment, { children: [_jsx(Box, { flexShrink: 0, children: _jsx(Text, { bold: true, color: nameColor, wrap: "truncate-end", children: name }) }), displayArgs !== '' && (_jsxs(Box, { flexWrap: "nowrap", ...headerTooltip, children: [_jsx(Text, { children: "(" }), _jsx(SyntaxText, { text: clipHeaderArgs(displayArgs), sourceText: displayArgs, language: argsLanguage }), _jsx(Text, { children: ")" })] }))] }));
+     }
+     if (isTerminal) {
+-        return (_jsxs(_Fragment, { children: [_jsx(Box, { flexShrink: 0, children: _jsx(Text, { bold: true, color: nameColor, wrap: "truncate-end", children: name }) }), _jsx(Box, { flexWrap: "nowrap", ...headerTooltip, children: folded === undefined ? (_jsxs(Text, { children: ["(", title, ")"] })) : (_jsxs(_Fragment, { children: [_jsxs(Text, { children: ["(", folded.first, ")"] }), _jsx(Text, { dimColor: true, children: ` … +${folded.hidden} lines (ctrl+o to expand)` })] })) })] }));
++        return (_jsxs(_Fragment, { children: [_jsx(Box, { flexShrink: 0, children: _jsx(Text, { bold: true, color: nameColor, wrap: "truncate-end", children: name }) }), _jsx(Box, { flexWrap: "nowrap", ...headerTooltip, children: folded === undefined ? (_jsxs(Text, { color: titleColor, children: ["(", title, ")"] })) : (_jsxs(_Fragment, { children: [_jsxs(Text, { color: titleColor, children: ["(", folded.first, ")"] }), _jsx(Text, { dimColor: true, children: ` … +${folded.hidden} lines (ctrl+o to expand)` })] })) })] }));
+     }
+     const trimmed = title.trim();
+     if (trimmed === '') {
+@@ -305,8 +309,22 @@
+         ? foldTerminalTitle(headerTitle)
+         : undefined, [headerIsTerminal, foldTerminalCommand, verbose, headerTitle]);
+     // Live elapsed clock while the call runs (CC's bash elapsed timer): the
+-    // 1s tick re-renders the card; elapsed derives from wall-clock refs.
+-    const [viewportRef] = useAnimationFrame(isRunning ? 1000 : null);
++    // tick re-renders the card; elapsed derives from wall-clock refs.
++    // dsh-overrides 35: a RUNNING terminal card's title breathes
++    // bashBorder↔bashBorder-lift (30% toward white) — the CC-style
++    // "working bash card" shimmer, gated by the toolCardShimmer effect;
++    // the faster 120ms cadence only while the shimmer is on (elapsed
++    // text still changes at its own 1s pace, the Ink diff stays idle).
++    const [titleThemeName] = useTheme();
++    const titleBreathes = isRunning && headerIsTerminal && effectEnabled('toolCardShimmer');
++    const [viewportRef, titleTime] = useAnimationFrame(isRunning ? (titleBreathes ? 120 : 1000) : null);
++    let terminalTitleColor;
++    if (titleBreathes) {
++        const theme = getTheme(titleThemeName);
++        const base = parseRGB(theme.bashBorder);
++        if (base !== null)
++            terminalTitleColor = breathingColor(base, { r: Math.round(base.r + (255 - base.r) * 0.3), g: Math.round(base.g + (255 - base.g) * 0.3), b: Math.round(base.b + (255 - base.b) * 0.3) }, titleTime, 1200);
++    }
+     const elapsedMs = isRunning
+         ? tool.startedAt !== undefined
+             ? Date.now() - tool.startedAt
+@@ -379,7 +397,7 @@
+     return (_jsx(Box, { ref: viewportRef, flexDirection: "row", justifyContent: "space-between", marginTop: addMargin ? 1 : 0, width: "100%", onClick: onClick, 
+         // Only selection paints a highlight; the configured treatment applies
+         // to an ordinary card. Diff line tints stay - they are content, not chrome.
+-        backgroundColor: isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground, onMouseEnter: interactive ? () => setHovered(true) : undefined, onMouseLeave: interactive ? () => setHovered(false) : undefined, children: _jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [_jsxs(Box, { flexDirection: "row", flexWrap: "nowrap", minWidth: minWidth, children: [_jsx(ToolUseLoader, { shouldAnimate: isRunning, isUnresolved: isRunning, isError: isError, toolName: tool.name }), _jsx(HeaderTitle, { name: name, title: headerTitle, isTerminal: headerIsTerminal, folded: foldedHeader, displayArgs: displayArgs, argsLanguage: argsLanguage, nameColor: toolNameColor(tool.name), filePath: filePath, onOpenFile: onOpenFile }), !isRunning && (_jsx(Box, { flexWrap: "nowrap", children: _jsx(Text, { dimColor: !hovered, children: elapsedText }) })), hovered && (_jsx(Box, { flexShrink: 0, children: _jsx(Text, { dimColor: true, children: isExpanded ? '▴' : '▾' }) }))] }), useSplitDiff && view?.card === 'diff' ? (_jsxs(Box, { flexDirection: "row", children: [_jsx(Box, { width: 3, flexShrink: 0, children: _jsx(Text, { dimColor: true, children: GUTTER_FIRST }) }), _jsx(SplitDiffView, { diffs: view.diffs, width: columns - 4, maxRows: DIFF_BODY_MAX_LINES, verbose: verbose, toolBackground: ordinaryToolBackground, reveal: revealable ? { key: `${revealKey}:split` } : undefined })] })) : (shownLines.map((line, index) => (_jsxs(Box, { flexDirection: "row", children: [_jsx(Box, { width: 3, flexShrink: 0, children: _jsx(Text, { color: line.tone === 'add'
++        backgroundColor: isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground, onMouseEnter: interactive ? () => setHovered(true) : undefined, onMouseLeave: interactive ? () => setHovered(false) : undefined, children: _jsxs(Box, { flexDirection: "column", flexGrow: 1, children: [_jsxs(Box, { flexDirection: "row", flexWrap: "nowrap", minWidth: minWidth, children: [_jsx(ToolUseLoader, { shouldAnimate: isRunning, isUnresolved: isRunning, isError: isError, toolName: tool.name }), _jsx(HeaderTitle, { name: name, title: headerTitle, isTerminal: headerIsTerminal, folded: foldedHeader, displayArgs: displayArgs, argsLanguage: argsLanguage, nameColor: toolNameColor(tool.name), filePath: filePath, onOpenFile: onOpenFile, titleColor: terminalTitleColor }), !isRunning && (_jsx(Box, { flexWrap: "nowrap", children: _jsx(Text, { dimColor: !hovered, children: elapsedText }) })), hovered && (_jsx(Box, { flexShrink: 0, children: _jsx(Text, { dimColor: true, children: isExpanded ? '▴' : '▾' }) }))] }), useSplitDiff && view?.card === 'diff' ? (_jsxs(Box, { flexDirection: "row", children: [_jsx(Box, { width: 3, flexShrink: 0, children: _jsx(Text, { dimColor: true, children: GUTTER_FIRST }) }), _jsx(SplitDiffView, { diffs: view.diffs, width: columns - 4, maxRows: DIFF_BODY_MAX_LINES, verbose: verbose, toolBackground: ordinaryToolBackground, reveal: revealable ? { key: `${revealKey}:split` } : undefined })] })) : (shownLines.map((line, index) => (_jsxs(Box, { flexDirection: "row", children: [_jsx(Box, { width: 3, flexShrink: 0, children: _jsx(Text, { color: line.tone === 'add'
+                                     ? 'diffAddedWord'
+                                     : line.tone === 'del'
+                                         ? 'diffRemovedWord'
+--- a/lib/types/components/Spinner/SpinnerGlyph.js
++++ b/lib/types/components/Spinner/SpinnerGlyph.js
+@@ -4,6 +4,7 @@
+ import { getTheme } from '../../theme.js';
+ import { useTheme } from '../design-system/ThemeProvider.js';
+ import { getDefaultCharacters, interpolateColor, parseRGB, toRGBColor } from './spinnerUtils.js';
++import { effectEnabled } from '../../animationsMode.js';
+ const DEFAULT_CHARACTERS = getDefaultCharacters();
+ const SPINNER_FRAMES = [...DEFAULT_CHARACTERS, ...[...DEFAULT_CHARACTERS].reverse()];
+ const REDUCED_MOTION_DOT = '●';
+@@ -49,7 +50,9 @@
+         return (_jsx(Box, { flexWrap: "wrap", height: 1, width: 2, children: _jsx(Text, { color: messageColor, dimColor: isDim, children: REDUCED_MOTION_DOT }) }));
+     }
+     const spinnerChar = SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+-    const glyphColor = rainbowGlyphColor(theme, time) ?? messageColor;
++    // dsh-overrides 35: the rainbow cycle is now an effects-registry
++    // toggle (spinnerRainbow) — off renders the brand messageColor glyph.
++    const glyphColor = effectEnabled('spinnerRainbow') ? rainbowGlyphColor(theme, time) ?? messageColor : messageColor;
+     if (stalledIntensity > 0) {
+         const baseColorStr = theme[messageColor];
+         const baseRGB = baseColorStr ? parseRGB(baseColorStr) : null;
+--- a/lib/types/components/Spinner/SpinnerAnimationRow.js
++++ b/lib/types/components/Spinner/SpinnerAnimationRow.js
+@@ -1,5 +1,6 @@
+ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+ import figures from 'figures';
++import { effectEnabled } from '../../animationsMode.js';
+ import { useMemo, useRef } from 'react';
+ import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js';
+ import Box from '../../ink/components/Box.js';
+@@ -53,13 +54,18 @@
+     const glimmerMessageWidth = useMemo(() => stringWidth(message), [message]);
+     const cycleLength = glimmerMessageWidth + 20;
+     const cyclePosition = Math.floor(time / glimmerSpeed);
++    // dsh-overrides 35: the verb glimmer window is an effects-registry
++    // toggle (spinnerGlimmer) — off parks the window off-text (static
++    // verb color, same shape reduced-motion uses).
+     const glimmerIndex = reducedMotion
+         ? -100
+         : isStalled
+             ? -100
+-            : mode === 'requesting'
+-                ? (cyclePosition % cycleLength) - 10
+-                : glimmerMessageWidth + 10 - (cyclePosition % cycleLength);
++            : effectEnabled('spinnerGlimmer')
++                ? mode === 'requesting'
++                    ? (cyclePosition % cycleLength) - 10
++                    : glimmerMessageWidth + 10 - (cyclePosition % cycleLength)
++                : -100;
+     const flashOpacity = reducedMotion
+         ? 0
+         : mode === 'tool-use'
+--- a/lib/types/components/Spinner/GlimmerMessage.js
++++ b/lib/types/components/Spinner/GlimmerMessage.js
+@@ -5,6 +5,7 @@
+ import { getGraphemeSegmenter } from '../../utils/intl.js';
+ import { getTheme } from '../../theme.js';
+ import { interpolateColor, parseRGB, toRGBColor } from './spinnerUtils.js';
++import { effectEnabled } from '../../animationsMode.js';
+ import { useTheme } from '../design-system/ThemeProvider.js';
+ const ERROR_RED = { r: 171, g: 43, b: 63 };
+ /**
+@@ -39,7 +40,10 @@
+     }
+     // tool-use mode: all chars flash with the same opacity, so render as a
+     // single <Text> instead of N individual FlashingChar components.
+-    if (mode === 'tool-use') {
++    // dsh-overrides 35: the whole-message flash is the tool-use face of
++    // the verb glimmer — the spinnerGlimmer effect gates it too (off =
++    // the plain messageColor text, no interpolation).
++    if (mode === 'tool-use' && effectEnabled('spinnerGlimmer')) {
+         const baseColorStr = theme[messageColor];
+         const shimmerColorStr = theme[shimmerColor];
+         const baseRGB = baseColorStr ? parseRGB(baseColorStr) : null;
+--- a/lib/types/components/WorkingSpinner.js
++++ b/lib/types/components/WorkingSpinner.js
+@@ -4,6 +4,8 @@
+ import { Box } from '../ui.js';
+ import { SpinnerAnimationRow } from './Spinner/SpinnerAnimationRow.js';
+ import { SPINNER_VERBS } from '../cc/spinnerVerbs.js';
++// dsh-overrides 35: user verb lists (settings.yaml dsh-tui.spinnerVerbs).
++import { resolveSpinnerVerbs } from '../spinnerVerbsPrefs.js';
+ import { sample } from 'lodash-es';
+ /**
+  * The working spinner block shown between the transcript and the prompt
+@@ -13,10 +15,12 @@
+  *
+  * Random verb is picked once per turn (per mount of the spinner).
+  */
+-export function WorkingSpinner({ mode, hasActiveTools, responseLengthRef, uploadTokensRef, loadingStartTimeRef, totalPausedMsRef, pauseStartTimeRef, thinkingStatus, }) {
++export function WorkingSpinner({ mode, hasActiveTools, responseLengthRef, uploadTokensRef, loadingStartTimeRef, totalPausedMsRef, pauseStartTimeRef, thinkingStatus, verbs, }) {
+     const { columns } = useTerminalSize();
+-    // Pick a random verb once per spinner mount (per turn).
+-    const [randomVerb] = useState(() => sample(SPINNER_VERBS) ?? 'Working');
++    // Pick a random verb once per spinner mount (per turn). dsh-overrides
++    // 35: the sampling pool merges the user's list with the builtins
++    // (mode 'append' = user's first, 'replace' = user's only).
++    const [randomVerb] = useState(() => sample(resolveSpinnerVerbs(SPINNER_VERBS, verbs)) ?? 'Working');
+     const message = `${randomVerb}…`;
+     return (_jsx(Box, { flexDirection: "column", width: "100%", alignItems: "flex-start", children: _jsx(SpinnerAnimationRow, { mode: mode, reducedMotion: false, hasActiveTools: hasActiveTools, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, message: message, messageColor: "claude", shimmerColor: "claudeShimmer", loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, spinnerSuffix: null, verbose: true, columns: columns, thinkingStatus: thinkingStatus }) }));
+ }
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -3464,7 +3464,7 @@
+                                 // the animated chars/4 estimate, matching the classic
+                                 // spinner's counter (the suffix used raw chars before,
+                                 // inflating the reading next to a real upload number).
+-                                suffix: `${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens` }) })) : (_jsx(WorkingSpinner, { mode: channel.spinnerMode, hasActiveTools: channel.activeToolCount > 0, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, thinkingStatus: thinkingStatus }))), _jsx(GoalTodoPanel, { channel: channel, collapsed: todoCollapsed, onToggle: () => setTodoCollapsed(previous => !previous) }), recap !== null && recap.auto && !recap.expanded && (_jsx(AutoRecapRow, { summary: recap.summary, streaming: !recap.done, onExpand: () => setRecap(prev => (prev ? { ...prev, expanded: true } : prev)), onDismiss: () => closeRecap() })), balance !== null && (_jsx(BalanceReportRow, { result: balance.result, refreshing: balance.refreshing, tokens: channel.tokens, model: channel.model, onRefresh: runBalance, onDismiss: () => setBalance(null) })), statusEntries.length > 0 && (_jsx(Text, { dimColor: true, wrap: "truncate", children: statusEntries.map(entry => entry.text).join(' · ') })), approvalPanelNode !== null ? (approvalPanelNode) : dialogSnapshot !== null ? (_jsx(ExtensionDialog, { dialog: dialogSnapshot, onDecide: value => dialogs.decide(dialogSnapshot.key, value), onCancel: () => dialogs.cancel(dialogSnapshot.key) }, dialogSnapshot.key)) : overlay.kind === 'tips' ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(TipsPanel, { onClose: () => dispatchOverlay({ type: 'close-if', kind: 'tips' }) }) })) : recap !== null && (!recap.auto || recap.expanded) ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(RecapPanel, { summary: recap.summary, title: recap.title, error: recap.error, streaming: !recap.done, titleApplied: recap.titleApplied, onClose: () => {
++                                suffix: `${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens` }) })) : (_jsx(WorkingSpinner, { verbs: channel.spinnerVerbs, mode: channel.spinnerMode, hasActiveTools: channel.activeToolCount > 0, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, thinkingStatus: thinkingStatus }))), _jsx(GoalTodoPanel, { channel: channel, collapsed: todoCollapsed, onToggle: () => setTodoCollapsed(previous => !previous) }), recap !== null && recap.auto && !recap.expanded && (_jsx(AutoRecapRow, { summary: recap.summary, streaming: !recap.done, onExpand: () => setRecap(prev => (prev ? { ...prev, expanded: true } : prev)), onDismiss: () => closeRecap() })), balance !== null && (_jsx(BalanceReportRow, { result: balance.result, refreshing: balance.refreshing, tokens: channel.tokens, model: channel.model, onRefresh: runBalance, onDismiss: () => setBalance(null) })), statusEntries.length > 0 && (_jsx(Text, { dimColor: true, wrap: "truncate", children: statusEntries.map(entry => entry.text).join(' · ') })), approvalPanelNode !== null ? (approvalPanelNode) : dialogSnapshot !== null ? (_jsx(ExtensionDialog, { dialog: dialogSnapshot, onDecide: value => dialogs.decide(dialogSnapshot.key, value), onCancel: () => dialogs.cancel(dialogSnapshot.key) }, dialogSnapshot.key)) : overlay.kind === 'tips' ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(TipsPanel, { onClose: () => dispatchOverlay({ type: 'close-if', kind: 'tips' }) }) })) : recap !== null && (!recap.auto || recap.expanded) ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(RecapPanel, { summary: recap.summary, title: recap.title, error: recap.error, streaming: !recap.done, titleApplied: recap.titleApplied, onClose: () => {
+                                 // An expanded auto recap collapses back to its dim row;
+                                 // a manual /recap closes outright.
+                                 if (recap.auto) {
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -46,6 +46,7 @@
+ import { listThemeCatalog } from '../themeCatalog.js';
+ import { modeDisplayName, resolveSessionModes } from '../sessionModes.js';
+ import { normalizeAppearance, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground } from '../tuiDisplayPrefs.js';
++import { normalizeSpinnerVerbs } from '../spinnerVerbsPrefs.js';
+ import { setAnimationsMode, setEffectsMode } from '../animationsMode.js';
+ import { SubagentActivityStore } from './subagents.js';
+ import { BackgroundJobStore, formatJobDuration } from './jobs.js';
+@@ -2288,6 +2289,8 @@
+             setEffectsMode(normalized.effects);
+             return normalized;
+         })(),
++        // dsh-overrides 35: user spinner verbs (normalized {mode, verbs}).
++        spinnerVerbs: normalizeSpinnerVerbs(options.spinnerVerbs),
+         activityEnabled: options.activity !== false,
+         contextBarEnabled: options.contextBar !== false,
+         agentPreset: options.agentPreset,
+@@ -4244,6 +4247,13 @@
+         },
+         // dsh-overrides 31: appearance settings — merge-over-setter like
+         // setStatusBar (a partial update keeps the other fields).
++        setSpinnerVerbs(config) {
++            const next = normalizeSpinnerVerbs(config);
++            if (JSON.stringify(next) === JSON.stringify(state.spinnerVerbs))
++                return;
++            state.spinnerVerbs = next;
++            state.emit();
++        },
+         setAppearance(config) {
+             const next = normalizeAppearance({ ...state.appearance, ...config });
+             const effectsChanged = (a, b) => {
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -597,6 +597,13 @@
+                 animations: Schema.union(['full', 'custom', 'off']).required(false),
+                 effects: Schema.object(Object.fromEntries(EFFECT_KEYS.map(key => [key, Schema.boolean().required(false)]))).required(false),
+             }).required(false),
++            // dsh-overrides 35: user spinner-verb customization (top-level
++            // dsh-tui key, sibling of appearance — settings.yaml
++            // `dsh-tui.spinnerVerbs {mode: replace|append, verbs[]}`).
++            spinnerVerbs: Schema.object({
++                mode: Schema.union(['replace', 'append']).required(false),
++                verbs: Schema.array(Schema.string()).required(false),
++            }).required(false),
+             // Built-in action-shortcut overrides, one optional combo string per
+             // action (see src/utils/keymap.ts). Unset keeps the default binding
+             // and the section's format() shows the effective combos.
+@@ -651,6 +658,8 @@
+         // in-session by /theme.
+         const applyAppearance = (value) => {
+             channel.setAppearance(value.appearance ?? {});
++            // dsh-overrides 35: verb customization rides the same apply.
++            channel.setSpinnerVerbs(value.spinnerVerbs);
+             const theme = value.appearance?.theme;
+             setSettingsThemePref(typeof theme === 'string' ? theme : undefined);
+         };

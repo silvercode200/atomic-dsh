@@ -1,0 +1,271 @@
+{
+ "version": 1,
+ "updatedAt": "2026-09-11T23:12:57.877Z",
+ "entries": [
+  {
+   "id": "tool:ask_user_question",
+   "kind": "tool",
+   "name": "ask_user_question",
+   "text": "ask user question спросить пользователя вопрос уточнение confirm подтверждение выбор choice missing information недостающая информация пауза остановиться спроси юзеру",
+   "meta": {
+    "description": "Ask the user a concise question when you need confirmation, a choice, or missing information before proceeding. Send one or more questions, each with a stable id that will be echoed in the answer.",
+    "tsArgs": "  /** Ask the user a concise question when you need confirmation, a choice, or missing information before proceeding. Send one or more questions, each with a stable id that will be echoed in the answer. */\n  ask_user_question: {\n    /** Questions to ask the user before continuing. */\n    questions: ({\n      /** Stable id for this question; echoed in the answer. */\n      id: string;\n      /** The specific question to ask the user. */\n      question: string;\n      /** Optional short heading for the question, such as \"Confirm\" or \"Choose Mode\". */\n      header?: string;\n      /** Optional choices to show the user. If you recommend one, put it first and append \"(Recommended)\" to that label. */\n      options?: ({\n        /** Short user-facing option label. */\n        label: string;\n        /** One sentence explaining the tradeoff or impact. */\n        description?: string;\n      } & Record<string, JsonValue>)[];\n      /** Whether the user may select more than one option. Defaults to false. */\n      multi_select?: boolean;\n    } & Record<string, JsonValue>)[];\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  ask_user_question: {\n    answers: {\n      id: string;\n      selected: string[];\n      custom?: string;\n    }[];\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.874Z"
+    }
+   }
+  },
+  {
+   "id": "tool:create_goal",
+   "kind": "tool",
+   "name": "create_goal",
+   "text": "goal создать цель постановка целей задача задачи long-running objective долгая цель автономная autonomous продолжение продолжить сессия round раунды create",
+   "meta": {
+    "description": "Create one persisted same-session completion goal when the current direct human request is a long-running objective that should continue across autonomous goal rounds. You may infer that intent without requiring the user to say \"create a goal\". Do not use this for trivial single-turn work. Execution rejects non-human and subagent authority.",
+    "tsArgs": "  /** Create one persisted same-session completion goal when the current direct human request is a long-running objective that should continue across autonomous goal rounds. You may infer that intent without requiring the user to say \"create a goal\". Do not use this for trivial single-turn work. Execution rejects non-human and subagent authority. */\n  create_goal: {\n    /** The concrete completion objective inferred from the direct human request. */\n    objective: string;\n    /** Optional positive safe-integer limit on automatic continuation rounds. */\n    max_goal_rounds?: number;\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  create_goal: {\n    goal: null;\n  } | {\n    goal: {\n      id: string;\n      revision: number;\n      objective: string;\n      phase: \"active\" | \"paused\" | \"blocked\" | \"complete\";\n      roundsStarted: number;\n      maxGoalRounds: number;\n      blockedReason?: {\n        code: string;\n        message: string;\n      };\n    };\n    activation: \"armed\" | \"disarmed\";\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:get_goal",
+   "kind": "tool",
+   "name": "get_goal",
+   "text": "goal прочитать посмотреть цель состояние статус фаза phase текущая цель get получить узнать",
+   "meta": {
+    "description": "Read the current same-session goal, including its exact id/revision, objective, phase, completed continuation rounds, round limit, blocker reason when present, and whether another continuation is armed. Call this before updating a goal.",
+    "tsArgs": "  /** Read the current same-session goal, including its exact id/revision, objective, phase, completed continuation rounds, round limit, blocker reason when present, and whether another continuation is armed. Call this before updating a goal. */\n  get_goal: Record<string, JsonValue>;",
+    "tsOutput": "  get_goal: {\n    goal: null;\n  } | {\n    goal: {\n      id: string;\n      revision: number;\n      objective: string;\n      phase: \"active\" | \"paused\" | \"blocked\" | \"complete\";\n      roundsStarted: number;\n      maxGoalRounds: number;\n      blockedReason?: {\n        code: string;\n        message: string;\n      };\n    };\n    activation: \"armed\" | \"disarmed\";\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:update_goal",
+   "kind": "tool",
+   "name": "update_goal",
+   "text": "goal обновить изменить цель edit pause resume ревизия revision заблокировать complete завершить цель update",
+   "meta": {
+    "description": "Update the exact current goal revision. edit, pause, and resume require a direct top-level human request. During an automatic continuation of the current goal, complete and blocked are also allowed. blocked is rejected before the configured minimum round count; the model remains responsible for judging that the same condition persisted across those rounds and must explain it in blocked_reason.",
+    "tsArgs": "  /** Update the exact current goal revision. edit, pause, and resume require a direct top-level human request. During an automatic continuation of the current goal, complete and blocked are also allowed. blocked is rejected before the configured minimum round count; the model remains responsible for judging that the same condition persisted across those rounds and must explain it in blocked_reason. */\n  update_goal: {\n    /** Exact id returned by get_goal. */\n    goal_id: string;\n    /** Exact positive revision returned by get_goal. */\n    revision: number;\n    /** edit | pause | resume | complete | blocked */\n    action: \"edit\" | \"pause\" | \"resume\" | \"complete\" | \"blocked\";\n    /** Replacement objective; valid only with action edit. */\n    objective?: string;\n    /** Replacement cap; valid only with action edit. */\n    max_goal_rounds?: number;\n    /** Concrete blocking condition; required only with action blocked. */\n    blocked_reason?: string;\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  update_goal: {\n    goal: null;\n  } | {\n    goal: {\n      id: string;\n      revision: number;\n      objective: string;\n      phase: \"active\" | \"paused\" | \"blocked\" | \"complete\";\n      roundsStarted: number;\n      maxGoalRounds: number;\n      blockedReason?: {\n        code: string;\n        message: string;\n      };\n    };\n    activation: \"armed\" | \"disarmed\";\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:interrupt_agent",
+   "kind": "tool",
+   "name": "interrupt_agent",
+   "text": "interrupt прервать отменить агент agent остановить running фоновый отменa cancel остановить таск",
+   "meta": {
+    "description": "Request cancellation of a background agent's current turn by its agent id. The target may be your direct child or a deeper agent created under you. Only the current turn stops: messages already queued for the agent stay parked until a later send_message, agents it started keep running, and the agent itself stays available for follow-ups. This call returns as soon as the stop request is accepted, so the target may keep running briefly; interrupting an agent that already finished is an accepted no-op.",
+    "tsArgs": "  /** Request cancellation of a background agent's current turn by its agent id. The target may be your direct child or a deeper agent created under you. Only the current turn stops: messages already queued for the agent stay parked until a later send_message, agents it started keep running, and the agent itself stays available for follow-ups. This call returns as soon as the stop request is accepted, so the target may keep running briefly; interrupting an agent that already finished is an accepted no-op. */\n  interrupt_agent: {\n    /** The agent id of the running agent to interrupt. */\n    agent_id: string;\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  interrupt_agent: {\n    accepted: boolean;\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:list_agents",
+   "kind": "tool",
+   "name": "list_agents",
+   "text": "list перечислить агенты список субагенты фоновые children descendants узнать какие запущенные",
+   "meta": {
+    "description": "List your continuable background subagents by durable id and label. Use it to recall which ones you started, not to poll for completion — you are told when one finishes. Status comes from the live registry: running means the agent is working right now, idle means it is loaded but between turns (it may be waiting on agents it started), and ready means it exists only in storage — resumable, not terminal, and not a result waiting to be collected; a `send_message` starts a new turn on the same conversation, and a direct child remains a `send_message` candidate in every status. The snapshot is not a delivery promise — `send_message` performs the authoritative check and may still fail. Children that could not be read are reported as diagnostics instead of being silently dropped. Scope `descendants` walks the whole tree below you in stable pre-order, annotating each entry with its durable direct-parent session id and depth. You may use `send_message` only for depth-1 entries; deeper entries are candidates for `interrupt_agent` only.",
+    "tsArgs": "  /** List your continuable background subagents by durable id and label. Use it to recall which ones you started, not to poll for completion — you are told when one finishes. Status comes from the live registry: running means the agent is working right now, idle means it is loaded but between turns (it may be waiting on agents it started), and ready means it exists only in storage — resumable, not terminal, and not a result waiting to be collected; a `send_message` starts a new turn on the same conversation, and a direct child remains a `send_message` candidate in every status. The snapshot is not a delivery promise — `send_message` performs the authoritative check and may still fail. Children that could not be read are reported as diagnostics instead of being silently dropped. Scope `descendants` walks the whole tree below you in stable pre-order, annotating each entry with its durable direct-parent session id and depth. You may use `send_message` only for depth-1 entries; deeper entries are candidates for `interrupt_agent` only. */\n  list_agents: {\n    /** children (default) lists direct children only; descendants walks the complete tree below you. */\n    scope?: \"children\" | \"descendants\";\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  list_agents: ({\n    kind: \"child\";\n    id: string;\n    label: string;\n    status: \"running\" | \"idle\" | \"ready\";\n    parent?: string;\n    depth?: number;\n  } | {\n    kind: \"diagnostic\";\n    id: string;\n    reason: \"corrupt\" | \"unsupported\" | \"unavailable\";\n    parent?: string;\n    depth?: number;\n  })[];",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:ralph",
+   "kind": "tool",
+   "name": "ralph",
+   "text": "ralph автономные раунды режим self-driving продолжение цикл autonomous rounds completion objective раунд",
+   "meta": {
+    "description": "Run a foreground fresh-agent Ralph loop toward one immutable objective. Use only when the direct human explicitly asks for Ralph or fresh-agent iteration. Each round opens a new child with no parent conversation or prior child session; the shared workspace is long-term memory, and only a bounded structured report crosses rounds. The call returns when a worker reports completion or a concrete blocker, or at the round limit. Ordinary long-running same-session work belongs to goal tools.",
+    "tsArgs": "  /** Run a foreground fresh-agent Ralph loop toward one immutable objective. Use only when the direct human explicitly asks for Ralph or fresh-agent iteration. Each round opens a new child with no parent conversation or prior child session; the shared workspace is long-term memory, and only a bounded structured report crosses rounds. The call returns when a worker reports completion or a concrete blocker, or at the round limit. Ordinary long-running same-session work belongs to goal tools. */\n  ralph: {\n    /** The immutable completion objective for every fresh Ralph round. */\n    objective: string;\n    /** Optional positive safe-integer round cap, bounded by the deployment ceiling. */\n    maxRounds?: number;\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  ralph: {\n    runId: string;\n    agentsStarted: number;\n    result: JsonValue;\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:read_image",
+   "kind": "tool",
+   "name": "read_image",
+   "text": "read image читать картинку изображение скриншот screenshot png jpeg webp gif фото просмотр",
+   "meta": {
+    "description": "Read a PNG/JPEG/WebP/GIF file and return the image itself. Harness validates and downscales large supported images before the next model request, so use this tool directly instead of installing image libraries or creating thumbnails merely to inspect an image. Independent files may be read concurrently in small batches. Requires the current model to accept image input.",
+    "tsArgs": "  /** Read a PNG/JPEG/WebP/GIF file and return the image itself. Harness validates and downscales large supported images before the next model request, so use this tool directly instead of installing image libraries or creating thumbnails merely to inspect an image. Independent files may be read concurrently in small batches. Requires the current model to accept image input. */\n  read_image: {\n    /** Path to the image file, resolved by the filesystem backend. */\n    file_path: string;\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  read_image: {\n    path: string;\n    image: {\n      attachmentId: string;\n      mediaType: \"image/png\" | \"image/jpeg\" | \"image/webp\" | \"image/gif\";\n      bytes: number;\n      width: number;\n      height: number;\n      name?: string;\n      originalDimensions?: {\n        width: number;\n        height: number;\n      };\n    };\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:send_message",
+   "kind": "tool",
+   "name": "send_message",
+   "text": "send message отправить сообщение субагенту фоновому agent продолжить диалог ответить message subagent",
+   "meta": {
+    "description": "Send a message to a background subagent by its subagent id, continuing the same conversation. It becomes the subagent's next turn: if it is still working, the message waits until its current turn finishes, so it cannot redirect work already underway. This call returns no answer from the subagent — only confirmation that the message was delivered — so use it to give it more work. A failure means the message was NOT delivered.",
+    "tsArgs": "  /** Send a message to a background subagent by its subagent id, continuing the same conversation. It becomes the subagent's next turn: if it is still working, the message waits until its current turn finishes, so it cannot redirect work already underway. This call returns no answer from the subagent — only confirmation that the message was delivered — so use it to give it more work. A failure means the message was NOT delivered. */\n  send_message: {\n    /** The subagent id returned when the background subagent was started. */\n    subagent_id: string;\n    /** The message to deliver to the subagent. */\n    message: string;\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  send_message: {\n    messageId: string;\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:subagent_fork",
+   "kind": "tool",
+   "name": "subagent_fork",
+   "text": "fork делегировать субагент наследует контекст вилка subagent delegate задача делегирование parallel параллельно fork",
+   "meta": {
+    "description": "Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This tool runs in the background by default, immediately returns a durable subagent id, and keeps the child conversation available for later turns. When that run settles, the runtime sends the parent a notice containing its outcome and any final assistant message; `send_message` starts a later turn in the same child conversation. Set `run_in_background: false` only when your next action depends on receiving the result.",
+    "tsArgs": "  /** Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This tool runs in the background by default, immediately returns a durable subagent id, and keeps the child conversation available for later turns. When that run settles, the runtime sends the parent a notice containing its outcome and any final assistant message; `send_message` starts a later turn in the same child conversation. Set `run_in_background: false` only when your next action depends on receiving the result. */\n  subagent_fork: {\n    /** A short (3-5 word) description of the delegated task, for display. */\n    description: string;\n    /** The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new. */\n    prompt: string;\n    /** Whether to run in the background and return a durable subagent id immediately. Defaults to true. Set false to wait for the result when your next action depends on it. */\n    run_in_background?: boolean;\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  subagent_fork: {\n    kind: \"background\";\n    jobId: string;\n  } | {\n    kind: \"continuable\";\n    subagentId: string;\n  } | {\n    kind: \"foreground\";\n    runId: string;\n    output: JsonValue[];\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:todo_write",
+   "kind": "tool",
+   "name": "todo_write",
+   "text": "todo список задач таск-лист план record task list задачи отметки прогресс чеклист checklist заменить write",
+   "meta": {
+    "description": "Record and update a structured task list for the current work. Send the ENTIRE list every call — it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Mark every todo being actively worked on `in_progress` — several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be `in_progress`. Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished). Break larger todos into subtasks: every item may carry an optional `children` array of the same item shape; nesting is capped at 3 levels.",
+    "tsArgs": "  /** Record and update a structured task list for the current work. Send the ENTIRE list every call — it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. Mark every todo being actively worked on `in_progress` — several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be `in_progress`. Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished). Break larger todos into subtasks: every item may carry an optional `children` array of the same item shape; nesting is capped at 3 levels. */\n  todo_write: {\n    /** The COMPLETE task list, replacing any previous list. */\n    todos: ({\n      /** What the task is — a short imperative line. */\n      content: string;\n      /** pending (not started) | in_progress (now) | completed (done). */\n      status: \"pending\" | \"in_progress\" | \"completed\";\n      /** Optional subtasks of the same item shape; nesting is capped at 3 levels. */\n      children?: ({\n        /** What the task is — a short imperative line. */\n        content: string;\n        /** pending (not started) | in_progress (now) | completed (done). */\n        status: \"pending\" | \"in_progress\" | \"completed\";\n        /** Optional subtasks of the same item shape; nesting is capped at 3 levels. */\n        children?: ({\n          /** What the task is — a short imperative line. */\n          content: string;\n          /** pending (not started) | in_progress (now) | completed (done). */\n          status: \"pending\" | \"in_progress\" | \"completed\";\n        })[];\n      })[];\n    })[];\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  todo_write: {\n    todos: ({\n      /** What the task is — a short imperative line. */\n      content: string;\n      /** pending (not started) | in_progress (now) | completed (done). */\n      status: \"pending\" | \"in_progress\" | \"completed\";\n      /** Optional subtasks of the same item shape; nesting is capped at 3 levels. */\n      children?: ({\n        /** What the task is — a short imperative line. */\n        content: string;\n        /** pending (not started) | in_progress (now) | completed (done). */\n        status: \"pending\" | \"in_progress\" | \"completed\";\n        /** Optional subtasks of the same item shape; nesting is capped at 3 levels. */\n        children?: ({\n          /** What the task is — a short imperative line. */\n          content: string;\n          /** pending (not started) | in_progress (now) | completed (done). */\n          status: \"pending\" | \"in_progress\" | \"completed\";\n        })[];\n      })[];\n    })[];\n    counts: {\n      pending: number;\n      inProgress: number;\n      completed: number;\n    };\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.876Z"
+    }
+   }
+  },
+  {
+   "id": "tool:web_search",
+   "kind": "tool",
+   "name": "web_search",
+   "text": "web search веб поиск интернет поисковый запрос статьи новости research online поискать в сети",
+   "meta": {
+    "description": "Search the web for current information. Provide 1–4 queries in the required queries array. Returns an optional summary answer and a list of source URLs.",
+    "tsArgs": "  /** Search the web for current information. Provide 1–4 queries in the required queries array. Returns an optional summary answer and a list of source URLs. */\n  web_search: {\n    /** Required search queries; accepts 1–4 items and merges their results. */\n    queries: string[];\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  web_search: {\n    content?: string;\n    sources: {\n      url: string;\n      title?: string;\n      snippet?: string;\n      publishedAt?: string;\n    }[];\n    truncated: boolean;\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.877Z"
+    }
+   }
+  },
+  {
+   "id": "tool:workflow",
+   "kind": "tool",
+   "name": "workflow",
+   "text": "workflow скрипт оркестрация субагенты fan-out разметка многих файлов orchestrate javascript сценарий координация audit многие файлы",
+   "meta": {
+    "description": "Run a JavaScript workflow script that orchestrates subagents at scale. Use this for work that fans out across many independent pieces — an audit over many files, a migration, multi-angle research, adversarial verification of findings — where you write the orchestration as a script instead of delegating turn by turn. The workflow's identity rides the `meta` parameter as JSON: required `name` (short kebab-case) and `description` strings, optional `whenToUse` string and `phases` array (`{title, detail?, provider?, model?}`). The `script` parameter is the plain JavaScript body ONLY (NOT TypeScript, and NO `export const meta` statement — meta is a parameter, not code), running with top-level await; end with `return <value>` — the value must be JSON-serializable and is this tool's result. Script-body hooks: - `agent(prompt, opts?): Promise<any>` — run one subagent to completion. Without `opts.schema` it resolves to the child's final text; with `opts.schema` (an object-rooted JSON Schema using ONLY type/properties/required/additionalProperties/items/enum/const/oneOf — no pattern/format/numeric bounds) it resolves to the validated object. Resolves `null` when the child fails (filter with `.filter(Boolean)`). Other opts: `label` (display), `phase` (progress group), and independent `provider`/`model` LLM target overrides (either may be provided alone). Anything else (`effort`/`isolation`/`agentType`) is rejected loudly. - `pipeline(items, ...stages): Promise<any[]>` — run each item through the stages independently with NO barrier between stages (prefer this for multi-stage work). Each stage receives `(prev, item, index)`. An ordinary stage throw drops that ITEM to `null` and skips its remaining stages. - `parallel(thunks): Promise<any[]>` — run zero-argument functions concurrently and await ALL of them (a barrier; use only when a stage genuinely needs every prior result together). A throwing thunk resolves to `null`. - `phase(title)` — start a progress phase; `log(message)` — narrate progress; `args` — the tool call's `args` input, verbatim. Misused hooks (bad arguments, unknown options, unsupported schemas, tripped caps) throw errors that ALWAYS kill the script — they never dissolve into a per-item `null`. Constraints: concurrency and total-agent caps apply; no filesystem, network, timers, or Node.js APIs are provided — the agents do the work, the script only coordinates them. The run executes in the foreground: this call returns when the whole script finishes.",
+    "tsArgs": "  /** Run a JavaScript workflow script that orchestrates subagents at scale. Use this for work that fans out across many independent pieces — an audit over many files, a migration, multi-angle research, adversarial verification of findings — where you write the orchestration as a script instead of delegating turn by turn. The workflow's identity rides the `meta` parameter as JSON: required `name` (short kebab-case) and `description` strings, optional `whenToUse` string and `phases` array (`{title, detail?, provider?, model?}`). The `script` parameter is the plain JavaScript body ONLY (NOT TypeScript, and NO `export const meta` statement — meta is a parameter, not code), running with top-level await; end with `return <value>` — the value must be JSON-serializable and is this tool's result. Script-body hooks: - `agent(prompt, opts?): Promise<any>` — run one subagent to completion. Without `opts.schema` it resolves to the child's final text; with `opts.schema` (an object-rooted JSON Schema using ONLY type/properties/required/additionalProperties/items/enum/const/oneOf — no pattern/format/numeric bounds) it resolves to the validated object. Resolves `null` when the child fails (filter with `.filter(Boolean)`). Other opts: `label` (display), `phase` (progress group), and independent `provider`/`model` LLM target overrides (either may be provided alone). Anything else (`effort`/`isolation`/`agentType`) is rejected loudly. - `pipeline(items, ...stages): Promise<any[]>` — run each item through the stages independently with NO barrier between stages (prefer this for multi-stage work). Each stage receives `(prev, item, index)`. An ordinary stage throw drops that ITEM to `null` and skips its remaining stages. - `parallel(thunks): Promise<any[]>` — run zero-argument functions concurrently and await ALL of them (a barrier; use only when a stage genuinely needs every prior result together). A throwing thunk resolves to `null`. - `phase(title)` — start a progress phase; `log(message)` — narrate progress; `args` — the tool call's `args` input, verbatim. Misused hooks (bad arguments, unknown options, unsupported schemas, tripped caps) throw errors that ALWAYS kill the script — they never dissolve into a per-item `null`. Constraints: concurrency and total-agent caps apply; no filesystem, network, timers, or Node.js APIs are provided — the agents do the work, the script only coordinates them. The run executes in the foreground: this call returns when the whole script finishes. */\n  workflow: {\n    /** The plain-JS workflow script body (top-level await allowed; NO `export const meta` statement; end with `return <json-value>`). */\n    script: string;\n    /** The workflow identity block (plain JSON — never code). */\n    meta: {\n      /** Short kebab-case workflow name. */\n      name: string;\n      /** One-line description of what the workflow does. */\n      description: string;\n      /** Optional guidance on when this workflow applies. */\n      whenToUse?: string;\n      /** Optional phase declarations matched by phase() calls. */\n      phases?: ({\n        /** The phase title phase() calls match by exact string. */\n        title: string;\n        /** Optional one-line description of the phase. */\n        detail?: string;\n        /** Optional provider override this phase is expected to use. */\n        provider?: string;\n        /** Optional model override this phase is expected to use. */\n        model?: string;\n      } & Record<string, JsonValue>)[];\n    } & Record<string, JsonValue>;\n    /** Optional JSON input exposed to the script as the `args` global (wrap a bare list as a field, e.g. {\"files\": [...]}). */\n    args?: Record<string, JsonValue>;\n  } & Record<string, JsonValue>;",
+    "tsOutput": "  workflow: {\n    runId: string;\n    agentsStarted: number;\n    result: JsonValue;\n  };",
+    "origin": {
+     "file": "/tmp/dsh-session-latest.jsonl",
+     "extractedAt": "2026-09-11T23:12:57.877Z"
+    }
+   }
+  },
+  {
+   "id": "mcp:codegraph",
+   "kind": "mcp",
+   "name": "codegraph",
+   "text": "codegraph граф кода call graph структура кода кто вызывает callers call-paths кодовая база symbol",
+   "meta": {
+    "serverName": "codegraph",
+    "activate": "mcp__router__search_and_activate"
+   }
+  },
+  {
+   "id": "mcp:context-mode",
+   "kind": "mcp",
+   "name": "context-mode",
+   "text": "context mode агрегация контекст index индекс корпус кодовой базы layer слои retrieval",
+   "meta": {
+    "serverName": "context-mode",
+    "activate": "mcp__router__search_and_activate"
+   }
+  },
+  {
+   "id": "mcp:tavily",
+   "kind": "mcp",
+   "name": "tavily",
+   "text": "tavily web search веб поиск интернет статьи research extract извлечь страницу search",
+   "meta": {
+    "serverName": "tavily",
+    "activate": "mcp__router__search_and_activate"
+   }
+  },
+  {
+   "id": "mcp:soc",
+   "kind": "mcp",
+   "name": "soc",
+   "text": "soc scenario сценарий ubuntu pool телеграмма telegram очередь e2e тесты room program lane",
+   "meta": {
+    "serverName": "soc",
+    "activate": "mcp__router__search_and_activate"
+   }
+  },
+  {
+   "id": "mcp:deep-research",
+   "kind": "mcp",
+   "name": "deep-research",
+   "text": "deep research диприсёч рисёч глубокое исследование multi-source исследование web источники",
+   "meta": {
+    "serverName": "deep-research",
+    "activate": "mcp__router__search_and_activate"
+   }
+  },
+  {
+   "id": "mcp:termseer",
+   "kind": "mcp",
+   "name": "termseer",
+   "text": "termseer terminal терминал screen zellij tmux кадры tui scrollback",
+   "meta": {
+    "serverName": "termseer",
+    "activate": "mcp__router__search_and_activate"
+   }
+  },
+  {
+   "id": "mcp:desktop-snapshot",
+   "kind": "mcp",
+   "name": "desktop-snapshot",
+   "text": "desktop snapshot скриншот экран screenshot рабочий стол снимок",
+   "meta": {
+    "serverName": "desktop-snapshot",
+    "activate": "mcp__router__search_and_activate"
+   }
+  }
+ ]
+}

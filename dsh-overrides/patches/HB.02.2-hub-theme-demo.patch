@@ -1,0 +1,173 @@
+# Goal:      демо тем в хабе /settings (строка Theme, ThemePreview)
+# Family:    HB.02
+# Status:    live
+# Files:     lib/types/components/hubSettings.js
+# Evidence:  TG-DSH-HUBTHEME-20260926 узел 2;
+#            reports/colab-hubtheme-72-20260927T010614Z/
+# Upstream:  not-applicable
+# Added:     2026-09-26 (TG-DSH-HUBTHEME-20260926 узел 2)
+
+# 72-hub-theme-demo (TG-DSH-HUBTHEME-20260926, node 2, 2026-09-26)
+# Goal:      демо тем на ПОВЕРХНОСТИ ЮЗЕРА — строка Theme хаба /settings.
+#            RCA узла 1: юзер листает темы в ХАБЕ (ThemeEntry,
+#            hubSettings.js, ←/→), НЕ в /theme-пикере; демо в хабе было
+#            1 строкой из 8 свотчей '██' («квадратики» из жалобы:
+#            «звёздочка зовет менять и квадратики?»), при этом
+#            полноформатное демо (патч 64 v2) жило только в пикере — на
+#            поверхности, которую юзер не открывает. Фикс: при фокусе
+#            строки Theme — живая демо-зона ThemePreview (патч 64 v2,
+#            переиспользование БЕЗ правок: palette=RAW option.theme
+#            кандидата, displayName, rows=бюджет, columns) по паттерну
+#            EffectEntry (патч 65, одобрен юзером: «демки остальных
+#            эффектов увидел, они ок»). Бюджет от геометрии: четверть
+#            терминала (22 строки → 5 рядов, 43 → 10), кап 14 (полный
+#            тир-сет ThemePreview) и кап вписывания в viewport хаба
+#            (rows−6); НИКАКИХ хардкодов геометрии. Свотчи '██' убраны;
+#            хинт «←/→ live preview · enter commits» остался компактной
+#            строкой. Клавиатура не тронута: ←/→ previewTheme hot-swap
+#            (перекраска демо на лету от candidate-состояния), Enter
+#            коммит setTheme, потеря фокуса — revert. demoLines поля
+#            theme — ГЕТТЕР над модульной hubThemeDemoLines
+#            (render-phase publish + bump() при изменении): единственная
+#            в хабе динамическая высота демо, windowing Settings.js
+#            читает field.custom?.demoLines при каждом рендере и должен
+#            резервировать ровно столько, сколько демо рисует (статика
+#            клипала бы зону на высоких терминалах или съедала бы строки
+#            списка под ней на низких).
+# Family:    UI.72 (hub theme demo, компаньон волны 64); порядковая схема
+#            01-71 — миграция SUBSYS.FF.B утверждена отдельной big-bang
+#            волной. Зона хунков примыкает к маркерам патчей 63/65
+#            (hubSettings.js) — применяется ПОСЛЕ них, контекст =
+#            post-63/65.
+# Status:    live (RED→GREEN: unit 4 FAIL→6 PASS; boot-проба 5 FAIL→12
+#            PASS ×3 геометрии 22×59/43×120/48×120; /theme-пикер
+#            не тронут — DEMO1-GREEN)
+# Files:     lib/types/components/hubSettings.js (ThemeEntry demo zone,
+#            post63/65 ~50/~120/~400)
+# Evidence:  .tmp-probes/hubtheme-72/ (unit-red.log, probe-red-*.log,
+#            probe-green-*.log, regress-*.log) — TaskGate
+#            TG-DSH-HUBTHEME-20260926 node 2.
+# Upstream:  not-applicable
+# Added:     2026-09-26, волна TG-DSH-HUBTHEME-20260926 (узел 2).
+#
+--- a/lib/types/components/hubSettings.js
++++ b/lib/types/components/hubSettings.js
+@@ -1,10 +1,13 @@
+ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+ import React from 'react';
+-import { Box, Text, useInput, useTheme, useAnimationFrame } from '../ui.js';
++import { Box, Text, useInput, useTheme, useAnimationFrame, useTerminalSize } from '../ui.js';
+ import { getTheme } from '../theme.js';
+ import { POINTER } from '../cc/figures.js';
+ import { isValidThemeColor } from '../customTheme.js';
+ import { getThemeOptions } from './ThemePicker.js';
++// dsh-overrides 72: hub theme demo — the /theme picker's live preview zone
++// (patch 64 v2) reused in the Theme row, painted with the CANDIDATE palette.
++import { ThemePreview } from './ThemePreview.js';
+ // dsh-overrides 65: settings/effects self-documenting examples — the demo
+ // registry (HUB_EXAMPLES) for the plain fields, plus the static effect and
+ // minimum-metric examples the custom entries mount below (booleans show on
+@@ -46,8 +49,17 @@
+  * - writeDshSettings/cycleStyle: the small shared helpers (exported for
+  *   tests).
+  */
+-/** Theme keys previewed in the demo swatch row (the ThemePicker set). */
+-const SWATCH_KEYS = ['background', 'text', 'success', 'warning', 'error', 'suggestion', 'claude', 'permission'];
++/**
++ * dsh-overrides 72: hub theme demo — the Theme row's demo line count is
++ * TERMINAL-SIZE DEPENDENT (every other entry's demoLines is static): the
++ * settings screen's focus-follow windowing reads it through the field
++ * spec's getter so the window reserves exactly what the demo renders (a
++ * static value would either clip the zone at tall geometries or blank the
++ * rows below it at short ones). ThemeEntry keeps it current — render-phase
++ * publish plus a bump() when it changes; the default is the 22-row user
++ * geometry (preview budget 5 + the hint line).
++ */
++let hubThemeDemoLines = 6;
+ /** The effect rows shown in the Эффекты group (sparks/statusrow + progress live elsewhere). */
+ const EFFECT_GROUP_KEYS = () => EFFECT_KEYS.filter(key => key !== 'sparkTps' && key !== 'sparkCache' && key !== 'toolProgressBars');
+ /**
+@@ -112,7 +124,10 @@
+                 label: 'Theme',
+                 kind: 'custom',
+                 group: 'hub-theme',
+-                custom: { type: 'theme', demoLines: 1 },
++                // dsh-overrides 72: dynamic getter (see hubThemeDemoLines) —
++                // the demo zone follows the terminal height, and so must the
++                // windowing line count that reserves room for it.
++                custom: { type: 'theme', get demoLines() { return hubThemeDemoLines; } },
+                 hint: '←/→ — live preview (the palette applies immediately, no write), enter — commit (the same chain as /theme: live + persist to theme.json). Focus leaves without enter — reverts to the committed theme.',
+             },
+             // ── Рамка ──
+@@ -384,10 +399,24 @@
+         return _jsx(MinimumMetricEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
+     return _jsx(EffectEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
+ }
+-/** Тема: ←/→ live preview (patch-37 chain), Enter commits via setTheme. */
++/**
++ * Тема: ←/→ live preview (patch-37 chain), Enter commits via setTheme.
++ *
++ * dsh-overrides 72: while focused, the row carries the /theme picker's
++ * LIVE demo zone (ThemePreview, patch 64 v2 — reused as-is) instead of the
++ * old one-line swatch row: header · powerline · input frame · transcript ·
++ * code · todo · styles · roles, all painted with the CANDIDATE's raw
++ * palette (the same option.theme the picker hands its preview), so ←/→
++ * recolors the demo on the fly. The row budget is the terminal's share
++ * (22 rows → 5, 43 → 10, capped at 14 — the picker's full tier set); the
++ * affordance hint stays one compact line below the zone. The keyboard
++ * chain is untouched: ←/→ previewTheme hot-swap, Enter commits via
++ * setTheme, focus loss reverts.
++ */
+ function ThemeEntry({ field, focused, bump, rowSlot }) {
+     const [themeName, setTheme, previewTheme, revertTheme] = useTheme();
+-    const names = React.useMemo(() => getThemeOptions(undefined).map(option => option.value), []);
++    const options = React.useMemo(() => getThemeOptions(undefined), []);
++    const names = React.useMemo(() => options.map(option => option.value), [options]);
+     const [candidate, setCandidate] = React.useState(null);
+     const previewRef = React.useRef(null);
+     useInput((input, key) => {
+@@ -424,10 +453,41 @@
+         }
+     }, [focused, revertTheme, bump]);
+     const shown = candidate ?? themeName;
+-    const theme = getTheme(shown);
++    const terminal = useTerminalSize();
++    // dsh-overrides 72: the demo budget — a quarter of the terminal (the
++    // 22-row user geometry gets 5 rows, 43 gets 10), capped by the tier
++    // map's full set (14) and by what fits in the settings viewport
++    // (rows − 4 chrome − the row itself − the hint). Never negative: tiny
++    // terminals degrade to a sliver, never to a broken layout.
++    const budget = Math.max(0, Math.min(14, terminal.rows - 6, Math.max(5, Math.floor(terminal.rows / 4))));
++    // The demo paints the CANDIDATE — same resolved palette + display name
++    // the /theme picker's preview uses (getThemeOptions rides both).
++    const shownOption = options.find(option => option.value === shown);
++    const demoPalette = shownOption?.theme ?? getTheme(shown);
++    const demoDisplayName = shownOption?.displayName ?? shown;
++    // Publish the live line count for the settings windowing's getter: the
++    // parent's entries were built before this child rendered, so a CHANGED
++    // budget also needs a bump() (the effect below) to re-render the
++    // screen with the corrected line count — one frame at most, and none
++    // at all on the steady 22-row default.
++    const demoLines = budget >= 1 ? budget + 1 : 0;
++    if (hubThemeDemoLines !== demoLines)
++        hubThemeDemoLines = demoLines;
++    const publishedRef = React.useRef(demoLines);
++    React.useEffect(() => {
++        if (publishedRef.current === demoLines)
++            return;
++        publishedRef.current = demoLines;
++        if (focused)
++            bump();
++    }, [demoLines, focused, bump]);
+     const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: shown }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" }), candidate !== null ? _jsx(Text, { color: "warning", children: " *" }) : null] })] }));
+-    const demo = (_jsxs(Text, { children: [...SWATCH_KEYS.map(key => _jsx(Text, { color: theme?.[key], children: "██" }, key)), _jsx(Text, { dimColor: true, children: "  ←/→ live preview · enter commits (theme.json)" })] }));
+-    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
++    // dsh-overrides 72: the live zone + the affordance hint (a compact
++    // one-liner — the swatch row it replaces was the «квадратики»
++    // complaint). ThemePreview gates its own rows by budget; null budget
++    // renders nothing (the row alone, as before the patch).
++    const demo = budget >= 1 ? (_jsxs(React.Fragment, { children: [_jsx(ThemePreview, { palette: demoPalette, displayName: demoDisplayName, rows: budget, columns: terminal.columns }), _jsx(Box, { height: 1, overflow: "hidden", children: _jsx(Text, { dimColor: true, wrap: "truncate-end", children: "←/→ live preview · enter commits (theme.json)" }) })] })) : null;
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused && demo !== null ? _jsx(Box, { paddingLeft: 4, flexDirection: "column", overflow: "hidden", children: demo }) : null] }));
+ }
+ /** Спиннер: ←/→ cycles the catalog (live frames), Enter writes spinner.<place>. */
+ function SpinnerEntry({ field, focused, channel, bump, rowSlot }) {

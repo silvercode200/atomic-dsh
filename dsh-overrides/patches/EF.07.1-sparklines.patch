@@ -1,0 +1,243 @@
+# Goal:      брайль-спарклайны tps/cache — OPT-IN
+# Family:    EF.07
+# Status:    live
+# Files:     lib/types/sparkline.js, lib/types/animationsMode.js,
+#            lib/types/tuiDisplayPrefs.js, lib/types/effectsCatalog.js,
+#            lib/types/dsh-adapter/plugin.js, lib/types/screens/StatusLine.js
+# Evidence:  TG-DSH-TUI-HUB-20260918 узел 3; reports/hub-frames/
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (TG-DSH-TUI-HUB-20260918 узел 3)
+
+--- a/lib/types/sparkline.js
++++ b/lib/types/sparkline.js
+@@ -0,0 +1,96 @@
++/**
++ * dsh-overrides 42: braille sparklines for the status row (OPT-IN only,
++ * custom mode): (a) token throughput tps, (b) cache-hit percent.
++ *
++ * A sparkline packs 2 columns x 4 rows of dots into ONE braille glyph —
++ * a 16-dot micro-graph per character cell. History: a render-driven
++ * ring buffer (each StatusLine render pushes the current reading), so
++ * the graph accumulates over the session without new timers.
++ *
++ * Cache honesty: routes that do not report cache fields (golden
++ * channel-probe) get NO sparkline — cacheHitPct returns undefined and
++ * the field hides itself; it never fakes a zero.
++ */
++/** Rows of the braille dot grid, bottom-to-top bit weights (col-major). */
++const BRAILLE_OFFSET = 0x2800;
++// dot layout per glyph (2 cols x 4 rows):
++//  col0: rows 0..3 -> bits 0x01 0x02 0x04 0x40   col1: 0x08 0x10 0x20 0x80
++const DOT = [
++    [0x01, 0x08], // row 0 (top)
++    [0x02, 0x10],
++    [0x04, 0x20],
++    [0x40, 0x80], // row 3 (bottom)
++];
++/**
++ * Render a braille sparkline of `values` into at most `width` glyphs.
++ * Values map linearly to the 8-dot vertical resolution; NaN/undefined
++ * samples are skipped (they leave a blank column).
++ * @returns The braille string ('' for no usable values).
++ */
++export function sparkline(values, width = 10) {
++    const clean = (values ?? []).filter(v => Number.isFinite(v));
++    if (clean.length === 0 || width <= 0)
++        return '';
++    const cols = Math.min(width * 2, clean.length);
++    // downsample: pick evenly spaced values when history is longer
++    const step = clean.length / cols;
++    const picked = [];
++    for (let i = 0; i < cols; i++)
++        picked.push(clean[Math.min(clean.length - 1, Math.floor(i * step))]);
++    const min = Math.min(...picked);
++    const max = Math.max(...picked);
++    const span = max - min;
++    let out = '';
++    for (let c = 0; c < picked.length; c += 2) {
++        let bits = 0;
++        for (let col = 0; col < 2; col++) {
++            const v = picked[c + col];
++            if (v === undefined)
++                continue;
++            // 0..1 position on the 8-dot height; flat series -> mid line
++            const t = span === 0 ? 0.5 : (v - min) / span;
++            const height = Math.max(1, Math.round(t * 8));
++            for (let row = 0; row < 4; row++) {
++                // row 0 is TOP: dots from bottom (row 3) upward
++                const fromBottom = 3 - row;
++                const filled = height > fromBottom * 2;
++                const partial = height === fromBottom * 2 + 1;
++                if (filled || partial)
++                    bits |= DOT[row][col];
++            }
++        }
++        out += String.fromCodePoint(BRAILLE_OFFSET + bits);
++    }
++    return out;
++}
++/** A fresh ring buffer of `max` samples. */
++export function newBuffer(max = 40) {
++    return { max, values: [] };
++}
++/** Push one finite sample; returns the (possibly new) buffer. */
++export function pushSample(buffer, value) {
++    if (buffer === undefined || buffer === null)
++        return buffer;
++    if (!Number.isFinite(value))
++        return buffer;
++    const values = [...buffer.values, value];
++    if (values.length > buffer.max)
++        values.splice(0, values.length - buffer.max);
++    return { max: buffer.max, values };
++}
++/**
++ * Cache-hit percent from a usage record: cacheRead of the total prompt
++ * mass. Undefined when the route does not report cache fields — the
++ * caller must HIDE the sparkline, never fake a zero.
++ */
++export function cacheHitPct(usage) {
++    if (usage === null || typeof usage !== 'object')
++        return undefined;
++    const { input, cacheRead, cacheWrite } = usage;
++    if (typeof input !== 'number' || typeof cacheRead !== 'number' || typeof cacheWrite !== 'number')
++        return undefined;
++    const total = input + cacheRead + cacheWrite;
++    if (total <= 0)
++        return undefined;
++    return (cacheRead / total) * 100;
++}
+--- a/lib/types/animationsMode.js
++++ b/lib/types/animationsMode.js
+@@ -38,9 +38,17 @@
+     // dsh-overrides 41: measurable-tool progress mini-bars (retrospective
+     // parse of the finished output — see toolProgress.js for the scope).
+     'toolProgressBars',
++    // dsh-overrides 42: braille sparklines (OPT-IN — the status row
++    // grows a second line; default OFF even in full, see OPT_IN_EFFECTS).
++    'sparkTps',
++    'sparkCache',
+ ];
+ const ANIMATION_MODES = new Set(['full', 'custom', 'off']);
+ const EFFECT_KEY_SET = new Set(EFFECT_KEYS);
++// dsh-overrides 42: OPT-IN effects are OFF unless explicitly enabled —
++// they change layout (the sparkline row) or are niche, so `full` does
++// NOT imply them; custom requires an explicit true.
++const OPT_IN_EFFECTS = new Set(['sparkTps', 'sparkCache']);
+ let animationsSetting; // 'full' | 'custom' | 'off' | undefined
+ let effectsSetting; // {key: boolean} partial (custom mode)
+ /** @internal channel-owned setter; also called once at boot. */
+@@ -81,6 +89,10 @@
+     const mode = animationsMode();
+     if (mode === 'off')
+         return false;
++    if (OPT_IN_EFFECTS.has(key)) {
++        // opt-in: OFF in full; custom needs an explicit true
++        return mode === 'custom' && effectsSetting?.[key] === true;
++    }
+     if (mode === 'full')
+         return true;
+     // custom: unset key means ON (opt-out)
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -109,6 +109,19 @@
+  * dsh-overrides 40: the ctx-bar shape — 'full' (6 cells, default),
+  * 'narrow' (3 cells), 'percent-only' (just the % text, no bar).
+  */
++/**
++ * dsh-overrides 42: the sparkline config layer (appearance.sparklines
++ * {tps: boolean, cache: boolean}) — both OPT-IN; a partial object fills
++ * the missing key with false; garbage yields undefined (dead key).
++ */
++export function normalizeSparklines(value) {
++    if (value === null || typeof value !== 'object' || Array.isArray(value))
++        return undefined;
++    const hasAny = typeof value.tps === 'boolean' || typeof value.cache === 'boolean';
++    if (!hasAny)
++        return undefined;
++    return { tps: value.tps === true, cache: value.cache === true };
++}
+ export function normalizeCtxBarMode(value) {
+     return typeof value === 'string' && CTX_BAR_MODES.has(value) ? value : undefined;
+ }
+--- a/lib/types/effectsCatalog.js
++++ b/lib/types/effectsCatalog.js
+@@ -22,6 +22,9 @@
+     barGradientFill: 'Заливка бара контекста — градиент вдоль клеток',
+     // dsh-overrides 41: tool-progress wave.
+     toolProgressBars: 'Мини-бар прогресса в карточке инструмента (curl/wget/tqdm — итоговый разбор вывода)',
++    // dsh-overrides 42: sparklines (OPT-IN: включаются только явно).
++    sparkTps: 'Спарклайн скорости генерации (ток/сек) брайль-глифами во второй строке статус-ряда',
++    sparkCache: 'Спарклайн % попаданий в кеш запросов во второй строке статус-бара (скрывается, если маршрут не отдаёт кеш-поля)',
+ };
+ /**
+  * The description for a registry key, or the key itself (with a warn) when
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -604,6 +604,11 @@
+                 // dsh-overrides 40 (delta 1): status-row path shape —
+                 // full | compact (last segment only). NOT statusBar.compact.
+                 cwdMode: Schema.union(['full', 'compact']).required(false),
++                // dsh-overrides 42: braille sparklines (OPT-IN).
++                sparklines: Schema.object({
++                    tps: Schema.boolean().required(false),
++                    cache: Schema.boolean().required(false),
++                }).required(false),
+                 animations: Schema.union(['full', 'custom', 'off']).required(false),
+                 effects: Schema.object(Object.fromEntries(EFFECT_KEYS.map(key => [key, Schema.boolean().required(false)]))).required(false),
+             }).required(false),
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -9,6 +9,8 @@
+ import { interpolateColor, parseRGB } from '../components/Spinner/spinnerUtils.js';
+ import { t } from '../i18n.js';
+ import { formatContextUsage, DEFAULT_STATUS_BAR, compactCwd, normalizePowerlineStyle, normalizeStatusBar, subCells } from '../tuiDisplayPrefs.js';
++// dsh-overrides 42: braille sparklines (opt-in).
++import { cacheHitPct, newBuffer, pushSample, sparkline } from '../sparkline.js';
+ import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js';
+ import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js';
+ import { GoalStatusChip } from '../components/GoalTodoPanel.js';
+@@ -242,6 +244,33 @@
+     }
+     return (_jsx(Box, { flexShrink: 0, flexDirection: "row", overflow: "hidden", children: nodes }));
+ }
++/**
++ * dsh-overrides 42: the optional sparkline row — a SECOND status line
++ * (mounted only when an opt-in spark effect is enabled) with braille
++ * graphs: tps throughput and cache-hit percent. History is a render-
++ * driven ring buffer; the cache graph HIDES itself when the route does
++ * not report cache fields (never fakes a zero).
++ */
++const SPARK_HISTORY = 40;
++function SparkRow({ channel, columns }) {
++    const tpsOn = effectEnabled('sparkTps');
++    const cacheOn = effectEnabled('sparkCache');
++    const tpsBuf = React.useRef(newBuffer(SPARK_HISTORY));
++    const cacheBuf = React.useRef(newBuffer(SPARK_HISTORY));
++    if (tpsOn && Number.isFinite(channel.tps))
++        tpsBuf.current = pushSample(tpsBuf.current, channel.tps);
++    const cachePct = cacheHitPct(channel.lastUsage);
++    if (cacheOn && cachePct !== undefined)
++        cacheBuf.current = pushSample(cacheBuf.current, cachePct);
++    const parts = [];
++    if (tpsOn)
++        parts.push(_jsxs(Text, { dimColor: true, children: ["⎇ ", _jsx(Text, { color: "claude", children: sparkline(tpsBuf.current.values, 16) }), " ", `${(channel.tps ?? 0).toFixed(1)} t/s`] }, "tps"));
++    if (cacheOn && cachePct !== undefined)
++        parts.push(_jsxs(Text, { dimColor: true, children: ["◆ ", _jsx(Text, { color: "success", children: sparkline(cacheBuf.current.values, 16) }), " ", `${Math.round(cachePct)}% cache`] }, "cache"));
++    if (parts.length === 0)
++        return null;
++    return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexDirection: "row", gap: 2, overflow: "hidden", children: parts })] }));
++}
+ export function StatusLine({ channel, selectionActive = false, helpOpen = false, wake, fullscreen = false, }) {
+     const { columns } = useTerminalSize();
+     const [themeName] = useTheme();
+@@ -581,7 +610,8 @@
+     // to damage, and hover detail only works there anyway (AlternateScreen
+     // supplies the mouse tracking).
+     const mountSupplementalRow = fullscreen && showSupplementalRow;
+-    return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
++    const sparkRow = _jsx(SparkRow, { channel: channel, columns: columns });
++    return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [sparkRow, barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
+                         ? (current !== null && current.startsWith('segment:') ? null : current)
+                         : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: powerlineTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: powerlineRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
+ }

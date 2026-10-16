@@ -1,0 +1,121 @@
+# Goal:      animations boolean-легаси: схема+нормализатор false→off
+# Family:    EF.02
+# Status:    live
+# Files:     lib/types/tuiDisplayPrefs.js, lib/types/dsh-adapter/plugin.js
+# Evidence:  TG-DSH-VISUAL-20260925 узел 1 (v2);
+#            reports/colab-golden68-run1-20260925T203326Z/
+# Upstream:  not-applicable
+# Added:     2026-09-25 (TG-DSH-VISUAL-20260925 узел 1); v2 2026-09-26
+
+# 66-animations-boolean-gate (TG-DSH-VISUAL-20260925 node 1, v2 2026-09-26)
+# Goal:      appearance.animations принимает boolean-легаси из settings.yaml
+#            юзера (`animations: false`) — НА ДВУХ УРОВНЯХ:
+#            (1) СХЕМА настроек (plugin.js): старый union строк БРОСАЛ
+#            ValidationError на boolean → вся секция dsh-tui не резолвилась
+#            («keeps the last good section» = дефолты на свежем буте) →
+#            fullscreen: false терялся → FULLSCREEN-бут из cordis.patch.yml
+#            + дефолт-статусбар + анимации 'full' (дыхание, от которого
+#            юзер и пытался избавиться). Доказано VM-репликой 25.09
+#            (golden68-run1: mode_inline alt=1; Test B — убрал строку →
+#            ALT=0) — 3 «неожидаемых» фейла прогона = один этот корень.
+#            (2) НОРМАЛИЗАТОР: false→'off', true→'full' (defense-in-depth;
+#            через settings значение уже строка — граница маппит).
+#            Маппинг один: Schema.transform(Schema.boolean(),
+#            normalizeAnimationsStyle). Числа/null — dead key (контракт
+#            меняется ТОЛЬКО для boolean; null/unset ведут себя как раньше).
+# Family:    UI.33 (LIVE42 animation-wave; delta к патчу 33 — гейт был
+#            слеп к boolean-форме ручки И ронял секцию целиком)
+# Status:    verified (RED→GREEN на песочнице 01-68; fresh-apply failed=0;
+#            live-профиль не тронут — live-apply за main после VM GREEN)
+# Files:     lib/types/tuiDisplayPrefs.js (normalizeAnimationsStyle +
+#            animationsSetting export), lib/types/dsh-adapter/plugin.js
+#            (settings schema: поле animations)
+# Evidence:  .tmp-probes/66-work/red-schema-boundary.log (RED: поле не
+#            экспортировано / ValidationError на boolean),
+#            .tmp-probes/66-work/green-66-v2.log (GREEN 18/18 + сьют
+#            166/167, 1 pre-existing EFFECT_DESCRIPTIONS),
+#            reports/colab-golden68-run1-20260925T203326Z/ (RED-прогон:
+#            mode_inline/sweep_w47/geometry_fuzz = симптомы отвержения),
+#            .tmp-probes/66-work/verify-apply-66-v2.log + verify-fullseries-66-v2.log
+#            — TaskGate TG-DSH-VISUAL-20260925 nodes 1+6
+# Upstream:  not-applicable
+# Added:     2026-09-25, волна TG-DSH-VISUAL-20260925 (узел 1); v2 2026-09-26
+#            (main): добавлен schema-уровень после root-cause VM-реплики.
+
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -3,6 +3,10 @@
+ // reuses customTheme's validator so `appearance.inputBorder` accepts
+ // exactly the same forms a theme file may (customTheme does not import
+ // this module, so the edge adds no cycle).
++// dsh-overrides 66: the settings-schema field for appearance.animations
++// is defined here (next to the normalizer it reuses) so the plugin's
++// schema and the unit tests share ONE definition.
++import Schema from '@deepseek-ai/schemastery';
+ import { isValidThemeColor } from './customTheme.js';
+ // dsh-overrides 33: effect-map normalization lives with the registry
+ // (animationsMode has no imports back into this module — no cycle).
+@@ -90,10 +94,37 @@
+ // effect on (default); 'custom' = per-effect opt-out through the
+ // `effects` map; 'off' = the whole wave static.
+ const ANIMATIONS_STYLES = new Set(['full', 'custom', 'off']);
+-/** Normalize an appearance.animations value to the enum, else undefined. */
++// dsh-overrides 66: `animations: false` (boolean) is the legacy form of
++// the knob — the user settings.yaml predates the string enum. Map it
++// instead of dropping it: the dropped boolean fell through undefined to
++// the mode 'full' fallback and the input border kept breathing (user
++// report 2026-09-25: «рамка ввода как мигала так и мигает»). false→'off',
++// true→'full'; numbers/null/undefined stay dead keys (undefined) — the
++// contract changes ONLY for the boolean form.
++/** Normalize an appearance.animations value to the enum; the boolean
++ * legacy form maps (false→'off', true→'full'); anything else → undefined. */
+ export function normalizeAnimationsStyle(value) {
++    if (value === false)
++        return 'off';
++    if (value === true)
++        return 'full';
+     return typeof value === 'string' && ANIMATIONS_STYLES.has(value) ? value : undefined;
+ }
++// dsh-overrides 66: settings-schema field for appearance.animations. The
++// plain string union REJECTED the boolean legacy form — and a failed field
++// fails the WHOLE dsh-tui section resolve (the settings service keeps the
++// last good section; on a fresh boot that is the schema defaults with
++// `fullscreen` unset), so `animations: false` in the user settings.yaml
++// silently dropped fullscreen: false, the statusBar config and the
++// appearance layer along with it (fullscreen boot from cordis.patch.yml,
++// factory status bar, breathing frame — the very flicker the user tried
++// to switch off; VM replica 2026-09-25, golden68-run1: mode_inline FAIL).
++// Map the boolean at the schema boundary through normalizeAnimationsStyle
++// (single source of the false→'off' / true→'full' mapping); null and
++// unset behave exactly as before, numbers/other junk still fail the
++// section — the contract changes ONLY for the boolean form.
++export const animationsSetting = Schema.union(['full', 'custom', 'off',
++    Schema.transform(Schema.boolean(), normalizeAnimationsStyle)]);
+ /**
+  * dsh-overrides 36: resolve the app background color. Theme-first
+  * design: the theme's `appBackground` key is the usual source (the
+
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -33,7 +33,7 @@
+ import { resolveSessionCwd } from '../utils/workspaceRoot.js';
+ import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js';
+ import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js';
+-import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground } from '../tuiDisplayPrefs.js';
++import { animationsSetting, DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground } from '../tuiDisplayPrefs.js';
+ import { draftComboConflicts, effectiveComboString, parseComboDraft, setKeymapOverrides, SHORTCUT_ACTIONS, } from '../utils/keymap.js';
+ import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js';
+ import { attachHerdrIntegration } from '../herdr.js';
+@@ -620,7 +620,11 @@
+                     tps: Schema.boolean().required(false),
+                     cache: Schema.boolean().required(false),
+                 }).required(false),
+-                animations: Schema.union(['full', 'custom', 'off']).required(false),
++                // dsh-overrides 66: the field accepts the boolean legacy form
++                // (mapped at the boundary — see animationsSetting in
++                // tuiDisplayPrefs.js); a boolean used to fail the WHOLE
++                // dsh-tui section resolve here.
++                animations: animationsSetting.required(false),
+                 effects: Schema.object(Object.fromEntries(EFFECT_KEYS.map(key => [key, Schema.boolean().required(false)]))).required(false),
+             }).required(false),
+             // dsh-overrides 35: user spinner-verb customization (top-level

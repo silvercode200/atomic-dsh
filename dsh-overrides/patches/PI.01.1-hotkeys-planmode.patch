@@ -1,0 +1,59 @@
+# Goal:      shift+tab=plan, ctrl+a=dashboard (keymap+PromptInput)
+# Family:    PI.01
+# Status:    live
+# Files:     lib/types/utils/keymap.js, lib/types/components/PromptInput.js
+# Evidence:  reports/wavec-c/; facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-12, W3C Wave C (status bar)
+
+--- a/lib/types/utils/keymap.js
++++ b/lib/types/utils/keymap.js
+@@ -166,7 +166,11 @@
+     { id: 'editor', defaults: ['ctrl+g'] },
+     { id: 'transcript', defaults: ['ctrl+o'] },
+     { id: 'trajectory', defaults: ['ctrl+t'] },
+-    { id: 'dashboard', defaults: ['ctrl+a'] },
++    // dsh-overrides 18: dashboard moved off ctrl+a — the combo dual-used with
++    // the readline line-start editor binding. The Cyrillic alias covers the
++    // same physical key on a Russian layout (ф). The trailing-m strip in
++    // GoalTodoPanel's todoFoldMod() is unrelated (todoFold keeps ctrl+q).
++    { id: 'dashboard', defaults: ['ctrl+shift+a', 'ctrl+shift+ф'] },
+     { id: 'contextPanel', defaults: ['ctrl+p'] },
+     { id: 'showAll', defaults: ['ctrl+e'] },
+     { id: 'redraw', defaults: ['ctrl+l'] },
+--- a/lib/types/components/PromptInput.js
++++ b/lib/types/components/PromptInput.js
+@@ -1239,16 +1239,25 @@
+         if (expandedRef.current && key.tab) {
+             if (!key.shift)
+                 insertAtCaret('    ');
+             return;
+         }
+-        // Shift+Tab cycles the configured session modes (default: 默认 →
+-        // 计划模式 → 完全访问; each mode bundles plan/sandbox/approval atoms —
+-        // see the `modes` config). Must precede the plain-Tab arms — the parser
+-        // reports backtab as key.tab + key.shift.
+-        if (key.tab && key.shift) {
+-            void channel.cycleMode();
+-            return;
+-        }
++        // dsh-overrides 18: shift+tab toggles plan mode directly — the same
++        // dispatch path as the /plan command's on/off picker (runExternalCommand
++        // 'plan', arg ' off' to leave, '' to enter). Falls back to a notify when
++        // dsh-plan-mode is not mounted. Must precede the plain-Tab arms.
++        if (key.tab && key.shift) {
++            // Mode flip is mirrored by the status bar mode field and the prompt
++            // accent, so no success toast — only the missing-command fallback.
++            void channel.runExternalCommand('plan', channel.mode.plan === true ? ' off' : '')
++                .catch(() => channel.notify(t('command-not-found', { name: 'plan' }), { color: 'error', timeoutMs: 2500 }));
++            return;
++        }
++        // dsh-overrides 18: session-mode cycle moved to ctrl+tab (was shift+tab;
++        // freed for the plan-mode toggle).
++        if (key.tab && key.ctrl) {
++            void channel.cycleMode();
++            return;
++        }
+         if (key.tab && fileOverlayOpen) {
+             const file = fileMatches[fileSelected];
+             if (file)

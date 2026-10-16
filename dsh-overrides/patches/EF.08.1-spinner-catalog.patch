@@ -1,0 +1,363 @@
+# Goal:      каталог 58 стилей спиннеров по местам
+# Family:    EF.08
+# Status:    live
+# Files:     lib/types/spinnerCatalog.js, lib/types/tuiDisplayPrefs.js,
+#            lib/types/dsh-adapter/plugin.js, lib/types/dsh-adapter/channel.js,
+#            lib/types/components/WorkingSpinner.js,
+#            lib/types/screens/AgentView.js,
+#            lib/types/components/ToolUseLoader.js, lib/types/screens/Chat.js
+# Evidence:  TG-DSH-TUI-HUB-20260918 узел 4; reports/hub-frames/
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (TG-DSH-TUI-HUB-20260918 узел 4)
+
+--- a/lib/types/spinnerCatalog.js
++++ b/lib/types/spinnerCatalog.js
+@@ -0,0 +1,102 @@
++/**
++ * dsh-overrides 43: spinner style catalog — frames inlined from
++ * sindresorhus/cli-spinners (spinners.json), MIT License:
++ *
++ *   MIT License
++ *   Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)
++ *
++ *   Permission is hereby granted, free of charge, to any person obtaining
++ *   a copy of this software and associated documentation files (the
++ *   "Software"), to deal in the Software without restriction, including
++ *   without limitation the rights to use, copy, modify, merge, publish,
++ *   distribute, sublicense, and/or sell copies of the Software, and to
++ *   permit persons to whom the Software is furnished to do so, subject to
++ *   the following conditions:
++ *
++ *   The above copyright notice and this permission notice shall be
++ *   included in all copies or substantial portions of the Software.
++ *
++ * Curated (dsh): styles by family — braille dots/bounce, arrows, moon, clock,
++ * aesthetic bars, toggles, pulse — each tagged with the UI place it suits
++ * (main spinner / subagent rows / tool cards / any). The frame math is the
++ * upstream SpinnerGlyph's (frame = floor(time / interval)).
++ */
++/** frame list + cadence + the UI place the style suits. */
++/** frame list + cadence + the UI place the style suits. */
++export const SPINNER_CATALOG = {
++    "dots": { frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], interval: 80, place: 'any' },
++    "dots2": { frames: ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"], interval: 80, place: 'any' },
++    "dots3": { frames: ["⠋", "⠙", "⠚", "⠞", "⠖", "⠦", "⠴", "⠲", "⠳", "⠓"], interval: 80, place: 'any' },
++    "dots4": { frames: ["⠄", "⠆", "⠇", "⠋", "⠙", "⠸", "⠰", "⠠", "⠰", "⠸", "⠙", "⠋", "⠇", "⠆"], interval: 80, place: 'any' },
++    "dots5": { frames: ["⠋", "⠙", "⠚", "⠒", "⠂", "⠂", "⠒", "⠲", "⠴", "⠦", "⠖", "⠒", "⠐", "⠐", "⠒", "⠓", "⠋"], interval: 80, place: 'any' },
++    "dots6": { frames: ["⠁", "⠉", "⠙", "⠚", "⠒", "⠂", "⠂", "⠒", "⠲", "⠴", "⠤", "⠄", "⠄", "⠤", "⠴", "⠲", "⠒", "⠂", "⠂", "⠒", "⠚", "⠙", "⠉", "⠁"], interval: 80, place: 'any' },
++    "dots8": { frames: ["⠁", "⠁", "⠉", "⠙", "⠚", "⠒", "⠂", "⠂", "⠒", "⠲", "⠴", "⠤", "⠄", "⠄", "⠤", "⠠", "⠠", "⠤", "⠦", "⠖", "⠒", "⠐", "⠐", "⠒", "⠓", "⠋", "⠉", "⠈", "⠈"], interval: 80, place: 'any' },
++    "dots9": { frames: ["⢹", "⢺", "⢼", "⣸", "⣇", "⡧", "⡗", "⡏"], interval: 80, place: 'any' },
++    "dots10": { frames: ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"], interval: 80, place: 'any' },
++    "dots11": { frames: ["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"], interval: 100, place: 'any' },
++    "dots12": { frames: ["⢀⠀", "⡀⠀", "⠄⠀", "⢂⠀", "⡂⠀", "⠅⠀", "⢃⠀", "⡃⠀", "⠍⠀", "⢋⠀", "⡋⠀", "⠍⠁", "⢋⠁", "⡋⠁", "⠍⠉", "⠋⠉", "⠋⠉", "⠉⠙", "⠉⠙", "⠉⠩", "⠈⢙", "⠈⡙", "⢈⠩", "⡀⢙", "⠄⡙", "⢂⠩", "⡂⢘", "⠅⡘", "⢃⠨", "⡃⢐", "⠍⡐", "⢋⠠", "⡋⢀", "⠍⡁", "⢋⠁", "⡋⠁", "⠍⠉", "⠋⠉", "⠋⠉", "⠉⠙", "⠉⠙", "⠉⠩", "⠈⢙", "⠈⡙", "⠈⠩", "⠀⢙", "⠀⡙", "⠀⠩", "⠀⢘", "⠀⡘", "⠀⠨", "⠀⢐", "⠀⡐", "⠀⠠", "⠀⢀", "⠀⡀"], interval: 80, place: 'any' },
++    "dotsCircle": { frames: ["⢎ ", "⠎⠁", "⠊⠑", "⠈⠱", " ⡱", "⢀⡰", "⢄⡠", "⢆⡀"], interval: 80, place: 'any' },
++    "bounce": { frames: ["⠁", "⠂", "⠄", "⠂"], interval: 120, place: 'subagent' },
++    "pong": { frames: ["▐⠂       ▌", "▐⠈       ▌", "▐ ⠂      ▌", "▐ ⠠      ▌", "▐  ⡀     ▌", "▐  ⠠     ▌", "▐   ⠂    ▌", "▐   ⠈    ▌", "▐    ⠂   ▌", "▐    ⠠   ▌", "▐     ⡀  ▌", "▐     ⠠  ▌", "▐      ⠂ ▌", "▐      ⠈ ▌", "▐       ⠂▌", "▐       ⠠▌", "▐       ⡀▌", "▐      ⠠ ▌", "▐      ⠂ ▌", "▐     ⠈  ▌", "▐     ⠂  ▌", "▐    ⠠   ▌", "▐    ⡀   ▌", "▐   ⠠    ▌", "▐   ⠂    ▌", "▐  ⠈     ▌", "▐  ⠂     ▌", "▐ ⠠      ▌", "▐ ⡀      ▌", "▐⠠       ▌"], interval: 80, place: 'main' },
++    "grenade": { frames: ["،  ", "′  ", " ´ ", " ‾ ", "  ⸌", "  ⸊", "  |", "  ⁎", "  ⁕", " ෴ ", "  ⁓"], interval: 80, place: 'main' },
++    "shark": { frames: ["▐|\\____________▌", "▐_|\\___________▌", "▐__|\\__________▌", "▐___|\\_________▌", "▐____|\\________▌", "▐_____|\\_______▌", "▐______|\\______▌", "▐_______|\\_____▌", "▐________|\\____▌", "▐_________|\\___▌", "▐__________|\\__▌", "▐___________|\\_▌", "▐____________|\\▌", "▐____________/|▌", "▐___________/|_▌", "▐__________/|__▌", "▐_________/|___▌", "▐________/|____▌", "▐_______/|_____▌", "▐______/|______▌", "▐_____/|_______▌", "▐____/|________▌", "▐___/|_________▌", "▐__/|__________▌", "▐_/|___________▌", "▐/|____________▌"], interval: 120, place: 'main' },
++    "bouncingBall": { frames: ["( ●    )", "(  ●   )", "(   ●  )", "(    ● )", "(     ●)", "(    ● )", "(   ●  )", "(  ●   )", "( ●    )", "(●     )"], interval: 80, place: 'main' },
++    "bouncingBar": { frames: ["[    ]", "[=   ]", "[==  ]", "[=== ]", "[====]", "[ ===]", "[  ==]", "[   =]", "[    ]", "[   =]", "[  ==]", "[ ===]", "[====]", "[=== ]", "[==  ]", "[=   ]"], interval: 80, place: 'toolCard' },
++    "moon": { frames: ["🌑 ", "🌒 ", "🌓 ", "🌔 ", "🌕 ", "🌖 ", "🌗 ", "🌘 "], interval: 80, place: 'any' },
++    "clock": { frames: ["🕛 ", "🕐 ", "🕑 ", "🕒 ", "🕓 ", "🕔 ", "🕕 ", "🕖 ", "🕗 ", "🕘 ", "🕙 ", "🕚 "], interval: 100, place: 'any' },
++    "earth": { frames: ["🌍 ", "🌎 ", "🌏 "], interval: 180, place: 'any' },
++    "smiley": { frames: ["😄 ", "😝 "], interval: 200, place: 'any' },
++    "star": { frames: ["✶", "✸", "✹", "✺", "✹", "✷"], interval: 70, place: 'main' },
++    "star2": { frames: ["+", "x", "*"], interval: 80, place: 'main' },
++    "hearts": { frames: ["💛 ", "💙 ", "💜 ", "💚 ", "💗 "], interval: 100, place: 'main' },
++    "orangePulse": { frames: ["🔸 ", "🔶 ", "🟠 ", "🟠 ", "🔶 "], interval: 100, place: 'toolCard' },
++    "bluePulse": { frames: ["🔹 ", "🔷 ", "🔵 ", "🔵 ", "🔷 "], interval: 100, place: 'toolCard' },
++    "aesthetic": { frames: ["▰▱▱▱▱▱▱", "▰▰▱▱▱▱▱", "▰▰▰▱▱▱▱", "▰▰▰▰▱▱▱", "▰▰▰▰▰▱▱", "▰▰▰▰▰▰▱", "▰▰▰▰▰▰▰", "▰▱▱▱▱▱▱"], interval: 80, place: 'toolCard' },
++    "toggle": { frames: ["⊶", "⊷"], interval: 250, place: 'toolCard' },
++    "toggle2": { frames: ["▫", "▪"], interval: 80, place: 'toolCard' },
++    "toggle3": { frames: ["□", "■"], interval: 120, place: 'toolCard' },
++    "toggle4": { frames: ["■", "□", "▪", "▫"], interval: 100, place: 'toolCard' },
++    "toggle5": { frames: ["▮", "▯"], interval: 100, place: 'toolCard' },
++    "toggle6": { frames: ["ဝ", "၀"], interval: 300, place: 'toolCard' },
++    "toggle7": { frames: ["⦾", "⦿"], interval: 80, place: 'toolCard' },
++    "toggle8": { frames: ["◍", "◌"], interval: 100, place: 'toolCard' },
++    "toggle9": { frames: ["◉", "◎"], interval: 100, place: 'toolCard' },
++    "toggle10": { frames: ["㊂", "㊀", "㊁"], interval: 100, place: 'toolCard' },
++    "arrow": { frames: ["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"], interval: 100, place: 'subagent' },
++    "arrow2": { frames: ["⬆️ ", "↗️ ", "➡️ ", "↘️ ", "⬇️ ", "↙️ ", "⬅️ ", "↖️ "], interval: 80, place: 'subagent' },
++    "arrow3": { frames: ["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸"], interval: 120, place: 'subagent' },
++    "layer": { frames: ["-", "=", "≡"], interval: 150, place: 'toolCard' },
++    "line": { frames: ["-", "\\", "|", "/"], interval: 130, place: 'any' },
++    "line2": { frames: ["⠂", "-", "–", "—", "–", "-"], interval: 100, place: 'any' },
++    "pipe": { frames: ["┤", "┘", "┴", "└", "├", "┌", "┬", "┐"], interval: 100, place: 'any' },
++    "squareCorners": { frames: ["◰", "◳", "◲", "◱"], interval: 180, place: 'toolCard' },
++    "circleQuarters": { frames: ["◴", "◷", "◶", "◵"], interval: 120, place: 'toolCard' },
++    "circleHalves": { frames: ["◐", "◓", "◑", "◒"], interval: 50, place: 'toolCard' },
++    "squish": { frames: ["╫", "╪"], interval: 100, place: 'subagent' },
++    "monkey": { frames: ["🙈 ", "🙈 ", "🙉 ", "🙊 "], interval: 300, place: 'main' },
++    "fingerDance": { frames: ["🤘 ", "🤟 ", "🖖 ", "✋ ", "🤚 ", "👆 "], interval: 160, place: 'main' },
++    "fistBump": { frames: ["🤜　　　　🤛 ", "🤜　　　　🤛 ", "🤜　　　　🤛 ", "　🤜　　🤛　 ", "　　🤜🤛　　 ", "　🤜✨🤛　　 ", "🤜　✨　🤛　 "], interval: 80, place: 'main' },
++    "speaker": { frames: ["🔈 ", "🔉 ", "🔊 ", "🔉 "], interval: 160, place: 'any' },
++    "hamburger": { frames: ["☱", "☲", "☴"], interval: 100, place: 'toolCard' },
++    "runner": { frames: ["🚶 ", "🏃 "], interval: 140, place: 'main' },
++    "binary": { frames: ["010010", "001100", "100101", "111010", "111101", "010111", "101011", "111000", "110011", "110101"], interval: 80, place: 'toolCard' },
++    "growHorizontal": { frames: ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "▊", "▋", "▌", "▍", "▎"], interval: 120, place: 'toolCard' },
++    "flip": { frames: ["_", "_", "_", "-", "`", "`", "'", "´", "-", "_", "_", "_"], interval: 70, place: 'any' },
++};
++
++/** All catalog names in display order. */
++export const SPINNER_NAMES = Object.keys(SPINNER_CATALOG);
++/**
++ * Resolve a catalog entry by name ('' / unknown → undefined; the caller
++ * keeps the built-in default).
++ */
++export function getSpinnerStyle(name) {
++    if (typeof name !== 'string' || name === '')
++        return undefined;
++    return SPINNER_CATALOG[name];
++}
++/** Names suited to a place (or all names for 'any'). */
++export function spinnerNamesFor(place) {
++    return SPINNER_NAMES.filter(name => SPINNER_CATALOG[name].place === place || SPINNER_CATALOG[name].place === 'any');
++}
++
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -7,6 +7,7 @@
+ // dsh-overrides 33: effect-map normalization lives with the registry
+ // (animationsMode has no imports back into this module — no cycle).
+ import { EFFECT_KEYS } from './animationsMode.js';
++import { SPINNER_CATALOG } from './spinnerCatalog.js';
+ 
+ /** Defaults keep the essential route/context information visible. */
+ export const DEFAULT_STATUS_BAR = Object.freeze({
+@@ -122,6 +123,20 @@
+         return undefined;
+     return { tps: value.tps === true, cache: value.cache === true };
+ }
++/**
++ * dsh-overrides 43: spinner style preferences (dsh-tui.spinner
++ * {main, subagent, toolCard}) — each a catalog name or '' (the built-in
++ * look). Unknown names drop the whole object (dead key).
++ */
++export function normalizeSpinnerPrefs(value) {
++    if (value === null || typeof value !== 'object' || Array.isArray(value))
++        return undefined;
++    const valid = (v) => v === '' || (typeof v === 'string' && v in SPINNER_CATALOG);
++    const hasAny = ['main', 'subagent', 'toolCard'].some(k => value[k] !== undefined);
++    if (!hasAny || !Object.entries(value).every(([k, v]) => ['main', 'subagent', 'toolCard'].includes(k) && valid(v)))
++        return undefined;
++    return { main: value.main ?? '', subagent: value.subagent ?? '', toolCard: value.toolCard ?? '' };
++}
+ export function normalizeCtxBarMode(value) {
+     return typeof value === 'string' && CTX_BAR_MODES.has(value) ? value : undefined;
+ }
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -619,6 +619,13 @@
+                 mode: Schema.union(['replace', 'append']).required(false),
+                 verbs: Schema.array(Schema.string()).required(false),
+             }).required(false),
++            // dsh-overrides 43: spinner style per UI place (catalog names
++            // or '' for the built-in look; see lib/types/spinnerCatalog.js).
++            spinner: Schema.object({
++                main: Schema.string().required(false),
++                subagent: Schema.string().required(false),
++                toolCard: Schema.string().required(false),
++            }).required(false),
+             // Built-in action-shortcut overrides, one optional combo string per
+             // action (see src/utils/keymap.ts). Unset keeps the default binding
+             // and the section's format() shows the effective combos.
+@@ -683,6 +690,8 @@
+             channel.setAppearance(merged);
+             // dsh-overrides 35: verb customization rides the same apply.
+             channel.setSpinnerVerbs(value.spinnerVerbs);
++            // dsh-overrides 43: per-place spinner styles.
++            channel.setSpinnerPrefs(value.spinner);
+             const theme = value.appearance?.theme;
+             setSettingsThemePref(typeof theme === 'string' ? theme : undefined);
+         };
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -47,6 +47,9 @@
+ import { modeDisplayName, resolveSessionModes } from '../sessionModes.js';
+ import { normalizeAppearance, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground } from '../tuiDisplayPrefs.js';
+ import { normalizeSpinnerVerbs } from '../spinnerVerbsPrefs.js';
++import { normalizeSpinnerPrefs } from '../tuiDisplayPrefs.js';
++import { setAgentViewSubagentSpinnerStyle } from '../screens/AgentView.js';
++import { setToolCardSpinnerStyle } from '../components/ToolUseLoader.js';
+ import { setAnimationsMode, setEffectsMode } from '../animationsMode.js';
+ import { SubagentActivityStore } from './subagents.js';
+ import { BackgroundJobStore, formatJobDuration } from './jobs.js';
+@@ -2291,6 +2294,14 @@
+         })(),
+         // dsh-overrides 35: user spinner verbs (normalized {mode, verbs}).
+         spinnerVerbs: normalizeSpinnerVerbs(options.spinnerVerbs),
++        // dsh-overrides 43: spinner style per UI place.
++        spinnerPrefs: (() => {
++            const normalized = normalizeSpinnerPrefs(options.spinner);
++            // dsh-overrides 43: boot-time mirrors for the module holders.
++            setAgentViewSubagentSpinnerStyle(normalized?.subagent ?? '');
++            setToolCardSpinnerStyle(normalized?.toolCard ?? '');
++            return normalized;
++        })(),
+         activityEnabled: options.activity !== false,
+         contextBarEnabled: options.contextBar !== false,
+         agentPreset: options.agentPreset,
+@@ -4248,6 +4259,18 @@
+         },
+         // dsh-overrides 31: appearance settings — merge-over-setter like
+         // setStatusBar (a partial update keeps the other fields).
++        setSpinnerPrefs(config) {
++            const next = normalizeSpinnerPrefs(config);
++            if (JSON.stringify(next) === JSON.stringify(state.spinnerPrefs))
++                return;
++            state.spinnerPrefs = next;
++            // dsh-overrides 43: mirror the per-place styles to the module
++            // holders (AgentView rows / tool-card loaders read them without
++            // a channel prop).
++            setAgentViewSubagentSpinnerStyle(next?.subagent ?? '');
++            setToolCardSpinnerStyle(next?.toolCard ?? '');
++            state.emit();
++        },
+         setSpinnerVerbs(config) {
+             const next = normalizeSpinnerVerbs(config);
+             if (JSON.stringify(next) === JSON.stringify(state.spinnerVerbs))
+--- a/lib/types/components/WorkingSpinner.js
++++ b/lib/types/components/WorkingSpinner.js
+@@ -1,11 +1,13 @@
+-import { jsx as _jsx } from "react/jsx-runtime";
++import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+ import { useEffect, useRef, useState } from 'react';
+ import { useTerminalSize } from '../ink/hooks/use-terminal-size.js';
+-import { Box } from '../ui.js';
++import { Box, Text, useAnimationFrame } from '../ui.js';
+ import { SpinnerAnimationRow } from './Spinner/SpinnerAnimationRow.js';
+ import { SPINNER_VERBS } from '../cc/spinnerVerbs.js';
+ // dsh-overrides 35: user verb lists (settings.yaml dsh-tui.spinnerVerbs).
+ import { resolveSpinnerVerbs } from '../spinnerVerbsPrefs.js';
++// dsh-overrides 43: catalog styles per UI place.
++import { getSpinnerStyle } from '../spinnerCatalog.js';
+ import { sample } from 'lodash-es';
+ /**
+  * The working spinner block shown between the transcript and the prompt
+@@ -15,14 +17,31 @@
+  *
+  * Random verb is picked once per turn (per mount of the spinner).
+  */
+-export function WorkingSpinner({ mode, hasActiveTools, responseLengthRef, uploadTokensRef, loadingStartTimeRef, totalPausedMsRef, pauseStartTimeRef, thinkingStatus, verbs, }) {
++/**
++ * dsh-overrides 43: a catalog-styled spinner glyph (frames + interval from
++ * the style entry; the built-in look stays when no style is configured).
++ * The clock is the shared one (useAnimationFrame) — no new timers.
++ */
++function CatalogGlyph({ style, time }) {
++    const frame = style.frames[Math.floor(time / style.interval) % style.frames.length];
++    return _jsx(Text, { color: "claude", children: frame });
++}
++
++/** Catalog glyph + verb, driven by the shared animation clock. */
++function CatalogGlyphTicker({ style, message }) {
++    const [, time] = useAnimationFrame(style.interval);
++    return _jsxs(Box, { flexDirection: "row", children: [_jsx(CatalogGlyph, { style: style, time: time }), _jsx(Text, { color: "claude", children: ` ${message}` })] });
++}
++
++export function WorkingSpinner({ mode, hasActiveTools, responseLengthRef, uploadTokensRef, loadingStartTimeRef, totalPausedMsRef, pauseStartTimeRef, thinkingStatus, verbs, spinnerStyle, }) {
+     const { columns } = useTerminalSize();
+     // Pick a random verb once per spinner mount (per turn). dsh-overrides
+     // 35: the sampling pool merges the user's list with the builtins
+     // (mode 'append' = user's first, 'replace' = user's only).
+     const [randomVerb] = useState(() => sample(resolveSpinnerVerbs(SPINNER_VERBS, verbs)) ?? 'Working');
+     const message = `${randomVerb}…`;
+-    return (_jsx(Box, { flexDirection: "column", width: "100%", alignItems: "flex-start", children: _jsx(SpinnerAnimationRow, { mode: mode, reducedMotion: false, hasActiveTools: hasActiveTools, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, message: message, messageColor: "claude", shimmerColor: "claudeShimmer", loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, spinnerSuffix: null, verbose: true, columns: columns, thinkingStatus: thinkingStatus }) }));
++    const style = getSpinnerStyle(spinnerStyle);
++    return (_jsxs(Box, { flexDirection: "column", width: "100%", alignItems: "flex-start", children: [style !== undefined ? null : _jsx(SpinnerAnimationRow, { mode: mode, reducedMotion: false, hasActiveTools: hasActiveTools, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, message: message, messageColor: "claude", shimmerColor: "claudeShimmer", loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, spinnerSuffix: null, verbose: true, columns: columns, thinkingStatus: thinkingStatus }), style !== undefined ? _jsx(CatalogGlyphTicker, { style: style, message: message }) : null] }));
+ }
+ /**
+  * Tracks thinking status: 'thinking' while the model is streaming reasoning,
+--- a/lib/types/screens/AgentView.js
++++ b/lib/types/screens/AgentView.js
+@@ -12,6 +12,7 @@
+ import { stringWidth } from '../ink/stringWidth.js';
+ import { t } from '../i18n.js';
+ import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js';
++import { getSpinnerStyle } from '../spinnerCatalog.js';
+ import { SpinnerGlyph } from '../components/Spinner/SpinnerGlyph.js';
+ /** Rows the layout cannot do without: header, model/cwd line, dispatch
+  *  input, hints. */
+@@ -88,6 +89,13 @@
+  * untitled session whose activity is still its own prompt) is hidden
+  * instead of shown twice.
+  */
++/** dsh-overrides 43: module-level subagent style name (set by the channel apply). */
++let AGENTVIEW_SUBAGENT_STYLE = '';
++/** @internal channel-owned setter for the subagent spinner style. */
++export function setAgentViewSubagentSpinnerStyle(name) {
++    AGENTVIEW_SUBAGENT_STYLE = typeof name === 'string' ? name : '';
++}
++
+ function AgentViewRowLine({ row, width, focused, now, spinnerFrame, spinnerTime, }) {
+     const presentation = STATUS_PRESENTATION[row.status];
+     // CC parity: the attached session with no title shows as "current
+@@ -115,7 +123,16 @@
+         ? truncateWidth(summarySource, summaryBudget)
+         : '';
+     const gap = Math.max(1, width - leftWidth - stringWidth(summary) - rightWidth - 2);
+-    return (_jsxs(Box, { flexDirection: "row", backgroundColor: focused ? 'userMessageBackgroundHover' : undefined, children: [row.status === 'working' ? (_jsx(SpinnerGlyph, { frame: spinnerFrame, messageColor: "suggestion", reducedMotion: false, time: spinnerTime })) : (_jsx(Text, { color: presentation.color, children: `${presentation.glyph} ` })), _jsx(Text, { color: presentation.color, bold: focused, children: `${name}${marker}` }), _jsx(Text, { dimColor: true, children: `${' '.repeat(gap)}${summary}` }), _jsx(Text, { dimColor: true, children: ` ${right}` })] }));
++    return (_jsxs(Box, { flexDirection: "row", backgroundColor: focused ? 'userMessageBackgroundHover' : undefined, children: [row.status === 'working' ? (() => {
++        // dsh-overrides 43: subagent rows honor the catalog style when set
++        // (dsh-tui.spinner.subagent; module-level like minimalMode — the row
++        // component has no channel). The built-in glyph stays otherwise.
++        const subStyle = getSpinnerStyle(AGENTVIEW_SUBAGENT_STYLE);
++        if (subStyle === undefined)
++            return _jsx(SpinnerGlyph, { frame: spinnerFrame, messageColor: "suggestion", reducedMotion: false, time: spinnerTime });
++        const subFrame = subStyle.frames[Math.floor(spinnerTime / subStyle.interval) % subStyle.frames.length];
++        return _jsx(Text, { color: "suggestion", children: `${subFrame} ` });
++    })() : (_jsx(Text, { color: presentation.color, children: `${presentation.glyph} ` })), _jsx(Text, { color: presentation.color, bold: focused, children: `${name}${marker}` }), _jsx(Text, { dimColor: true, children: `${' '.repeat(gap)}${summary}` }), _jsx(Text, { dimColor: true, children: ` ${right}` })] }));
+ }
+ /**
+  * The agent view screen — `/agentview`, `/bg`. Replaces the conversation
+--- a/lib/types/components/ToolUseLoader.js
++++ b/lib/types/components/ToolUseLoader.js
+@@ -1,8 +1,17 @@
+ import { jsx as _jsx } from "react/jsx-runtime";
++import { getSpinnerStyle } from '../spinnerCatalog.js';
++import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js';
+ import Box from '../ink/components/Box.js';
+ import { Text } from '../ui.js';
+ import { useBlink } from '../hooks/useBlink.js';
+ import { BLACK_CIRCLE, BULLET, MULTIPLICATION_X } from '../cc/figures.js';
++/** dsh-overrides 43: module-level toolCard style name (channel apply sets it). */
++let TOOLCARD_SPINNER_STYLE = '';
++/** @internal channel-owned setter for the toolCard spinner style. */
++export function setToolCardSpinnerStyle(name) {
++    TOOLCARD_SPINNER_STYLE = typeof name === 'string' ? name : '';
++}
++
+ const CATEGORY_BY_TOOL = {
+     bash: 'exec',
+     powershell: 'exec',
+@@ -41,11 +50,17 @@
+  */
+ export function ToolUseLoader({ isError, isUnresolved, shouldAnimate, toolName, }) {
+     const [ref, isBlinking] = useBlink(shouldAnimate);
++    // dsh-overrides 43: tool cards honor the catalog style when set
++    // (dsh-tui.spinner.toolCard); the built-in blink dot stays otherwise.
++    const cardStyle = getSpinnerStyle(TOOLCARD_SPINNER_STYLE);
++    const [, cardTime] = useAnimationFrame(shouldAnimate && cardStyle !== undefined ? cardStyle.interval : null);
+     if (isError) {
+         return (_jsx(Box, { ref: ref, minWidth: 2, children: _jsx(Text, { color: "error", children: MULTIPLICATION_X }) }));
+     }
+     const category = CATEGORY_BY_TOOL[toolName ?? ''] ?? 'default';
+     const color = isUnresolved ? undefined : CATEGORY_TOKEN[category];
+-    const char = shouldAnimate ? (isBlinking ? BLACK_CIRCLE : ' ') : BULLET;
++    let char = shouldAnimate ? (isBlinking ? BLACK_CIRCLE : ' ') : BULLET;
++    if (shouldAnimate && cardStyle !== undefined)
++        char = cardStyle.frames[Math.floor(cardTime / cardStyle.interval) % cardStyle.frames.length];
+     return (_jsx(Box, { ref: ref, minWidth: 2, children: _jsx(Text, { color: color, dimColor: isUnresolved, children: char }) }));
+ }
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -3531,7 +3531,7 @@
+                                 // the animated chars/4 estimate, matching the classic
+                                 // spinner's counter (the suffix used raw chars before,
+                                 // inflating the reading next to a real upload number).
+-                                suffix: `${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens` }) })) : (_jsx(WorkingSpinner, { verbs: channel.spinnerVerbs, mode: channel.spinnerMode, hasActiveTools: channel.activeToolCount > 0, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, thinkingStatus: thinkingStatus }))), _jsx(GoalTodoPanel, { channel: channel, collapsed: todoCollapsed, onToggle: () => setTodoCollapsed(previous => !previous) }), recap !== null && recap.auto && !recap.expanded && (_jsx(AutoRecapRow, { summary: recap.summary, streaming: !recap.done, onExpand: () => setRecap(prev => (prev ? { ...prev, expanded: true } : prev)), onDismiss: () => closeRecap() })), balance !== null && (_jsx(BalanceReportRow, { result: balance.result, refreshing: balance.refreshing, tokens: channel.tokens, model: channel.model, onRefresh: runBalance, onDismiss: () => setBalance(null) })), statusEntries.length > 0 && (_jsx(Text, { dimColor: true, wrap: "truncate", children: statusEntries.map(entry => entry.text).join(' · ') })), approvalPanelNode !== null ? (approvalPanelNode) : dialogSnapshot !== null ? (_jsx(ExtensionDialog, { dialog: dialogSnapshot, onDecide: value => dialogs.decide(dialogSnapshot.key, value), onCancel: () => dialogs.cancel(dialogSnapshot.key) }, dialogSnapshot.key)) : overlay.kind === 'tips' ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(TipsPanel, { onClose: () => dispatchOverlay({ type: 'close-if', kind: 'tips' }) }) })) : recap !== null && (!recap.auto || recap.expanded) ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(RecapPanel, { summary: recap.summary, title: recap.title, error: recap.error, streaming: !recap.done, titleApplied: recap.titleApplied, onClose: () => {
++                                suffix: `${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens` }) })) : (_jsx(WorkingSpinner, { spinnerStyle: channel.spinnerPrefs?.main, verbs: channel.spinnerVerbs, mode: channel.spinnerMode, hasActiveTools: channel.activeToolCount > 0, responseLengthRef: responseLengthRef, uploadTokensRef: uploadTokensRef, loadingStartTimeRef: loadingStartTimeRef, totalPausedMsRef: totalPausedMsRef, pauseStartTimeRef: pauseStartTimeRef, thinkingStatus: thinkingStatus }))), _jsx(GoalTodoPanel, { channel: channel, collapsed: todoCollapsed, onToggle: () => setTodoCollapsed(previous => !previous) }), recap !== null && recap.auto && !recap.expanded && (_jsx(AutoRecapRow, { summary: recap.summary, streaming: !recap.done, onExpand: () => setRecap(prev => (prev ? { ...prev, expanded: true } : prev)), onDismiss: () => closeRecap() })), balance !== null && (_jsx(BalanceReportRow, { result: balance.result, refreshing: balance.refreshing, tokens: channel.tokens, model: channel.model, onRefresh: runBalance, onDismiss: () => setBalance(null) })), statusEntries.length > 0 && (_jsx(Text, { dimColor: true, wrap: "truncate", children: statusEntries.map(entry => entry.text).join(' · ') })), approvalPanelNode !== null ? (approvalPanelNode) : dialogSnapshot !== null ? (_jsx(ExtensionDialog, { dialog: dialogSnapshot, onDecide: value => dialogs.decide(dialogSnapshot.key, value), onCancel: () => dialogs.cancel(dialogSnapshot.key) }, dialogSnapshot.key)) : overlay.kind === 'tips' ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(TipsPanel, { onClose: () => dispatchOverlay({ type: 'close-if', kind: 'tips' }) }) })) : recap !== null && (!recap.auto || recap.expanded) ? (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(RecapPanel, { summary: recap.summary, title: recap.title, error: recap.error, streaming: !recap.done, titleApplied: recap.titleApplied, onClose: () => {
+                                 // An expanded auto recap collapses back to its dim row;
+                                 // a manual /recap closes outright.
+                                 if (recap.auto) {

@@ -1,0 +1,73 @@
+# Goal:      agent-default-model главенствует над model.json
+# Family:    PR.01
+# Status:    live
+# Files:     lib/types/dsh-adapter/plugin.js, lib/types/dsh-adapter/channel.js
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-04, W1 — стартовый реестр 0.10.0-beta.4
+
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -342,7 +342,11 @@
+         && configuredDefault.model.length > 0
+         ? { provider: configuredDefault.provider, model: configuredDefault.model }
+         : undefined;
+-    const startupRoute = resolveModelRoute(configuredRoute, readModelPref(), harnessDefault);
++    // dsh-overrides 07: agent-default-model (the shared settings.yaml default,
++    // read live by headless) wins over the TUI-local persisted /model pref so a
++    // stale ~/.dsh-tui/model.json can no longer shadow the deployment default.
++    // The TUI pref stays the fallback for bare embedders without the service.
++    const startupRoute = resolveModelRoute(configuredRoute, harnessDefault ?? readModelPref());
+     // Session cwd (issue #96): explicit cordis.yml `cwd` wins; otherwise the
+     // git worktree root containing the launch directory (the launch directory
+     // itself outside any worktree), so `@` completion and mention expansion
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -3694,11 +3694,12 @@
+             }
+             // Same precedence for the route (issues #14/#30/#67): the pair resolves
+             // atomically — a complete cordis.yml route wins whole, else the
+-            // persisted `/model` choice (a switch earlier in this run just wrote
+-            // it, so `/new` follows the live model) wins whole, else the startup
+-            // route. A stale persisted choice that the adapter catalog rejects
+-            // falls back to the startup route wholesale, with a warning.
+-            const newResolved = resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, readModelPref(), { provider: options.provider, model: options.model });
++            // agent-default-model (settings.yaml shared default, dsh-overrides 07)
++            // wins whole, else the persisted `/model` choice (a switch earlier in
++            // this run just wrote it, so `/new` follows the live model), else the
++            // startup route. A stale persisted choice that the adapter catalog
++            // rejects falls back to the startup route wholesale, with a warning.
++            const newResolved = resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, ctx.get('agentDefaultModel')?.currentSelection?.() ?? readModelPref(), { provider: options.provider, model: options.model });
+             const newLlm = ctx.get('llm');
+             const { route, rejected } = await validateModelRoute(newLlm, newResolved, {
+                 provider: options.provider,
+@@ -4014,6 +4015,11 @@
+             // Persist the choice so the next boot and `/new` start on it (same
+             // contract as /preset and /effort; issues #14/#30). A failed
+             // write keeps the live switch but warns it will not survive a restart.
++            // dsh-overrides 07: also write through to the shared agent-default-model
++            // settings namespace — route resolution now ranks it above the TUI-local
++            // modelPref, so a /model choice must update the shared default or the
++            // next boot would ignore it. Best effort, like writeModelPref.
++            void ctx.get('agentDefaultModel')?.saveSelection?.({ provider, model });
+             if (!writeModelPref(provider, model)) {
+                 state.notify(t('model-pref-write-failed'), {
+                     color: 'warning',
+@@ -4792,7 +4798,7 @@
+             let handle;
+             try {
+                 const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref());
+-                const resolved = resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, readModelPref(), { provider: options.provider, model: options.model });
++                const resolved = resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, ctx.get('agentDefaultModel')?.currentSelection?.() ?? readModelPref(), { provider: options.provider, model: options.model });
+                 const llm = ctx.get('llm');
+                 const { route } = await validateModelRoute(llm, resolved, {
+                     provider: options.provider,
+@@ -4923,7 +4929,7 @@
+             }
+             const sessionId = SessionId(randomUUID());
+             const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref());
+-            const resolved = resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, readModelPref(), { provider: options.provider, model: options.model });
++            const resolved = resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, ctx.get('agentDefaultModel')?.currentSelection?.() ?? readModelPref(), { provider: options.provider, model: options.model });
+             const llm = ctx.get('llm');
+             const { route } = await validateModelRoute(llm, resolved, {
+                 provider: options.provider,

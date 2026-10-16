@@ -1,0 +1,248 @@
+# Goal:      статус-бар: dedup дубль-pct, таймер-резерв, ключ sparks + D4 склейка/D5 шред — сепаратор flexShrink:0
+# Family:    SB.06
+# Status:    live
+# Files:     lib/types/screens/StatusLine.js
+# Evidence:  TG-DSH-STATUSBAR-FIX-20260919 узел 1;
+#            TG-DSH-TESTING-20260920 узел 1;
+#            reports/statusbar-fix-20260919/;
+#            reports/statusbar-atlas-20260921/
+# Upstream:  not-applicable
+# Added:     2026-09-19 (dedup-timer) + 2026-09-20 (wedge-width), W5
+# Squash:    3C consolidation of SB.06.2-statusbar-dedup-timer + SB.06.3-statusbar-wedge-width
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -64,6 +64,53 @@
+     }, []);
+     return state;
+ }
++// dsh-overrides 51: FieldLine width governance (statusbar audit D4/D5,
++// reports/statusbar-audit-20260918/README.md §3).
++// D4 SEP-COLLAPSE: every ink-text style hardcodes flexShrink:1, so the bare
++// ` · ` separator Text died first under row pressure and neighbouring
++// fields glued into `statusb… …#1a2…` / `·#1a2…`. The separator now rides a
++// flexShrink:0 Box (the same lock PowerlineSegment uses): a field may drop,
++// but two rendered fields always show the ` · ` between them.
++// D5 ELLIPSIS-NOISE: each field Box flexShrink:1 shredded EVERY field to
++// 1-2 char ellipsis stubs instead of dropping whole fields. Groups now
++// hand FieldLine a cell budget: fitFieldParts keeps only the leading fields
++// that fit WHOLE (integer drop right-to-left, like the powerline chain),
++// and under pressure a field narrower than MIN_FIELD_COLS is dropped too —
++// a stub plus its 3-cell separator costs more than it informs.
++// D5-gauge: a part may carry lockHead — a piece rendered in a flexShrink:0
++// Box ahead of the shrinkable text. The tps gauge `▕███▋···▏` locks there,
++// so truncation eats the trailing number, never the gauge's ▏ frame.
++const FIELD_SEP_WIDTH = 3;
++const MIN_FIELD_COLS = 6;
++function textNodeWidth(node) {
++    if (node === null || node === undefined || node === false || node === true)
++        return 0;
++    if (typeof node === 'string' || typeof node === 'number')
++        return stringWidth(String(node));
++    if (Array.isArray(node))
++        return node.reduce((sum, child) => sum + textNodeWidth(child), 0);
++    if (typeof node === 'object' && node.props !== undefined)
++        return textNodeWidth(node.props.children);
++    return 0;
++}
++function fieldPartWidth(part) {
++    return textNodeWidth(part.lockHead) + textNodeWidth(part.node);
++}
++function fieldListWidth(parts) {
++    return parts.reduce((sum, part) => sum + fieldPartWidth(part), 0)
++        + FIELD_SEP_WIDTH * Math.max(0, parts.length - 1);
++}
++function fitFieldParts(parts, budget) {
++    if (fieldListWidth(parts) <= budget)
++        return parts;
++    // dsh-overrides 51: under pressure shed sub-stub fields first (a
++    // <MIN_FIELD_COLS sliver + its 3-cell separator informs nothing), then
++    // drop trailing fields right-to-left until the group fits WHOLE.
++    let kept = parts.filter(part => fieldPartWidth(part) >= MIN_FIELD_COLS);
++    while (kept.length > 0 && fieldListWidth(kept) > budget)
++        kept = kept.slice(0, -1);
++    return kept;
++}
+ /**
+  * Render field parts as sibling shrinkable Boxes joined by the Byline
+  * separator (` · `). The Box-per-field layout is what makes individual
+@@ -73,7 +120,22 @@
+  */
+ function FieldLine({ parts, hoverProps, }) {
+     const visible = parts.filter(part => part.node !== null && part.node !== undefined && part.node !== false);
+-    return (_jsx(_Fragment, { children: visible.map((part, index) => (_jsxs(React.Fragment, { children: [index > 0 ? _jsx(Text, { dimColor: true, wrap: "truncate", children: " \u00B7 " }) : null, _jsx(Box, { flexShrink: 1, ...(part.id === undefined ? {} : hoverProps(part.id)), children: part.tooltip === undefined || part.tooltip === '' ? (_jsx(Text, { wrap: "truncate", children: part.node })) : (_jsx(TooltipTarget, { content: part.tooltip, children: _jsx(Text, { wrap: "truncate", children: part.node }) })) })] }, part.key))) }));
++    return (_jsx(_Fragment, { children: visible.map((part, index) => {
++        const body = part.tooltip === undefined || part.tooltip === ''
++            ? _jsx(Text, { wrap: "truncate", children: part.node })
++            : _jsx(TooltipTarget, { content: part.tooltip, children: _jsx(Text, { wrap: "truncate", children: part.node }) });
++        // dsh-overrides 51 (D4): the ` · ` separator rides a
++        // flexShrink:0 Box — ink-text styles hardcode flexShrink:1, so the
++        // bare separator collapsed first and fields glued with no visible
++        // delimiter between them.
++        // dsh-overrides 51 (D5-gauge): lockHead renders in a flexShrink:0
++        // Box ahead of the shrinkable body — the tps gauge keeps its ▏
++        // frame when the row squeezes (the trailing number yields first).
++        const field = part.lockHead === undefined
++            ? body
++            : _jsxs(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(Box, { flexShrink: 0, children: _jsx(Text, { wrap: "truncate", children: part.lockHead }) }, "lock"), body] });
++        return (_jsxs(React.Fragment, { children: [index > 0 ? _jsx(Box, { flexShrink: 0, children: _jsx(Text, { dimColor: true, wrap: "truncate", children: " \u00B7 " }) }) : null, _jsx(Box, { flexShrink: 1, ...(part.id === undefined ? {} : hoverProps(part.id)), children: field })] }, part.key));
++    }) }));
+ }
+ // dsh-overrides 29: powerline segments — powerlevel/fish-style status row.
+ //
+@@ -243,7 +305,15 @@
+     // Overflow: drop segments right-to-left (timer, ctx, git, cwd — the model
+     // identity always survives; the row itself clips via overflow:hidden).
+     // The budget counts every wedge plus the trailing wedge of the chain.
+-    const budget = columns - 2;
++    // dsh-overrides 50: reserve room for the tail/right FieldLine groups
++    // sharing the row — the old budget (columns - 2) ignored them, so on
++    // w80-w88 the chain "fit" but the row clamped earlier and the timer
++    // segment was sliced mid-number (' 1m 35s' -> ' 1m 3'), breaking the
++    // stable-width promise of 48 every second. With the reserve the
++    // right-to-left drop fires honestly (timer gone as a whole) instead of
++    // a half-dead fragment; on w82+ the timer survives intact.
++    const POWERLINE_TAIL_RESERVE = 15;
++    const budget = columns - 2 - POWERLINE_TAIL_RESERVE;
+     const chainWidth = (list) => list.reduce((sum, s) => sum + s.width + sepWidth, 0);
+     while (segments.length > 1 && chainWidth(segments) > budget) {
+         segments.pop();
+@@ -296,7 +366,7 @@
+         parts.push(_jsxs(Text, { dimColor: true, children: ["◆ ", _jsx(Text, { color: "success", children: sparkline(cacheBuf.current.values, sparkWidth) }), " ", `${Math.round(cachePct)}% cache`] }, "cache"));
+     if (parts.length === 0)
+         return null;
+-    return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexDirection: "row", gap: 2, overflow: "hidden", children: parts })] }));
++    return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexDirection: "row", gap: 2, overflow: "hidden", children: parts }, "sparks")] }));
+ }
+ export function StatusLine({ channel, selectionActive = false, helpOpen = false, wake, fullscreen = false, }) {
+     const { columns } = useTerminalSize();
+@@ -378,14 +448,22 @@
+         return undefined;
+     })();
+     const ctxHoverBarWidth = ctxParts?.counts.length ?? 0;
++    // dsh-overrides 51 (D5-gauge): the ctx hover gauge locks its ▕…▏ frame
++    // the way the tps gauge does — the field part carries the gauge in
++    // lockHead and only the percent text yields to truncation. The compact
++    // branch keeps rendering the joined ctxNode (it lives in a
++    // flexShrink:0 box and never truncates anyway).
++    const ctxHover = formattedContext !== undefined
++        && hover === 'ctx'
++        && ctxParts !== undefined
++        && ctxHoverBarWidth > 0
++        && contextUsed !== undefined
++        && channel.contextWindow !== undefined;
++    const ctxGauge = ctxHover ? renderMiniContextBar(contextUsed, channel.contextWindow, ctxHoverBarWidth) : undefined;
+     const ctxNode = formattedContext === undefined
+         ? undefined
+-        : hover === 'ctx' &&
+-            ctxParts !== undefined &&
+-            ctxHoverBarWidth > 0 &&
+-            contextUsed !== undefined &&
+-            channel.contextWindow !== undefined
+-            ? (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), renderMiniContextBar(contextUsed, channel.contextWindow, ctxHoverBarWidth), ' ', ctxParts.percent] }))
++        : ctxGauge !== undefined
++            ? (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), ctxGauge, ' ', ctxParts.percent] }))
+             : (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), formattedContext] }));
+     if (statusBar.cache) {
+         const cacheRate = formatCacheHitRate(usage);
+@@ -411,7 +489,8 @@
+                     threshold: formatTokenCount(progress.threshold),
+                     used: formatTokenCount(Math.max(0, contextUsed ?? 0)),
+                 }),
+-                node: (_jsxs(Text, { color: progress.pct >= 95 ? 'error' : progress.pct >= 85 ? 'warning' : 'inactiveShimmer', children: [_jsx(Text, { dimColor: true, children: t('status-compact-left') }), formatTokenCount(progress.left), ' ', t('status-compact-left-unit'), _jsx(Text, { dimColor: true, children: ` ${progress.pct}%` })] })),
++                node: (_jsxs(Text, { color: progress.pct >= 95 ? 'error' : progress.pct >= 85 ? 'warning' : 'inactiveShimmer', children: [_jsx(Text, { dimColor: true, children: t('status-compact-left') }), formatTokenCount(progress.left), ' ', t('status-compact-left-unit')] })),  // dsh-overrides 50: the threshold pct lives in the ⚡ powerline
++                // segment only — the comp field carries the tokens left.
+             });
+         }
+     }
+@@ -421,7 +500,12 @@
+             tpsPart = {
+                 key: 'tps',
+                 id: 'tps',
+-                node: (_jsxs(Text, { children: [renderTpsGauge(channel.tps, channel.tps), ' ', _jsxs(Text, { dimColor: true, children: [Math.round(channel.tps), " tps"] })] })),
++                // dsh-overrides 51 (D5-gauge): the tps gauge locks in a
++                // flexShrink:0 head — the old single text run truncated
++                // from the right and ate the ▏ frame first (`▕██████…`,
++                // audit D5); now the trailing number yields instead.
++                lockHead: renderTpsGauge(channel.tps, channel.tps),
++                node: (_jsxs(Text, { dimColor: true, children: [' ', Math.round(channel.tps), " tps"] })),
+             };
+         }
+         else if (channel.tpsSamples.length > 0) {
+@@ -429,8 +513,12 @@
+             tpsPart = {
+                 key: 'tps',
+                 id: 'tps',
++                // dsh-overrides 51 (D5-gauge): the busy gauge locks (see
++                // above); the idle sparkline carries no frame and stays a
++                // plain text field.
++                lockHead: channel.working ? renderTpsGauge(channel.tps, peak) : undefined,
+                 node: (_jsxs(Text, { children: [channel.working
+-                            ? renderTpsGauge(channel.tps, peak)
++                            ? undefined
+                             : renderTpsSparkline(channel.tpsSamples), ' ', speedColor(channel.tps, `${Math.round(channel.tps)}`), " tps"] })),
+             };
+         }
+@@ -604,7 +692,11 @@
+     const compactFields = [...leftFields, ...rightFields];
+     const fullLeftFields = [
+         ...leftFields,
+-        ...(ctxNode !== undefined ? [{ key: 'context', id: 'ctx', node: ctxNode }] : []),
++        // dsh-overrides 51 (D5-gauge): in the hover state the gauge (with
++        // its ▏ frame) rides lockHead; only the percent text shrinks.
++        ...(ctxNode !== undefined
++            ? [{ key: 'context', id: 'ctx', node: ctxGauge !== undefined ? (_jsxs(Text, { color: "inactiveShimmer", children: [' ', ctxParts.percent] })) : ctxNode, lockHead: ctxGauge !== undefined ? (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: "ctx " }), ctxGauge] })) : undefined }]
++            : []),
+     ];
+     const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined;
+     // dsh-overrides 29: assemble the powerline chain for the full (non-compact)
+@@ -624,6 +716,36 @@
+         : rightFields;
+     const powerlineHasContent = powerlineOn &&
+         (powerline.segments.length > 0 || powerlineTailParts.length > 0 || powerlineRightParts.length > 0);
++
++    // dsh-overrides 51 (D5): integer drop under width pressure. Upstream
++    // every field Box is flexShrink:1, so the group shredded ALL fields to
++    // 1-2 char ellipsis stubs (`… …… ca… …comp… …5…`, audit D5) instead of
++    // dropping whole fields. Each group now keeps only the leading fields
++    // that fit WHOLE into its share of the row (see fitFieldParts). The
++    // split rows fill the left group first (it carries flexGrow:1) and
++    // hand the leftover cells to the right group — the right side drops
++    // before the left tail starts dropping, mirroring the upstream
++    // flexShrink 2-vs-1 sacrifice order.
++    const rowCells = columns - 2; // the status row lives inside paddingX:1
++    const plainRowAvail = Math.max(0, rowCells - 2); // minus the row gap
++    let shownCompactFields = compactFields;
++    let shownLeftFields = fullLeftFields;
++    let shownRightFields = rightFields;
++    let shownTailParts = powerlineTailParts;
++    let shownRightParts = powerlineRightParts;
++    if (statusBar.compact) {
++        shownCompactFields = fitFieldParts(compactFields, Math.max(0, plainRowAvail - (ctxNode !== undefined ? textNodeWidth(ctxNode) : 0)));
++    }
++    else if (powerlineHasContent && powerline !== undefined) {
++        const chainCells = powerline.segments.reduce((sum, s) => sum + s.width + powerline.sepWidth, 0);
++        const chainAvail = Math.max(0, rowCells - chainCells - (powerline.segments.length > 0 ? 1 : 0) - 2);
++        shownTailParts = fitFieldParts(powerlineTailParts, chainAvail);
++        shownRightParts = fitFieldParts(powerlineRightParts, Math.max(0, chainAvail - fieldListWidth(shownTailParts)));
++    }
++    else {
++        shownLeftFields = fitFieldParts(fullLeftFields, plainRowAvail);
++        shownRightFields = fitFieldParts(rightFields, Math.max(0, plainRowAvail - fieldListWidth(shownLeftFields)));
++    }
+     // Supplemental row mounts only when it carries real content (hover
+     // detail, hint, activity, trajectory). The upstream build kept it
+     // permanently reserved (height 1) whenever the footer had hoverable
+@@ -640,10 +762,12 @@
+     // to damage, and hover detail only works there anyway (AlternateScreen
+     // supplies the mouse tracking).
+     const mountSupplementalRow = fullscreen && showSupplementalRow;
++    // dsh-overrides 51: the FieldLine call sites below render the FITTED
++    // groups (the shown* lists from the budget block above).
+     const sparkRow = _jsx(SparkRow, { channel: channel, columns: columns });
+     return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [sparkRow, barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
+                         ? (current !== null && current.startsWith('segment:') ? null : current)
+-                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: powerlineTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: powerlineRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
++                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownCompactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: shownTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, height: 1, overflow: "hidden", children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: shownRightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
+ }
+ /**
+  * The supplemental-row readout for a hovered footer field. Technical label

@@ -1,0 +1,210 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -16,12 +16,17 @@
+ 	"in_progress",
+ 	"completed"
+ ];
++/**
++ * dsh-overrides core 04: recursive todo children (depth <= 3) — items may
++ * nest an optional `children` array of the same shape (max 3 levels).
++ */
++const MAX_TODO_DEPTH = 3;
+ /** Schemastery configuration for the todo tool consumer. */
+ const Config = z.object({ allowParallelInProgress: z.boolean().required() });
+ const DESCRIPTION_HEAD = "Record and update a structured task list for the current work. Send the ENTIRE list every call — it REPLACES the previous list (there are no partial updates, no per-item edits). Use it to plan multi-step work and show progress: add one todo per concrete step before you start. ";
+ const DESCRIPTION_PARALLEL = "Mark every todo being actively worked on `in_progress` — several at once when work genuinely runs in parallel (e.g. concurrent subagents or background commands), one for sequential work; while work remains, at least one task should be `in_progress`. ";
+ const DESCRIPTION_SINGLE = "Keep AT MOST ONE todo `in_progress` at a time; while work remains, exactly one active task should be `in_progress`. ";
+-const DESCRIPTION_TAIL = "Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished).";
++const DESCRIPTION_TAIL = "Mark a todo `completed` the moment it is done (do not batch completions), and allow no `in_progress` item only once all work is complete. Skip the list for trivial single-step tasks. Statuses: `pending` (not started), `in_progress` (being worked on now), `completed` (finished). Break larger todos into subtasks: every item may carry an optional `children` array of the same item shape; nesting is capped at 3 levels.";
+ /**
+ * The model-facing description for one activation. The active-status clause is the only part that
+ * varies, because it is the only instruction the parallel policy changes.
+@@ -33,42 +38,98 @@
+ }
+ /**
+ * Validate the value constraints the ParameterSchemaSpec can't express and build the canonical {@link
+-* TodoItem}[]: trimmed non-empty unique content, and at most one `in_progress` item unless the
+-* deployment allows parallel work. The registry has already enforced the status enum and rejected
+-* unknown item keys (`additionalProperties: false` — the logged snapshot must equal what the model
+-* believes it wrote, so a nested/extended item shape fails loud at the schema boundary instead of
+-* silently flattening); the cast below records that guarantee.
++* TodoItem}[]: trimmed non-empty unique content (unique across the WHOLE tree, including children —
++* content is the only identity a todo has), and at most one `in_progress` item unless the deployment
++* allows parallel work. dsh-overrides core 04: items may nest an optional `children` array of the
++* same item shape; the registry has already enforced the status enum and the depth cap (the
++* `children` property is only declared above {@link MAX_TODO_DEPTH}, so a deeper shape fails loud at
++* the schema boundary with a path-qualified "not a declared property" violation), and the depth
++* guard below keeps direct callers of this helper just as honest. Unknown item keys are still
++* rejected (`additionalProperties: false` — the logged snapshot must equal what the model believes
++* it wrote).
+ * @param raw - the model-supplied list, already schema-checked.
+ * @param allowParallel - whether several items may be `in_progress` at once.
+-* @returns the canonical list.
++* @returns the canonical list (children normalized recursively, preserved only when present).
+ */
+ function toTodoList(raw, allowParallel) {
+-	const todos = [];
+ 	const seen = /* @__PURE__ */ new Set();
+ 	let active = 0;
+-	for (const item of raw) {
+-		const content = item.content.trim();
+-		if (content.length === 0) throw new Error("invalid todo: `content` must be a non-empty string");
+-		if (seen.has(content)) throw new Error(`invalid todos: duplicate content ${JSON.stringify(content)}`);
+-		seen.add(content);
+-		if (item.status === "in_progress") active++;
+-		todos.push({
+-			content,
+-			status: item.status
+-		});
+-	}
++	const normalizeItems = (items, depth) => {
++		const todos = [];
++		for (const item of items) {
++			const content = item.content.trim();
++			if (content.length === 0) throw new Error("invalid todo: `content` must be a non-empty string");
++			if (seen.has(content)) throw new Error(`invalid todos: duplicate content ${JSON.stringify(content)}`);
++			seen.add(content);
++			if (item.status === "in_progress") active++;
++			const todo = {
++				content,
++				status: item.status
++			};
++			// dsh-overrides core 04: recurse into optional children (same item
++			// shape); `children: []` is preserved as an empty array so the echoed
++			// result equals what the model believes it wrote.
++			if (item.children !== void 0) {
++				if (depth >= MAX_TODO_DEPTH) throw new Error(`invalid todos: nesting deeper than ${MAX_TODO_DEPTH} levels at ${JSON.stringify(content)}`);
++				todo.children = normalizeItems(item.children, depth + 1);
++			}
++			todos.push(todo);
++		}
++		return todos;
++	};
++	const canonical = normalizeItems(raw, 1);
+ 	if (!allowParallel && active > 1) throw new Error(`invalid todos: at most one task may be in_progress (got ${active})`);
+-	return todos;
++	return canonical;
+ }
+ /** Wire payload schema of the `todos` projection (whole list or pre-first-write null). */
+-const todosProjectionSchema = z$1.union([z$1.array(z$1.object({
++// dsh-overrides core 04: recursive item shape — `children` (same form) must
++// survive the zod parse instead of being silently stripped from the wire view.
++const todoItemProjectionSchema = z$1.lazy(() => z$1.object({
+ 	content: z$1.string(),
+ 	status: z$1.union([
+ 		z$1.literal("pending"),
+ 		z$1.literal("in_progress"),
+ 		z$1.literal("completed")
+-	])
+-})), z$1.null()]);
++	]),
++	children: z$1.array(todoItemProjectionSchema).optional()
++}));
++const todosProjectionSchema = z$1.union([z$1.array(todoItemProjectionSchema), z$1.null()]);
++/**
++* dsh-overrides core 04: parameter/output schema for ONE todo item, generated
++* per depth so the optional recursive `children` property (same item shape) is
++* only declared above {@link MAX_TODO_DEPTH} — a deeper shape fails loud at
++* the schema boundary with a path-qualified "not a declared property"
++* violation instead of being silently flattened. Each level is a fresh object
++* (the schema compiler rejects re-used nodes as circular).
++* @param depth - 1-based level of this item within the todo tree.
++* @returns the item schema for that depth.
++*/
++function todoItemSchema(depth) {
++	const properties = {
++		content: {
++			type: "string",
++			required: true,
++			description: "What the task is — a short imperative line."
++		},
++		status: {
++			type: "string",
++			required: true,
++			enum: [...STATUSES],
++			description: "pending (not started) | in_progress (now) | completed (done)."
++		}
++	};
++	if (depth < MAX_TODO_DEPTH)
++		properties.children = {
++			type: "array",
++			description: "Optional subtasks of the same item shape; nesting is capped at 3 levels.",
++			items: todoItemSchema(depth + 1)
++		};
++	return {
++		type: "object",
++		additionalProperties: false,
++		properties
++	};
++}
+ /**
+ * Register the `todo_write` tool on `ctx.tools` and, when the session-projection seam is composed,
+ * the `todos` unit.
+@@ -101,23 +162,7 @@
+ 			type: "array",
+ 			required: true,
+ 			description: "The COMPLETE task list, replacing any previous list.",
+-			items: {
+-				type: "object",
+-				additionalProperties: false,
+-				properties: {
+-					content: {
+-						type: "string",
+-						required: true,
+-						description: "What the task is — a short imperative line."
+-					},
+-					status: {
+-						type: "string",
+-						required: true,
+-						enum: [...STATUSES],
+-						description: "pending (not started) | in_progress (now) | completed (done)."
+-					}
+-				}
+-			}
++			items: todoItemSchema(1)
+ 		} },
+ 		output: {
+ 			schema: {
+@@ -127,21 +172,7 @@
+ 					todos: {
+ 						type: "array",
+ 						required: true,
+-						items: {
+-							type: "object",
+-							additionalProperties: false,
+-							properties: {
+-								content: {
+-									type: "string",
+-									required: true
+-								},
+-								status: {
+-									type: "string",
+-									required: true,
+-									enum: [...STATUSES]
+-								}
+-							}
+-						}
++						items: todoItemSchema(1)
+ 					},
+ 					counts: {
+ 						type: "object",
+@@ -174,11 +205,15 @@
+ 			if (!exec.agent) throw new Error("todo_write requires an owning agent session");
+ 			exec.agent.session.append("todo/write", { todos });
+ 			const count = (status) => todos.filter((t) => t.status === status).length;
++			// dsh-overrides core 04: echo the full tree (children included) —
++			// the output schema declares the same recursive item shape.
++			const toResultItem = (todo) => ({
++				content: todo.content,
++				status: todo.status,
++				...todo.children === void 0 ? {} : { children: todo.children.map(toResultItem) }
++			});
+ 			return Promise.resolve({
+-				todos: todos.map((todo) => ({
+-					content: todo.content,
+-					status: todo.status
+-				})),
++				todos: todos.map(toResultItem),
+ 				counts: {
+ 					pending: count("pending"),
+ 					inProgress: count("in_progress"),

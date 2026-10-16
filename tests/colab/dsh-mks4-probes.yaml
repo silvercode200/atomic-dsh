@@ -1,0 +1,726 @@
+program: dsh-mks4-probes
+# suite_version: 1 (2026-09-28, TG-DSH-MKS4-20260928 узел 2-4 — RED-пробы).
+# Самодостаточный probe-сьют под юзер-репорт 2026-09-28 (WezTerm+zellij,
+# inline, тема tokyonight-moon, фон #000000): dsh в сплите 51×23 —
+# zellij-пейна фактически 25×23 (трейс-факт: boot-кадры columns:25
+# termRows:23). 3 визуальных бага; корни по always-on трейсу юзера
+# (~/.dsh-tui/trace/geometry-2026-09-28.jsonl, 1253 кадра, pid 452921):
+#   БАГ-2 (бут): суммарный кадр ~20-26 строк при пейне 23 → низ рамки
+#     ввода (глиф ╰) не у ноги пейна, зазор ~3+ строк.
+#   БАГ-3 (главный, корень доказан): после resize 51→узкие (25/24/16)
+#     viewport и scroll.innerHeight ScrollBox ВЗРЫВАЮТСЯ до 81-118 строк
+#     при termRows=23 (260/277 кадров с viewport>termRows, worst=+118 на
+#     16 колонках; maxScroll сбрасывается в 0, sticky=true) — каждый кадр
+#     выталкивает 40-95 строк в скроллбек пейна → пустые/чёрные зоны при
+#     скролле. Первый взрыв — ровно на первом кадре после узкого resize.
+#     Здоровое состояние до resize: viewport=17 при termRows=23; на 51
+#     колонках клемп держится.
+#   БАГ-4: пункты слэш-меню невидимы, пока не переведёшь выделение (виден
+#     только выделенный) — подозрение dim-атрибут (SGR 2) невыделенных
+#     пунктов и/или fg≈ЧЁРНОМУ фону юзера #000000; e5_color_contrast_menu
+#     golden в tmux PASS — значит мерить надо dim и контраст против #000000,
+#     не только fg==bg темы.
+# Разрыв покрытия golden (tests/colab/dsh-tui-inline.yaml, suite_version 7):
+# все геометрии >=47 колонок и >=24 строк (свип 47×43/80×24/120×40/180×50;
+# fuzz-пул w 40-240 h 24-60; e1_garbage_resize 120→80→47) — геометрия юзера
+# 51×23 и узкие ресайзы 25/24/16 НЕ покрыты вообще. Этот сьют закрывает
+# разрыв; golden и tests/colab/trace-metrics.py НЕ тронуты (заморожены под
+# миграционный гейт SUBSYS.FF.B — ренумерация/ревью одной волной).
+#
+# ТРАССИРУЕМОСТЬ «симптом юзера → тест → детектор»:
+#   баг-2 «рамка ввода не у ноги пейна, зазор 3+» (бут, 25×23)
+#     ......... тест boot_input_anchor → DETECTOR boot_input_anchor: gap=N
+#                (GREEN gap<=2; RED = зазор 3+; якорь = последняя строка с
+#                глифом ╰ — приём det-fuzz.py golden; БЕЗ warmup-хода)
+#   баг-3 «взрыв viewport при узком resize + пустые зоны в скроллбеке»
+#     ......... тест narrow_resize_viewport → DETECTOR
+#                narrow_resize_viewport: violations=N worst=+X
+#                scrollback_garbage=M (RED: violations>0 — кадры с
+#                list.viewport>termRows или scroll.innerHeight>termRows
+#                после первого узкого resize; ИЛИ garbage>0 — мусор хрома
+#                в capture -S -2000 вне живого кадра, порог 0 как в
+#                e1_garbage_* golden)
+#   баг-4 «пункты слэш-меню невидимы до перевода выделения» (51×23)
+#     ......... тест slash_menu_contrast → DETECTOR
+#                slash_menu_contrast: dim=N lowcontrast=M (RED: dim>0 —
+#                SGR 2 на тексте невыделенных пунктов; ИЛИ lowcontrast>0 —
+#                контраст fg против #000000 < 1.5:1, WCAG-luminance)
+#
+# ОЖИДАЕМЫЕ RED (узел 2-4 = RED-пробы): все три детектора на текущем стеке
+# (патч 72) обязаны упасть exit 1 = юзер-баги воспроизведены; фейл теста =
+# reproduced, НЕ поломка сьюта. Инфра-фейлы (exit 2: трейс не пишется,
+# слэш-меню не открылось, кадр/граница/контент отсутствуют) разбираются по
+# тексту DETECTOR-строки (конвенция golden: 0/1/2 = PASS/RED/инфра).
+#
+# Запуск (драйвер):
+#   bash scripts/colab-dsh-live-check.sh \
+#     --target current --fake-model --label mks4-red \
+#     --suite tests/colab/dsh-mks4-probes.yaml \
+#     --detectors boot_input_anchor,narrow_resize_viewport,slash_menu_contrast
+#
+# Механика (зеркалит golden dsh-tui-inline.yaml): lane colab; сравнения на
+# госте в run-шагах (НЕ в assert — ColabResult.output несёт IPython-шум);
+# шаги <15К символов (чанк-канал colab exec); heredoc-тела НЕ содержат
+# $переменных программы (executor раскрывает их в тексте шага ДО отправки
+# на VM — в python-детекторах абсолютные VM-пути хардкодом); внутренние
+# переменные шагов ($b/$n/$w/$T/$i) названы иначе переменных программы;
+# трейс сессии = DSH_TUI_GEOMETRY_TRACE (boot_launch, прецедент —
+# scripts/colab-dsh-geometry-trace.sh; ротация 8МБ → geo.jsonl.1 — детектор
+# глобит 'geo.jsonl*'; отдельный путь: деплойный boot-smoke пишет свой);
+# boot с самовосстановлением (flaky-boot agent-bootstrap hang: kill +
+# relaunch до 3 попыток — память dsh-flaky-boot-agent-bootstrap-hang).
+# Хронология юзера: бут 25×23 → 51×23 → контент → узкие 25/24/16×23 — сьют
+# повторяет её. НИКАКОГО warmup в setup: тест 1 меряет бут-кадр ДО первого
+# хода (первый turn глотает SCENARIO-маркер — warmup перенесён в тест 2).
+# Сидов/рандома нет — вся серия детерминирована.
+lane: colab
+vars:
+  sess: dsh-mks4
+  frames: /root/dsh-mks4-frames
+  boot: /root/dsh-mks4-frames/boot
+  narrow: /root/dsh-mks4-frames/narrow
+  slash: /root/dsh-mks4-frames/slash
+  mode: /root/dsh-mks4-frames/mode
+  work: /root/dsh-mks4
+  geo: /root/dsh-mks4/geo.jsonl
+
+setup:
+  - id: dirs_init
+    run: 'mkdir -p $work $frames && rm -rf $boot $narrow $slash $mode && mkdir -p $boot $narrow $slash $mode $work && rm -f $frames/*.txt $work/*.txt $work/*.py $work/*.marker $work/geo.jsonl $work/geo.jsonl.1; echo DIRS_OK'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: sess_kill
+    run: 'tmux kill-session -t $sess 2>/dev/null; true'
+    timeout: 180
+    ignore_error: true
+    idempotent: true
+    retry: 2
+  # Пустая панель-оболочка (без команды) — send-keys уходит в shell панели.
+  # Геометрия СТАРТА юзера: 25×23 (трейс-факт: boot-кадры columns:25
+  # termRows:23 — zellij-пейна внутри сплита 51×23). Тест 2 поднимет до
+  # 51×23 перед контентом, тест 3 вернёт 51×23 для слэш-меню.
+  - id: sess_new
+    run: 'tmux new-session -d -s $sess -x 25 -y 23'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: term_overrides
+    run: 'tmux set -as terminal-overrides ",xterm-256color:Tc"'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Парити-слой: юзер-dsh-tui-секция → /root/.dsh/settings.yaml ---------
+  # Дословно из golden (источник ~/.dsh/settings.yaml юзера): fullscreen:
+  # false = inline-режим, тема tokyonight-moon, фон юзера #000000 живёт в
+  # WezTerm (терминал), а не в settings — детектор теста 3 мерит против
+  # #000000 константой. Срезаем существующую dsh-tui секцию (до следующего
+  # top-level ключа), дописываем юзерскую. Провайдеры/fake-роут не трогаем.
+  - id: parity_settings
+    run: |
+      cp /root/.dsh/settings.yaml /root/.dsh/settings.yaml.parity-backup-mks4 2>/dev/null || true
+      awk '/^dsh-tui:/{s=1} s==1 && /^[^[:space:]#]/ && !/^dsh-tui:/{s=0} s==0{print}' /root/.dsh/settings.yaml > /root/.dsh/settings.yaml.new
+      cat >> /root/.dsh/settings.yaml.new <<'TUIEOF'
+      dsh-tui:
+        statusBar:
+          tokens: false
+          compact: false
+          contextBar: false
+          mode: true
+          trajectory: true
+          shortcutHint: false
+          activity: false
+          cache: false
+          gitBranch: false
+          compactThresholdRatio: 0.4768
+          tps: false
+          sessionTitle: false
+          sessionId: false
+          cwd: true
+          ctxBarMode: percent-only
+        fullscreen: false
+        minimal: false
+        toolBackground: subtle
+        appearance:
+          powerline: full
+          theme: tokyonight-moon
+          inputBorder: "#7aa2f7"
+          animations: false
+      TUIEOF
+      mv /root/.dsh/settings.yaml.new /root/.dsh/settings.yaml
+      cp /root/.dsh/settings.yaml $mode/settings-parity.txt
+      grep -n 'fullscreen' /root/.dsh/settings.yaml > $mode/settings-fullscreen-parity.txt 2>/dev/null || echo 'NO_FULLSCREEN_KEY' > $mode/settings-fullscreen-parity.txt
+      grep -n 'animations' /root/.dsh/settings.yaml > $mode/settings-animations-parity.txt 2>/dev/null || echo 'NO_ANIMATIONS_KEY' > $mode/settings-animations-parity.txt
+      echo PARITY_APPLIED
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Парити-маркер миграции: fullscreen-factory-default = done ------------
+  # Без маркера первый boot сносит юзерский fullscreen:false ('unset' план).
+  - id: parity_marker
+    run: |
+      if [ ! -f /root/.dsh-tui/migrations.json ]; then
+        printf '{\n  "fullscreen-factory-default": "2026-08-29T00:00:00.000Z"\n}\n' > /root/.dsh-tui/migrations.json
+      fi
+      cp /root/.dsh-tui/migrations.json $mode/migrations-at-parity.json 2>/dev/null || echo MARKER_ABSENT > $mode/migrations-at-parity.json
+      test -f /root/.dsh-tui/migrations.json && echo MARKER_PRESENT
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Запуск TUI (fake-роут + geometry-trace) + самовосст. boot -----------
+  # DSH_TUI_GEOMETRY_TRACE=$geo — детерминированный трейс-путь сессии сьюта
+  # (патч 61 always-on; оверрайд-прецедент scripts/colab-dsh-geometry-trace.sh;
+  # деплойный boot-smoke держит СВОЙ dsh на дефолтном трейсе — общий файл
+  # дал бы два писателя). Ротация 8МБ → geo.jsonl.1: детектор глобит
+  # 'geo.jsonl*'; каждый launch начинает с чистого файла. Flaky-boot
+  # (вис agent-bootstrap): kill + relaunch до 3 попыток, 60с/попытка.
+  # WARMUP ЗДЕСЬ НЕТ — тест 1 меряет чистый бут-кадр (см. шапку).
+  - id: boot_launch
+    run: |
+      dsh_launch() {
+        rm -f $geo $geo.1
+        rm -f /root/dsh-boot-mks4.err
+        tmux send-keys -t $sess "FAKE_LLM_KEY=fake-local-key DSH_TUI_GEOMETRY_TRACE=$geo dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-boot-mks4.err" Enter
+      }
+      boot_poll() {
+        for i in $(seq 1 $1); do
+          tmux capture-pane -p -t $sess > $mode/boot.txt
+          if grep -qE '❯|for shortcuts' $mode/boot.txt; then return 0; fi
+          sleep 1
+        done
+        return 1
+      }
+      dsh_launch
+      for attempt in 1 2 3; do
+        if boot_poll 60; then echo "BOOT_READY (attempt $attempt)"; exit 0; fi
+        echo "BOOT_RETRY attempt=$attempt: hung TUI, kill + relaunch"
+        tmux send-keys -t $sess C-c 2>/dev/null || true
+        sleep 1
+        pkill -f '/usr/local/bin/dsh --profile' 2>/dev/null || true
+        sleep 2
+        tmux send-keys -t $sess reset Enter 2>/dev/null || true
+        sleep 1
+        dsh_launch
+      done
+      echo NOT_READY
+      exit 1
+    timeout: 320
+  # --- Файн-гейт бута: экран реально затих ---------------------------------
+  # BOOT_READY матчит 'for shortcuts' уже на первом кадре бут-анимации, а
+  # bootstrap-запросы фейк-модели (контекст/титул, ~45с каждый) анимируют
+  # экран ещё минуты — ввод в этом окне не активен, посланный промпт
+  # теряется (run-1: 68 anim-кадров 4.2 мин ПОСЛЕ BOOT_READY). Тихий экран
+  # = трейс-файл молчит >=12с (кадров нет = анимация кончилась) И ❯ в кадре.
+  # Мягкий фоллбек через ~300с (❯ есть, но не затих) — warmup теста 2
+  # добьёт ре-сендом; жёсткий (нет ❯) = инфра-фейл бута.
+  - id: boot_quiet
+    run: |
+      for i in $(seq 1 60); do
+        if [ -f $geo ] && [ $(( $(date +%s) - $(stat -c %Y $geo) )) -ge 12 ]; then
+          if tmux capture-pane -p -t $sess | grep -q '❯'; then
+            echo QUIET_READY
+            exit 0
+          fi
+        fi
+        sleep 5
+      done
+      if tmux capture-pane -p -t $sess | grep -q '❯'; then
+        echo QUIET_TIMEOUT_SOFT
+        exit 0
+      fi
+      echo QUIET_NO_PROMPT
+      exit 1
+    timeout: 400
+    idempotent: true
+    retry: 2
+
+tests:
+  # --- БАГ-2: якорь рамки ввода на буте (25×23, БЕЗ warmup-хода) -----------
+  # Юзер-репорт: на буте суммарный кадр ~20-26 строк при пейне 23 → низ
+  # рамки ввода (╰) не у ноги пейна, зазор 3+. Якорь = ПОСЛЕДНЯЯ строка с
+  # глифом ╰ в живом кадре (приём det-fuzz.py golden); зазор = pane_h −
+  # номер строки якоря (1-based). Интро dsh ~4.8с — после boot_poll (❯ уже
+  # виден) даём кадру устаканиться ~6с, ДО любого warmup-хода.
+  - name: boot_input_anchor
+    steps:
+      - run: |
+          sleep 6
+          tmux capture-pane -p -t $sess > $boot/boot-25x23.txt
+          tmux display-message -p -t $sess '#{pane_height}' > $boot/boot-pane-h.txt
+          echo BOOT_FRAME_CAPTURED
+        timeout: 180
+        idempotent: true
+        retry: 2
+      - run: |
+          cat > $work/det-boot.py <<'PYEOF'
+          import sys
+          if len(sys.argv) < 3:
+              print("DETECTOR boot_input_anchor: FAIL (argv — инфра)")
+              sys.exit(2)
+          cap_path, pane_path = sys.argv[1], sys.argv[2]
+          lines = open(cap_path, encoding="utf-8", errors="replace").read().splitlines()
+          raw = open(pane_path, encoding="utf-8", errors="replace").read().strip()
+          try:
+              pane_h = int(raw)
+          except ValueError:
+              pane_h = 0
+          if pane_h <= 0:
+              print("DETECTOR boot_input_anchor: FAIL (pane_height неизвестна — инфра)")
+              sys.exit(2)
+          # якорь = последняя строка с глифом ╰ (низ рамки ввода)
+          bottoms = [i for i, l in enumerate(lines) if "╰" in l]
+          if not bottoms:
+              print("DETECTOR boot_input_anchor: FAIL (frame_bottom_missing — рамка ввода (╰) не отрендерилась, инфра)")
+              sys.exit(2)
+          anchor = bottoms[-1] + 1
+          gap = pane_h - anchor
+          print("DETECTOR boot_input_anchor: gap={} pane_h={} anchor_row={} capture_lines={} (GREEN gap<=2 — рамка у ноги пейна; юзер-репорт баг-2: зазор 3+)".format(gap, pane_h, anchor, len(lines)))
+          sys.exit(0 if gap <= 2 else 1)
+          PYEOF
+          python3 $work/det-boot.py $boot/boot-25x23.txt $boot/boot-pane-h.txt
+        timeout: 120
+        idempotent: true
+        retry: 2
+
+  # --- БАГ-3 (главный): узкий resize → взрыв viewport + мусор скроллбека ---
+  # Хронология юзера: 51×23 (широкое, здоровый клемп viewport=17) → контент
+  # (sH 43+) → узкие 25/24/16×23 — на первом же кадре после узкого resize
+  # viewport/innerHeight взрываются до 81-118 при termRows=23 (юзер-трейс:
+  # 260/277 кадров, worst=+118 на 16 колонках), maxScroll=0, sticky=true;
+  # каждый кадр выталкивает 40-95 строк в скроллбек → пустые/чёрные зоны.
+  # Гейты честности: (1) warmup-ход — первый turn глотает SCENARIO-маркер;
+  # (2) контент-гейт — max scrollHeight >= 43 на кадрах columns==51 (мало
+  # контента = нет материала для взрыва = инфра exit 2, НЕ продукт-GREEN);
+  # (3) детектор по трейсу: граница узкого resize = первый кадр columns<51
+  # ПОСЛЕ кадра columns==51 (boot-фаза 25×23 исключается), инвариант
+  # list.viewport<=termRows И scroll.innerHeight<=termRows на КАЖДОМ кадре
+  # после границы; (4) скроллбек-мусор: CHROME-паттерны golden e1_garbage
+  # (повторы бордюров/статус-глифов вне живого кадра), порог = 0.
+  - name: narrow_resize_viewport
+    steps:
+      - run: |
+          tmux resize-window -t $sess -x 51 -y 23; sleep 2
+          echo WIDE51_SET
+        timeout: 180
+        idempotent: true
+        retry: 2
+      # warmup-ход: бут на фейк-модели длится до ~4 мин ПОСЛЕ ложного
+      # BOOT_READY — промпт, посланный в окно бута, теряется. Ре-сенд
+      # каждые ~16с (ввод чистим C-u), гейт = ● (буллет ассистент-сообщения;
+      # пустой base-файл run-1 — транспортный wedge, скрипт не исполнялся:
+      # idempotent+retry+маркер делают повтор безопасным).
+      - run: |
+          [ -f $work/warmup-done.marker ] && { echo WARMUP_ALREADY_DONE; exit 0; }
+          n0=$(tmux capture-pane -p -t $sess | grep -c '●' || true)
+          [ "$n0" -ge 1 ] && { touch $work/warmup-done.marker; echo WARMUP_ALREADY_DONE; exit 0; }
+          ok=0
+          for attempt in $(seq 1 14); do
+            tmux send-keys -t $sess C-u
+            tmux send-keys -t $sess "SCENARIO:short привет, ответь кратко" Enter
+            for w in $(seq 1 7); do
+              sleep 2
+              n=$(tmux capture-pane -p -t $sess | grep -c '●' || true)
+              [ "$n" -ge 1 ] && { ok=1; break; }
+            done
+            [ "$ok" = 1 ] && break
+          done
+          if [ "$ok" = 1 ]; then
+            # конец стрима short: экран статичен (иначе base для long
+            # поймает ещё растущий ●-счётчик)
+            prev=$(tmux capture-pane -p -t $sess)
+            for w in $(seq 1 20); do
+              sleep 3
+              cur=$(tmux capture-pane -p -t $sess)
+              [ "$cur" = "$prev" ] && break
+              prev=$cur
+            done
+            touch $work/warmup-done.marker
+            echo WARMUP_DONE
+            exit 0
+          fi
+          echo WARMUP_TIMEOUT
+          exit 1
+        timeout: 340
+        idempotent: true
+        retry: 2
+      - run: |
+          [ -f $work/long-done.marker ] && { echo LONG_ALREADY_DONE; exit 0; }
+          b=$(tmux capture-pane -p -t $sess | grep -c '●' || true)
+          ok=0
+          for attempt in $(seq 1 3); do
+            tmux send-keys -t $sess C-u
+            tmux send-keys -t $sess "SCENARIO:long напиши длинный текст" Enter
+            for w in $(seq 1 10); do
+              sleep 2
+              n=$(tmux capture-pane -p -t $sess | grep -c '●' || true)
+              [ "$n" -gt "$b" ] && { ok=1; break; }
+            done
+            [ "$ok" = 1 ] && break
+          done
+          [ "$ok" = 1 ] || { echo LONG_TIMEOUT; exit 1; }
+          # стрим long до ~45с (STREAM_TOTAL_MS): ждём пока экран перестанет
+          # меняться — иначе cg-content прочитает недорисованный транскрипт
+          prev=$(tmux capture-pane -p -t $sess)
+          for w in $(seq 1 25); do
+            sleep 3
+            cur=$(tmux capture-pane -p -t $sess)
+            [ "$cur" = "$prev" ] && break
+            prev=$cur
+          done
+          touch $work/long-done.marker
+          echo LONG_DONE
+          exit 0
+        timeout: 320
+        idempotent: true
+        retry: 2
+      - run: |
+          cat > $work/cg-content.py <<'PYEOF'
+          import glob, json, sys
+          best = 0
+          found = False
+          for path in sorted(glob.glob("/root/dsh-mks4/geo.jsonl*")):
+              try:
+                  fh = open(path, encoding="utf-8", errors="replace")
+              except OSError:
+                  continue
+              for line in fh:
+                  line = line.strip()
+                  if not line:
+                      continue
+                  try:
+                      rec = json.loads(line)
+                  except ValueError:
+                      continue
+                  lst = rec.get("list") or {}
+                  if lst.get("columns") == 51:
+                      found = True
+                      for s in rec.get("scroll") or []:
+                          if isinstance(s, dict) and s.get("scrollHeight"):
+                              best = max(best, s["scrollHeight"])
+          if not found:
+              print("CONTENT_GATE: FAIL (нет кадров columns==51 в трейсе — resize/трейс не дошёл, инфра)")
+              sys.exit(2)
+          print("CONTENT_GATE: max_scrollHeight_51cols={} required>=43 (контент для взрыва viewport)".format(best))
+          sys.exit(0 if best >= 43 else 2)
+          PYEOF
+          python3 $work/cg-content.py
+        timeout: 120
+        idempotent: true
+        retry: 2
+      - run: |
+          tmux resize-window -t $sess -x 25 -y 23; sleep 2
+          tmux capture-pane -p -S -2000 -t $sess > $narrow/resize-25x23.txt
+          tmux resize-window -t $sess -x 24 -y 23; sleep 2
+          tmux capture-pane -p -S -2000 -t $sess > $narrow/resize-24x23.txt
+          tmux resize-window -t $sess -x 16 -y 23; sleep 2
+          tmux capture-pane -p -S -2000 -t $sess > $narrow/resize-16x23.txt
+          echo NARROW_SERIES_DONE
+        timeout: 240
+        idempotent: true
+        retry: 2
+      - run: |
+          cat > $work/det-narrow.py <<'PYEOF'
+          import glob, json, os, re, sys
+          from collections import Counter
+          CHROME = [
+              ("frame_top",    lambda l: "╭" in l and "────" in l),
+              ("frame_bottom", lambda l: "╰" in l and "────" in l),
+              ("prompt",       lambda l: "❯" in l and "⛶" in l),
+              ("status_row",   lambda l: "✦" in l and "dsh-TUI" not in l),
+              ("pct_glyph",    lambda l: "⚡" in l),
+              ("gauge",        lambda l: "▕" in l and "█" in l),
+              ("comp_left",    lambda l: bool(re.search(r"comp\s+\d", l))),
+              ("cache_pct",    lambda l: bool(re.search(r"cache\s+\d", l))),
+          ]
+          def is_rewrap_frag(lines, i):
+              # tmux при ресайзе переупаковывает скроллбек по новой ширине:
+              # разорванный логотип «...✦ dsh» + «-TUI v...» — терминальная
+              # норма, не E1-дубль (исключение из garbage.py golden)
+              l = lines[i]
+              if "✦" not in l or "dsh-TUI" in l:
+                  return False
+              for j in range(i + 1, min(i + 3, len(lines))):
+                  if lines[j].strip():
+                      return "dsh-TUI" in (l + lines[j])
+              return False
+          def garbage(path):
+              lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+              last_frame = None
+              for i, l in enumerate(lines):
+                  if "╭" in l and "────" in l:
+                      last_frame = i
+              broken = last_frame is None or (len(lines) - last_frame) > 12
+              top = last_frame if (last_frame is not None and not broken) else 0
+              g, per = 0, Counter()
+              for i, l in enumerate(lines[:top]):
+                  if is_rewrap_frag(lines, i):
+                      continue
+                  hits = [n for n, fn in CHROME if fn(l)]
+                  if hits:
+                      g += 1
+                      per.update(hits)
+              return g, dict(per)
+          records = []
+          trace_files = 0
+          for path in sorted(glob.glob("/root/dsh-mks4/geo.jsonl*")):
+              trace_files += 1
+              try:
+                  fh = open(path, encoding="utf-8", errors="replace")
+              except OSError:
+                  continue
+              for line in fh:
+                  line = line.strip()
+                  if not line:
+                      continue
+                  try:
+                      rec = json.loads(line)
+                  except ValueError:
+                      continue
+                  records.append(rec)
+          if trace_files == 0 or not records:
+              print("DETECTOR narrow_resize_viewport: FAIL (trace_files={} records={} — трейс не пишется, инфра)".format(trace_files, len(records)))
+              sys.exit(2)
+          # граница = первый кадр columns<51 ПОСЛЕ хотя бы одного кадра
+          # columns==51 (бут 25×23 исключается: до широкого 51 взрыв не
+          # считается — юзер-факт «на 51 колонках клемп работает»)
+          boundary = None
+          seen_51 = False
+          for i, rec in enumerate(records):
+              lst = rec.get("list") or {}
+              cols = lst.get("columns")
+              if cols == 51:
+                  seen_51 = True
+              if boundary is None and seen_51 and cols is not None and cols < 51:
+                  boundary = i
+          if boundary is None:
+              print("DETECTOR narrow_resize_viewport: FAIL (narrow_boundary_not_found — узкий resize не дошёл до трейса, инфра)")
+              sys.exit(2)
+          violations = 0
+          v_view = 0
+          v_inner = 0
+          worst = 0
+          first_t = None
+          term_rows = None
+          for i, rec in enumerate(records):
+              lst = rec.get("list") or {}
+              if lst.get("termRows"):
+                  term_rows = lst["termRows"]
+              if i < boundary or term_rows is None:
+                  continue
+              vp = lst.get("viewport")
+              if vp is not None and vp > term_rows:
+                  violations += 1
+                  v_view += 1
+                  worst = max(worst, vp - term_rows)
+                  if first_t is None:
+                      first_t = rec.get("t")
+              for s in rec.get("scroll") or []:
+                  if not isinstance(s, dict):
+                      continue
+                  ih = s.get("innerHeight")
+                  if ih is not None and ih > term_rows:
+                      violations += 1
+                      v_inner += 1
+                      worst = max(worst, ih - term_rows)
+                      if first_t is None:
+                          first_t = rec.get("t")
+          if term_rows is None:
+              print("DETECTOR narrow_resize_viewport: FAIL (termRows неизвестен ни в одном кадре, инфра)")
+              sys.exit(2)
+          NARROW = "/root/dsh-mks4-frames/narrow"
+          gmax = 0
+          gworst_pat = {}
+          for name in ("resize-25x23.txt", "resize-24x23.txt", "resize-16x23.txt"):
+              p = os.path.join(NARROW, name)
+              if not os.path.exists(p):
+                  continue
+              g, pat = garbage(p)
+              print("narrow/{} garbage_lines={} patterns={}".format(name, g, pat))
+              if g > gmax:
+                  gmax = g
+                  gworst_pat = pat
+          print("DETECTOR narrow_resize_viewport: violations={} worst=+{} scrollback_garbage={} (инвариант list.viewport<=termRows и scroll.innerHeight<=termRows на КАЖДОМ кадре после первого узкого resize; v_viewport={} v_inner={} first_violation_t={} garbage_patterns={}; RED: violations>0 ИЛИ garbage>0)".format(
+              violations, worst, gmax, v_view, v_inner, first_t, gworst_pat))
+          sys.exit(0 if (violations == 0 and gmax == 0) else 1)
+          PYEOF
+          python3 $work/det-narrow.py
+        timeout: 120
+        idempotent: true
+        retry: 2
+
+  # --- БАГ-4: контраст невыделенных пунктов слэш-меню (51×23) --------------
+  # Юзер-репорт: пункты слэш-меню невидимы, пока не переведёшь выделение
+  # (виден только выделенный). Локус: фон юзера #000000 (WezTerm override +
+  # патч 36) — e5_color_contrast_menu golden (fg==bg ТЕМЫ) в tmux PASS,значит
+  # проверяем (а) dim-атрибут SGR 2 на тексте невыделенных пунктов и (б)
+  # контраст fg против ЧЁРНОГО #000000 (WCAG-относительная luminance, порог
+  # 1.5:1). Меню: '/' в инпут, кадр -pe с ANSI; item-строки = блок после
+  # заголовка 'commands · N items' (строки с │ и командным словом, приём
+  # e2_slash_menu golden); невыделенные = без ❯. fg резолвится из 38;2
+  # truecolor, 38;5 палитры xterm-256 и базовых 30-37/90-97.
+  - name: slash_menu_contrast
+    steps:
+      - run: |
+          tmux send-keys -t $sess C-c; sleep 0.3
+          tmux send-keys -t $sess C-u; sleep 0.5
+          tmux resize-window -t $sess -x 51 -y 23; sleep 1.5
+          tmux send-keys -t $sess /; sleep 2
+          tmux capture-pane -p -t $sess > $slash/slash-51x23.txt
+          tmux capture-pane -pe -t $sess > $slash/slash-51x23.ansi
+          tmux send-keys -t $sess C-u; sleep 0.5
+          echo SLASH_CAPTURED
+        timeout: 240
+      - run: |
+          cat > $work/det-slash.py <<'PYEOF'
+          import re, sys
+          if len(sys.argv) < 2:
+              print("DETECTOR slash_menu_contrast: FAIL (argv — инфра)")
+              sys.exit(2)
+          BLACK = (0, 0, 0)
+          CONTRAST_MIN = 4.5  # WCAG AA normal text; прежний 1.5 пропускал #5F5F87 (3.47:1) — баг-4 «пункты невидимы»
+          ANSI16 = {
+              30: (0, 0, 0), 31: (205, 0, 0), 32: (0, 205, 0), 33: (205, 205, 0),
+              34: (0, 0, 238), 35: (205, 0, 205), 36: (0, 205, 205), 37: (229, 229, 229),
+              90: (127, 127, 127), 91: (255, 0, 0), 92: (0, 255, 0), 93: (255, 255, 0),
+              94: (100, 100, 255), 95: (255, 0, 255), 96: (0, 255, 255), 97: (255, 255, 255),
+          }
+          def _pal256():
+              pal = dict(ANSI16)
+              lv = [0, 95, 135, 175, 215, 255]
+              for r in range(6):
+                  for g in range(6):
+                      for b in range(6):
+                          pal[16 + 36 * r + 6 * g + b] = (lv[r], lv[g], lv[b])
+              for k in range(24):
+                  v = 8 + 10 * k
+                  pal[232 + k] = (v, v, v)
+              return pal
+          PAL256 = _pal256()
+          SGR = re.compile(r"\x1b\[([0-9;]*)m")
+          ANSI_ANY = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+          def sgr_runs(line):
+              # [(fg, bg, dim, text)]; fg/bg=(r,g,b)|None; dim=bool (SGR 2/22/0)
+              fg = bg = None
+              dim = False
+              pos = 0
+              out = []
+              for m in SGR.finditer(line):
+                  if m.start() > pos:
+                      out.append((fg, bg, dim, line[pos:m.start()]))
+                  params = [int(p) if p else 0 for p in m.group(1).split(";")] if m.group(1) else [0]
+                  i = 0
+                  while i < len(params):
+                      p = params[i]
+                      if p == 0:
+                          fg = bg = None
+                          dim = False
+                      elif p == 2:
+                          dim = True
+                      elif p == 22:
+                          dim = False
+                      elif p in ANSI16:
+                          fg = ANSI16[p]
+                      elif p - 10 in ANSI16:
+                          bg = ANSI16[p - 10]
+                      elif p == 39:
+                          fg = None
+                      elif p == 49:
+                          bg = None
+                      elif p == 38 and i + 1 < len(params):
+                          if params[i + 1] == 5 and i + 2 < len(params) and 0 <= params[i + 2] <= 255:
+                              fg = PAL256[params[i + 2]]
+                              i += 2
+                          elif params[i + 1] == 2 and i + 4 < len(params):
+                              rgb = tuple(params[i + 2:i + 5])
+                              if all(0 <= v <= 255 for v in rgb):
+                                  fg = rgb
+                              i += 4
+                      elif p == 48 and i + 1 < len(params):
+                          if params[i + 1] == 5 and i + 2 < len(params) and 0 <= params[i + 2] <= 255:
+                              bg = PAL256[params[i + 2]]
+                              i += 2
+                          elif params[i + 1] == 2 and i + 4 < len(params):
+                              rgb = tuple(params[i + 2:i + 5])
+                              if all(0 <= v <= 255 for v in rgb):
+                                  bg = rgb
+                              i += 4
+                      i += 1
+                  pos = m.end()
+              if pos < len(line):
+                  out.append((fg, bg, dim, line[pos:]))
+              return out
+          def lin(c):
+              c = c / 255.0
+              return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+          def contrast_vs_black(rgb):
+              l = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
+              return (l + 0.05) / 0.05
+          def hexrgb(rgb):
+              return "#{:02x}{:02x}{:02x}".format(rgb[0], rgb[1], rgb[2])
+          ITEM = re.compile(r"^\s*│\s*(❯\s*)?[a-z][a-z0-9_-]*\s")
+          HDR = re.compile(r"commands · \d+ items")
+          path = sys.argv[1]
+          lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+          texts = [ANSI_ANY.sub("", l) for l in lines]
+          hdr_idx = None
+          for i, t in enumerate(texts):
+              if HDR.search(t):
+                  hdr_idx = i
+                  break
+          if hdr_idx is None:
+              print("DETECTOR slash_menu_contrast: FAIL (menu_header_missing — слэш-меню не открылось, инфра)")
+              sys.exit(2)
+          # item-строки: блок внутри бокса после заголовка (│-строки);
+          # item = командное слово [a-z]+ после │/❯ (рамка/сепараторы без
+          # слов не считаются — приём e2_slash_menu golden)
+          items = []
+          for i in range(hdr_idx + 1, len(texts)):
+              if not texts[i].strip().startswith("│"):
+                  break
+              if ITEM.match(texts[i]):
+                  items.append(i)
+          if not items:
+              print("DETECTOR slash_menu_contrast: FAIL (menu_items_missing — пункты меню не отрендерились, инфра)")
+              sys.exit(2)
+          dim = 0
+          lowc = 0
+          ok = 0
+          default_fg = 0
+          fg_seen = []
+          details = []
+          for i in items:
+              if "❯" in texts[i]:
+                  continue
+              for fg, bg, isdim, text in sgr_runs(lines[i]):
+                  if not text.strip():
+                      continue
+                  if isdim:
+                      dim += 1
+                      fgh = hexrgb(fg) if fg else "default"
+                      fg_seen.append(fgh)
+                      details.append("  line={} item={!r} DIM fg={}".format(i + 1, text.strip()[:32], fgh))
+                  elif fg is None:
+                      default_fg += 1
+                  else:
+                      ratio = contrast_vs_black(fg)
+                      if ratio < CONTRAST_MIN:
+                          lowc += 1
+                          fg_seen.append(hexrgb(fg))
+                          details.append("  line={} item={!r} fg={} contrast={:.2f}:1 < {}:1".format(i + 1, text.strip()[:32], hexrgb(fg), ratio, CONTRAST_MIN))
+                      else:
+                          ok += 1
+          unselected = sum(1 for i in items if "❯" not in texts[i])
+          print("menu: header_line={} items={} unselected={} ok_runs={} default_fg_runs={}".format(hdr_idx + 1, len(items), unselected, ok, default_fg))
+          for d in details[:12]:
+              print(d)
+          print("DETECTOR slash_menu_contrast: dim={} lowcontrast={} fg={} (невыделенные пункты: dim=SGR 2 на тексте; lowcontrast=fg против #000000 < {}:1 WCAG; RED: dim>0 ИЛИ lowcontrast>0)".format(
+              dim, lowc, fg_seen[:8], CONTRAST_MIN))
+          if ok + dim + lowc == 0 and default_fg > 0:
+              print("  SKIP: все раны невыделенных пунктов с дефолтным fg — контраст против #000000 неизмерим (инфра)")
+              sys.exit(2)
+          sys.exit(0 if (dim == 0 and lowc == 0) else 1)
+          PYEOF
+          python3 $work/det-slash.py $slash/slash-51x23.ansi
+        timeout: 120
+        idempotent: true
+        retry: 2

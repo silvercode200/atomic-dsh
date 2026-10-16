@@ -1,0 +1,119 @@
+# Goal:      todo collapsed-дефолт, MAX_TODOS 12, truncate глифов
+# Family:    TG.05
+# Status:    live
+# Files:     lib/types/components/GoalTodoPanel.js, lib/types/screens/Chat.js
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-09, W2
+
+--- a/lib/types/components/GoalTodoPanel.js
++++ b/lib/types/components/GoalTodoPanel.js
+@@ -5,8 +5,12 @@
+ import { modLabel } from '../utils/modifiers.js';
+ import { effectiveCombos } from '../utils/keymap.js';
+ const todoFoldMod = () => (effectiveCombos('todoFold')[0]?.raw ?? 'ctrl+m').replace(/m$/, '');
+-/** Maximum todo rows shown before the overflow line. */
+-const MAX_TODOS = 8;
++/**
++ * Maximum todo rows shown in the expanded list. dsh-overrides 09: 8 -> 12 --
++ * the overflow "N more" line is gone (fixed-height inline footer), so the
++ * cap is the only truncation left and gets more room.
++ */
++const MAX_TODOS = 12;
+ const PHASE_LABEL = {
+     active: '● active',
+     paused: '⏸ paused',
+@@ -48,14 +52,20 @@
+     const color = phaseColor(phase);
+     return (_jsxs(Text, { color: color, dimColor: phase === 'complete', children: [PHASE_LABEL[phase], " \u00B7 ", roundsStarted, "/", maxGoalRounds, elapsed !== undefined ? ` · ${elapsed}` : ''] }));
+ }
++// dsh-overrides 09: glyphs and branch prefixes carry wrap:"truncate" so the
++// yoga flex-shrink pass never sees them as 2-line word-wrapped text. When a
++// row overflows (long content + prefixes), the JS yoga port probes children
++// with fractional AtMost widths (e.g. 2.70 for the 3-wide "\u251C\u2500 "); with the
++// default 'wrap' those probes return height 2 and the row renders an extra
++// blank line under every expanded todo. Truncate keeps every probe 1 line.
+ function TodoGlyph({ status }) {
+     switch (status) {
+         case 'in_progress':
+-            return _jsx(Text, { color: "suggestion", children: "\u25CF " });
++            return _jsx(Text, { color: "suggestion", wrap: "truncate", children: "\u25CF " });
+         case 'completed':
+-            return _jsx(Text, { dimColor: true, children: "\u2713 " });
++            return _jsx(Text, { dimColor: true, wrap: "truncate", children: "\u2713 " });
+         default:
+-            return _jsx(Text, { dimColor: true, children: "\u25CB " });
++            return _jsx(Text, { dimColor: true, wrap: "truncate", children: "\u25CB " });
+     }
+ }
+ /**
+@@ -64,7 +74,7 @@
+  * root and each todo hangs off it.
+  */
+ function BranchPrefix({ last }) {
+-    return _jsx(Text, { dimColor: true, children: last ? '└─ ' : '├─ ' });
++    return _jsx(Text, { dimColor: true, wrap: "truncate", children: last ? '└─ ' : '├─ ' });
+ }
+ /**
+  * Live goal + todo panel above the prompt input. Data rides on the channel:
+@@ -109,9 +119,14 @@
+         // elapsed reading instead of counting past the finish line.
+         if (goal === undefined || goal.phase === 'complete')
+             return;
+-        const timer = setInterval(() => setNow(Date.now()), 1000);
++        // dsh-overrides 09: a 1s tick re-renders this panel every second; in
++        // inline (non-fullscreen) mode each repaint touches scrollback and
++        // surfaces as blank lines / duplicated rows. Collapsed shows no live
++        // seconds, so a coarse 30s tick keeps the elapsed readout honest;
++        // only the expanded panel keeps the 1s cadence.
++        const timer = setInterval(() => setNow(Date.now()), collapsed ? 30000 : 1000);
+         return () => clearInterval(timer);
+-    }, [goal]);
++    }, [goal, collapsed]);
+     const elapsed = goal !== undefined && startRef.current !== undefined
+         ? formatDuration(now - startRef.current.at)
+         : undefined;
+@@ -123,11 +138,20 @@
+         return null;
+     const visible = todos.slice(0, MAX_TODOS);
+     const hidden = todos.length - visible.length;
+-    // Collapsed preview: the live task when one runs, else the next open row.
+-    const preview = allTodos.find(todo => todo.status === 'in_progress')
+-        ?? allTodos.find(todo => todo.status !== 'completed');
+-    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "\uD83C\uDFAF " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "\u2502 " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["\u2713 ", doneCount, "/", allTodos.length] }), !collapsed && (_jsxs(Text, { dimColor: true, children: [" \u00b7 ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })), collapsed && preview !== undefined && (_jsx(Box, { flexGrow: 1, flexShrink: 1, marginLeft: 1, children: preview.status === 'in_progress' ? (_jsxs(Text, { wrap: "truncate", children: [_jsx(Text, { color: "suggestion", children: "\u25CF " }), preview.content] })) : (_jsxs(Text, { wrap: "truncate", dimColor: true, children: ["\u25CB ", preview.content] })) }))] }), !collapsed && (_jsxs(Box, { flexDirection: "column", children: [visible.map((todo, index) => {
++    // dsh-overrides 09: collapsed preview pair -- the live task (an
++    // in_progress row, else the first open one) on its own line, plus the
++    // next open row after it, so the folded panel stays a fixed 1-3 lines
++    // while still narrating what runs and what is next.
++    const inProgressIndex = allTodos.findIndex(todo => todo.status === 'in_progress');
++    const currentIdx = inProgressIndex >= 0
++        ? inProgressIndex
++        : allTodos.findIndex(todo => todo.status !== 'completed');
++    const current = currentIdx >= 0 ? allTodos[currentIdx] : undefined;
++    const next = currentIdx >= 0
++        ? allTodos.slice(currentIdx + 1).find(todo => todo.status !== 'completed')
++        : undefined;
++    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "\uD83C\uDFAF " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "\u2502 " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["\u2713 ", doneCount, "/", allTodos.length] }), _jsxs(Text, { dimColor: true, children: [" \u00b7 ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["\u25CF ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["\u2192 \u25CB ", next.content] }) })), !collapsed && (_jsxs(Box, { flexDirection: "column", children: [visible.map((todo, index) => {
+                                 const last = index === visible.length - 1 && hidden === 0;
+                                 return (_jsxs(Box, { flexDirection: "row", children: [_jsx(BranchPrefix, { last: last }), _jsx(TodoGlyph, { status: todo.status }), _jsx(Text, { wrap: "truncate", dimColor: todo.status === 'completed', children: todo.content })] }, index));
+-                            }), hidden > 0 && (_jsxs(Box, { flexDirection: "row", children: [_jsx(BranchPrefix, { last: true }), _jsxs(Text, { dimColor: true, children: ["\u2026 ", hidden, " more"] })] }))] }))] }))] }));
++                            })] }))] }))] }));
+ }
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -378,8 +378,13 @@
+     const [themeName, setTheme] = useTheme();
+     const { rows: terminalRows } = useTerminalSize();
+     const [showAllMessages, setShowAllMessages] = React.useState(false);
+-    /** Fold state for the GoalTodoPanel todo section (ctrl/cmd+q or click). */
+-    const [todoCollapsed, setTodoCollapsed] = React.useState(false);
++    /**
++     * Fold state for the GoalTodoPanel todo section (ctrl/cmd+q or click).
++     * dsh-overrides 09: starts COLLAPSED — in inline (non-fullscreen) mode a
++     * tall todo list repaints scrollback every update and reads as blank
++     * lines/duplicates; the folded 1-3 line preview keeps the essentials.
++     */
++    const [todoCollapsed, setTodoCollapsed] = React.useState(true);
+     const [thinkingVisible, setThinkingVisible] = React.useState(true);
+     /** ctrl+r history-search entries (loaded on open, persists). */
+     const [historyEntries, setHistoryEntries] = React.useState([]);

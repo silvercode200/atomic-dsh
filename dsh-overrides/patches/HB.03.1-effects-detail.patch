@@ -1,0 +1,164 @@
+# Goal:      описания эффектов (каталог) + large-демо
+# Family:    HB.03
+# Status:    live
+# Files:     lib/types/effectsCatalog.js, lib/types/components/EffectsPanel.js
+# Evidence:  TG-DSH-TUI-EFFECTS-DESC-20260917; reports/effects39-frames/
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (TG-DSH-TUI-EFFECTS-DESC-20260917)
+
+--- a/lib/types/effectsCatalog.js
++++ b/lib/types/effectsCatalog.js
+@@ -0,0 +1,37 @@
++/**
++ * dsh-overrides 39: human descriptions for the LIVE42 effect registry
++ * (one per EFFECT_KEYS entry): what the effect does and where it lives in
++ * the UI — shown in the /effects panel's detail block. Russian, 1-2 lines.
++ * A missing entry is a warn (never fatal): getEffectDescription falls back
++ * to the key itself so the panel always renders.
++ */
++import { EFFECT_KEYS } from './animationsMode.js';
++/** key → русское описание (что делает + где в UI). */
++export const EFFECT_DESCRIPTIONS = {
++    inputBorderBreath: 'Рамка поля ввода плавно дышит между акцентным цветом и его shimmer-вариантом; при работающем ходе — вдвое быстрее',
++    todoPulse: 'Активная задача в todo-панели пульсирует глифом ◐ (toolDotTask ↔ более светлый гребень)',
++    todoProgressBar: 'В заголовке todo-панели мини-бар прогресса из 5 ячеек вместо текста ✓ 0/2',
++    headerGlimmer: 'Заголовок todo-панели переливается бегущим окном подсветки',
++    ctxBarBreath: 'Бар контекста в статус-строке дышит яркостью, пока идёт ход модели',
++    toolCardShimmer: 'Заголовок карточки terminal-инструмента мерцает тоном bashBorder, пока команда выполняется',
++    spinnerRainbow: 'Глиф спиннера плавно циклирует радужную палитру shimmer-оттенков',
++    spinnerGlimmer: 'Глагол под спиннером переливается бегущим окном подсветки',
++};
++/**
++ * The description for a registry key, or the key itself (with a warn) when
++ * the catalog lacks an entry — the panel must never crash on a gap.
++ */
++export function getEffectDescription(key) {
++    const text = EFFECT_DESCRIPTIONS[key];
++    if (text === undefined) {
++        console.warn(`[dsh-tui] effects: no description for "${key}" (effectsCatalog)`);
++        return key;
++    }
++    return text;
++}
++// Keep the mapping honest: a registry key without a description warns at
++// module load (once), not on every render.
++for (const key of EFFECT_KEYS) {
++    if (!(key in EFFECT_DESCRIPTIONS))
++        console.warn(`[dsh-tui] effects: no description for "${key}" (effectsCatalog)`);
++}
+--- a/lib/types/components/EffectsPanel.js
++++ b/lib/types/components/EffectsPanel.js
+@@ -7,6 +7,8 @@
+ import { GlimmerMessage } from './Spinner/GlimmerMessage.js';
+ import { SpinnerGlyph } from './Spinner/SpinnerGlyph.js';
+ import { breathingColor, effectEnabled, EFFECT_KEYS, animationsMode } from '../animationsMode.js';
++// dsh-overrides 39: Russian descriptions for the detail block.
++import { getEffectDescription } from '../effectsCatalog.js';
+ /**
+  * dsh-overrides 38: the /effects dashboard — one row per LIVE42 effect:
+  * name, a LIVE mini-demo (the same animation code the real component runs,
+@@ -36,8 +38,10 @@
+     spinnerRainbow: 'spinner',
+     spinnerGlimmer: 'verb glimmer',
+ };
+-/** Each demo drives the SAME effect gate it demonstrates. */
+-function EffectDemo({ effect, time }) {
++/** Each demo drives the SAME effect gate it demonstrates.
++ * dsh-overrides 39: `large` renders the detail-block variant — the same
++ * animation code, a bigger canvas (longer border/bar/verb samples). */
++function EffectDemo({ effect, time, large = false }) {
+     const [themeName] = useTheme();
+     const theme = getTheme(themeName);
+     const on = effectEnabled(effect);
+@@ -50,40 +54,84 @@
+     };
+     switch (effect) {
+         case 'inputBorderBreath': {
++            if (large) {
++                const base = parseRGB(theme.promptBorder);
++                const crest = parseRGB(theme.promptBorderShimmer);
++                const color = on && base !== null && crest !== null && base !== crest
++                    ? breathingColor(base, crest, time, on ? 2400 : 0)
++                    : 'promptBorder';
++                return _jsxs(Text, { children: ["╭", "─".repeat(46), "╮  ", _jsx(Text, { color: color, children: "╭" + "─".repeat(46) + "╮" })] });
++            }
+             const color = on
+                 ? (() => { const base = parseRGB(theme.promptBorder); const crest = parseRGB(theme.promptBorderShimmer); return base !== null && crest !== null && base !== crest ? breathingColor(base, crest, time, 2400) : 'promptBorder'; })()
+                 : 'promptBorder';
+             return _jsxs(Text, { children: ["╭", "─".repeat(10), "╮ ", _jsx(Text, { color: color, children: "╭────╮" })] });
+         }
+         case 'todoPulse':
++            if (large)
++                return _jsxs(Text, { children: ["◐ ", _jsx(Text, { color: on ? breathe('toolDotTask') : 'toolDotTask', children: "задача выполняется субагентом…" })] });
+             return _jsx(Text, { color: on ? breathe('toolDotTask') : 'toolDotTask', children: "◐ working" });
+         case 'todoProgressBar': {
++            if (large) {
++                const fill = on ? breathe('toolDotTask') : 'toolDotTask';
++                return _jsxs(Text, { children: [_jsx(Text, { color: fill, children: "█".repeat(8) + "▎" }), _jsx(Text, { dimColor: true, children: "·".repeat(7) }), "  3/5"] });
++            }
+             const fill = on ? breathe('toolDotTask') : 'toolDotTask';
+             return _jsxs(Text, { color: fill, children: ["████████▎", _jsx(Text, { dimColor: true, children: "···" })] });
+         }
+         case 'headerGlimmer':
++            if (large)
++                return _jsx(Text, { color: on ? breathe('claude', 1200) : 'claude', children: "▸ ✓ заголовок панели задач" });
+             return _jsx(Text, { color: on ? breathe('claude', 1200) : 'claude', children: "✓ header glimmer" });
+         case 'ctxBarBreath': {
++            if (large) {
++                const base = parseRGB(theme.inverseText);
++                const lift = base === null ? null : { r: Math.round(base.r + (255 - base.r) * 0.3), g: Math.round(base.g + (255 - base.g) * 0.3), b: Math.round(base.b + (255 - base.b) * 0.3) };
++                const color = on && base !== null && lift !== null ? breathingColor(base, lift, time, 1400) : 'inverseText';
++                return _jsxs(Text, { children: ["⚡ ", _jsx(Text, { color: color, children: "██████████" }), _jsx(Text, { dimColor: true, children: "··· 69%" })] });
++            }
+             const base = parseRGB(theme.inverseText);
+             const lift = base === null ? null : { r: Math.round(base.r + (255 - base.r) * 0.3), g: Math.round(base.g + (255 - base.g) * 0.3), b: Math.round(base.b + (255 - base.b) * 0.3) };
+             const color = on && base !== null && lift !== null ? breathingColor(base, lift, time, 1400) : 'inverseText';
+             return _jsxs(Text, { color: color, children: ["⚡", "████████", _jsx(Text, { dimColor: true, children: "·· 69%" })] });
+         }
+         case 'toolCardShimmer': {
++            if (large) {
++                const base = parseRGB(theme.bashBorder);
++                const lift = base === null ? null : { r: Math.round(base.r + (255 - base.r) * 0.3), g: Math.round(base.g + (255 - base.g) * 0.3), b: Math.round(base.b + (255 - base.b) * 0.3) };
++                const color = on && base !== null && lift !== null ? breathingColor(base, lift, time, 1200) : 'bashBorder';
++                return _jsxs(Text, { children: ["Bash ", _jsx(Text, { color: color, children: "(npm run build -- --watch)" })] });
++            }
+             const base = parseRGB(theme.bashBorder);
+             const lift = base === null ? null : { r: Math.round(base.r + (255 - base.r) * 0.3), g: Math.round(base.g + (255 - base.g) * 0.3), b: Math.round(base.b + (255 - base.b) * 0.3) };
+             const color = on && base !== null && lift !== null ? breathingColor(base, lift, time, 1200) : 'bashBorder';
+             return _jsxs(Text, { color: color, children: ["(bash command)"] });
+         }
+         case 'spinnerRainbow':
++            if (large)
++                return _jsxs(Text, { children: [_jsx(SpinnerGlyph, { frame: Math.floor(time / 120), messageColor: "claude", stalledIntensity: 0, reducedMotion: false, time: time }), "  ", _jsx(Text, { dimColor: true, children: "глиф меняет цвет: цикл 7 оттенков за 840ms" })] });
+             return _jsx(SpinnerGlyph, { frame: Math.floor(time / 120), messageColor: "claude", stalledIntensity: 0, reducedMotion: false, time: time });
+         case 'spinnerGlimmer':
++            if (large)
++                return _jsx(GlimmerMessage, { message: 'Embellishing…', mode: "requesting", messageColor: "claude", shimmerColor: "claudeShimmer", glimmerIndex: on ? Math.floor(time / 60) % 34 - 10 : -1, flashOpacity: 1, stalledIntensity: 0 });
+             return _jsx(GlimmerMessage, { message: DEMO_TEXTS[effect], mode: "requesting", messageColor: "claude", shimmerColor: "claudeShimmer", glimmerIndex: on ? Math.floor(time / 60) % (DEMO_TEXTS[effect].length + 20) - 10 : -1, flashOpacity: 1, stalledIntensity: 0 });
+         default:
+             return null;
+     }
+ }
+ /**
++ * dsh-overrides 39: the detail block under the list — the highlighted
++ * effect's LARGE live demo, its Russian description, and the current
++ * state (on/off + mode). The demo re-renders on the shared clock, so a
++ * toggle flips it between live and static right before the user's eyes.
++ */
++function EffectDetail({ effect, time }) {
++    if (effect === undefined)
++        return null;
++    const on = effectEnabled(effect);
++    return (_jsxs(Box, { flexDirection: "column", marginTop: 1, children: [_jsxs(Box, { flexDirection: "row", children: [_jsx(Text, { color: "remember", bold: true, children: "▸ " }), _jsx(Text, { color: on ? 'success' : 'inactive', bold: true, children: `${effect}: ${on ? 'on' : 'off'}` })] }), _jsx(Box, { paddingLeft: 2, flexDirection: "row", children: _jsx(EffectDemo, { effect: effect, time: time, large: true }) }), _jsx(Box, { paddingLeft: 2, children: _jsx(Text, { wrap: "wrap", children: getEffectDescription(effect) }) }), _jsxs(Box, { paddingLeft: 2, children: _jsx(Text, { dimColor: true, children: `режим: ${animationsMode()} — enter/space переключает` }) })] }));
++}
++/**
+  * The effects dashboard panel.
+  * @param focusIndex - Cursor row (keyboard handling lives in Chat's overlay).
+  * @param onToggle - (key, next) => void; Chat persists via effectsPrefs.
+@@ -95,5 +143,5 @@
+                 const on = effectEnabled(key);
+                 const focused = index === focusIndex;
+                 return (_jsxs(Box, { key: key, flexDirection: "row", children: [_jsx(Text, { color: focused ? 'remember' : undefined, bold: focused, children: focused ? '❯ ' : '  ' }), _jsx(Box, { width: 24, flexShrink: 0, children: _jsx(Text, { color: focused ? 'remember' : undefined, wrap: "truncate-end", children: EFFECT_LABELS[key] ?? key }) }), _jsx(Box, { width: 26, flexShrink: 0, children: _jsx(EffectDemo, { effect: key, time: time }) }), _jsx(Text, { color: on ? 'success' : 'inactive', bold: focused, children: on ? ' on' : ' off' })] }, key));
+-            }), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter/space toggles · esc exits · reduced-motion/env gates override" }) })] }) }));
++            }), _jsx(EffectDetail, { effect: EFFECT_KEYS[focusIndex], time: time }), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter/space toggles · esc exits · reduced-motion/env gates override" }) })] }) }));
+ }

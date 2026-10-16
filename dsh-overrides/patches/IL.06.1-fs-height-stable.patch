@@ -1,0 +1,27 @@
+# Goal:      slack-полоса стабильна: contentJustify (переписал 23)
+# Family:    IL.06
+# Status:    live
+# Files:     lib/types/screens/Chat.js
+# Evidence:  facts/patches-B.md; dsh-overrides/patches/repro-24-fs-layout.mjs
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (fullscreen-путь)
+
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -3397,7 +3405,15 @@
+                 // contentJustify doc. Without it, collapsing the todo list
+                 // left a blank band between the transcript end and the
+                 // footer that grew with every freed row.
+-                contentJustify: inlinePinned ? 'flex-end' : undefined, children: [_jsx(LogoHeader, { model: channel.model, effort: channel.reasoningEffort, cwd: channel.displayCwd, whale: channel.whale,
++                // dsh-overrides 25: fullscreen shares the pinned-frame slack
++                // rule. Without it the band sits between the transcript end
++                // and the footer and MIGRATES as content mounts (the first
++                // message moves the freed rows from below the statusline
++                // into the viewport interior — visible "breathing"). With
++                // flex-end the slack always stays ABOVE the transcript: the
++                // footer never moves and content grows upward, terminal-
++                // style. No-op when the content fills the viewport.
++                contentJustify: inlinePinned || fullscreen ? 'flex-end' : undefined, children: [_jsx(LogoHeader, { model: channel.model, effort: channel.reasoningEffort, cwd: channel.displayCwd, whale: channel.whale,
+                                 // Resuming a long session skips the ~3.4s opening animation: it
+                                 // keeps firing low-frequency React commits that compete with the
+                                 // transcript mount batches (and the first wheel events) for the

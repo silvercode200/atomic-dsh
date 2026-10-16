@@ -1,0 +1,159 @@
+# Goal:      прошивка shimmer-ключей тем + parseRGB hex
+# Family:    TH.02
+# Status:    live
+# Files:     lib/types/customTheme.js, lib/types/themeCatalog.js,
+#            lib/types/dsh-adapter/themes.js,
+#            lib/types/components/Spinner/spinnerUtils.js
+# Evidence:  facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (style wave)
+
+--- a/lib/types/customTheme.js
++++ b/lib/types/customTheme.js
+@@ -212,13 +212,46 @@
+         .filter((spec) => spec !== undefined)
+         .sort((a, b) => a.name.localeCompare(b.name));
+ }
++// dsh-overrides 28: shimmer keys are firmware, not palette. The brand
++// animations (GlimmerMessage base<->shimmer interpolation, the spinner
++// glyph's rainbow cycle) read claudeShimmer and the rainbow_*_shimmer
++// ladder; a third-party theme overlaying them flattens the signature
++// shimmer into one flat foreign color. After the overlay merge the base
++// palette's animation keys win back, so the shimmer keeps the brand hues
++// under any user theme. DSH_TUI_ALLOW_THEME_SHIMMER=1 bypasses the guard.
++const SHIMMER_FIRMWARE_KEYS = [
++    'claudeShimmer',
++    'rainbow_red_shimmer',
++    'rainbow_orange_shimmer',
++    'rainbow_yellow_shimmer',
++    'rainbow_green_shimmer',
++    'rainbow_blue_shimmer',
++    'rainbow_indigo_shimmer',
++    'rainbow_violet_shimmer',
++];
++/**
++ * Restore the animation-firmware keys a theme overlay may have flattened.
++ * @param merged - The palette after overlaying the theme's colors.
++ * @param base - The built-in palette the theme overlays.
++ * @returns The palette with the shimmer firmware keys taken from `base`.
++ */
++export function restoreShimmerFirmware(merged, base) {
++    if (process.env.DSH_TUI_ALLOW_THEME_SHIMMER === '1')
++        return merged;
++    const restored = { ...merged };
++    for (const key of SHIMMER_FIRMWARE_KEYS) {
++        restored[key] = base[key];
++    }
++    return restored;
++}
+ /**
+  * Overlay a spec's overrides onto its base palette.
+  * @param spec - Validated theme spec.
+  * @returns The full concrete palette.
+  */
+ export function buildTheme(spec) {
+-    return { ...getTheme(spec.base), ...spec.colors };
++    const base = getTheme(spec.base);
++    return restoreShimmerFirmware({ ...base, ...spec.colors }, base);
+ }
+ /**
+  * Resolve a user theme name to its full palette, cached after first load.
+--- a/lib/types/themeCatalog.js
++++ b/lib/types/themeCatalog.js
+@@ -6,7 +6,7 @@
+  * Ordering is the precedence contract: auto, built-ins, static files, runtime.
+  */
+ import { AUTO_THEME_NAME, getTheme, THEME_NAMES, } from './theme.js';
+-import { buildTheme, listCustomThemes, } from './customTheme.js';
++import { buildTheme, listCustomThemes, restoreShimmerFirmware, } from './customTheme.js';
+ function keyOf(name) {
+     return name.toLowerCase();
+ }
+@@ -83,7 +83,10 @@
+             // its resolver is wired; still provide a safe, deterministic palette.
+             if (registration.base !== 'light' && registration.base !== 'dark' && registration.base !== 'dark-ansi')
+                 continue;
+-            palette = { ...getTheme(registration.base), ...registration.colors };
++            // dsh-overrides 28: the runtime fallback palette keeps the shimmer
++            // firmware keys of the base (same guard as buildTheme).
++            const basePalette = getTheme(registration.base);
++            palette = restoreShimmerFirmware({ ...basePalette, ...registration.colors }, basePalette);
+         }
+         entries.push(entry(registration.name, registration.displayName || registration.name, 'runtime', palette, registration.base));
+         seen.add(key);
+--- a/lib/types/dsh-adapter/themes.js
++++ b/lib/types/dsh-adapter/themes.js
+@@ -9,7 +9,7 @@
+ import { Service } from '@deepseek-ai/cordis';
+ import { cleanRenderText } from './sanitize.js';
+ import { activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller, } from './host-access.js';
+-import { isThemeBase, isThemeKey, isValidThemeColor } from '../customTheme.js';
++import { isThemeBase, isThemeKey, isValidThemeColor, restoreShimmerFirmware } from '../customTheme.js';
+ import { AUTO_THEME_NAME, getTheme, registerRuntimeThemeResolver, THEME_NAMES, } from '../theme.js';
+ const NAME_PATTERN = /^[a-z][a-z0-9_-]*(?::[a-z][a-z0-9_-]*)?$/u;
+ const MAX_NAME_LENGTH = 128;
+@@ -218,10 +218,13 @@
+                 warn(caller, `tuiThemes.register rejected "${validated.name}" — registry limit reached`);
+                 return NOOP;
+             }
++            const basePalette = getTheme(validated.base);
+             const entry = Object.freeze({
+                 ...validated,
+                 owner,
+-                theme: Object.freeze({ ...getTheme(validated.base), ...validated.colors }),
++                // dsh-overrides 28: runtime contributions keep the shimmer
++                // firmware keys of the base (same guard as buildTheme).
++                theme: Object.freeze(restoreShimmerFirmware({ ...basePalette, ...validated.colors }, basePalette)),
+             });
+             state.entries.set(entry.name, entry);
+             emit(state);
+--- a/lib/types/components/Spinner/spinnerUtils.js
++++ b/lib/types/components/Spinner/spinnerUtils.js
+@@ -77,24 +77,43 @@
+ }
+ /** 匹配 `rgb(r,g,b)` 文本，分量允许任意空格。 */
+ const RGB_STRING_PATTERN = /rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/;
++/** 匹配 `#rgb` / `#rrggbb` / `#rrggbbaa` 十六进制文本（用户主题的存储格式）。 */
++const HEX_STRING_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+ /** 按输入字符串记忆化解析结果，重复调用不再做正则匹配。 */
+ const rgbParseCache = new Map();
+ /**
+- * 解析 `rgb(r,g,b)` 颜色字符串；格式不合法时返回 null。
++ * 解析 `rgb(r,g,b)` 或十六进制颜色字符串；格式不合法时返回 null。
+  * 同一输入的解析结果会被缓存（含 null），之后取用零成本。
++ *
++ * dsh-overrides 28: user themes store palette values as hex (`#rrggbb`);
++ * the shimmer pipeline (GlimmerMessage/SpinnerGlyph/ActivityLine) parsed
++ * only `rgb()` strings, so any custom palette flattened every animation to
++ * a static color. The hex storage form now parses too — theme values
++ * themselves stay untouched (parser-side only).
+  */
+ export function parseRGB(colorStr) {
+     const remembered = rgbParseCache.get(colorStr);
+     if (remembered !== undefined)
+         return remembered;
++    let parsed = null;
+     const parts = colorStr.match(RGB_STRING_PATTERN);
+-    const parsed = parts
+-        ? {
++    if (parts) {
++        parsed = {
+             r: parseInt(parts[1], 10),
+             g: parseInt(parts[2], 10),
+             b: parseInt(parts[3], 10),
++        };
++    }
++    else {
++        const hex = colorStr.match(HEX_STRING_PATTERN);
++        if (hex) {
++            let digits = hex[0].slice(1);
++            if (digits.length === 3)
++                digits = digits.split('').map(c => c + c).join('');
++            const n = parseInt(digits.slice(0, 6), 16);
++            parsed = { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+         }
+-        : null;
++    }
+     rgbParseCache.set(colorStr, parsed);
+     return parsed;
+ }

@@ -1,0 +1,61 @@
+{
+  "name": "glyphs",
+  "description": "Glyph fallback test: box-drawing, braille, powerline, fullwidth, em-dash, middot, ambiguous-width — для проверки рендеринга в WezTerm desktop и Termux mobile",
+  "usage": {
+    "input_tokens": 1200,
+    "output_tokens": 850,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  },
+  "segments": [
+    {
+      "thinking": [
+        "Тест glyph fallback: проверяю рендеринг box-drawing, braille, powerline, fullwidth и ambiguous-width глифов. ",
+        "Цель — выявить терминалы (особенно Termux mobile), которые заменяют отсутствующие глифы пробелами или тофу."
+      ]
+    },
+    {
+      "text": [
+        "┌──────────────────────────────────────────────┐\n",
+        "│  Glyph Fallback Test — dsh-fake-llm           │\n",
+        "└──────────────────────────────────────────────┘\n",
+        "\n",
+        "Box-drawing (рамка):\n",
+        "├──┤  ├─┬─┤  └─┴─┘  ┌─┐  └─┘\n",
+        "│  │  │   │  │   │  │ │  │ │\n",
+        "└──┘  ┴───┴  ┴───┘  └─┘  └─┘\n",
+        "T-junctions: ├ ┤ ┬ ┴ ┼\n",
+        "\n",
+        "Braille (индикаторы прогресса):\n",
+        "⠁ ⠂ ⠄ ⡀  →  ⠉ ⠠ ⡀ ⢀  →  ⠇ ⠸ ⢸ ⣸  →  ⣿\n",
+        "Spinner: ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏\n",
+        "\n",
+        "Powerline (заливка сегмента, U+E0B0):\n",
+        " test  normal  warn  error \n",
+        "\n",
+        "Fullwidth (CJK):\n",
+        "（）ＡＢＣＤＥ １２３４５ ｜＝＋－\n",
+        "Halfwidth: () ABCDE 12345 | = + -\n",
+        "\n",
+        "Em dash — и middot · (частые в статус-баре dsh):\n",
+        "Status: model · tps: 47.2 — ctx 92% · depth 3\n",
+        "\n",
+        "Ambiguous-width (границы ширины):\n",
+        "± × ÷ ° µ\n",
+        "Temp: 36.6°C  Tol: ±0.5mm  Res: 10µm  Area: 12×4÷2\n",
+        "\n",
+        "Alignment test (ASCII vs non-ASCII mix):\n",
+        "│ Name      │ W │ Glyph │\n",
+        "│ box       │ 1 │  │    │\n",
+        "│ braille   │ 1 │  ⠁   │\n",
+        "│ powerline │ 1 │    │\n",
+        "│ fullwidth │ 2 │ （   │\n",
+        "│ em-dash   │ 1 │  —   │\n",
+        "│ degree    │ 1 │  °   │\n",
+        "└───────────┴───┴───────┘\n",
+        "\n",
+        "Если рамки рваные или глифы заменены □/пробелом — терминал не поддерживает fallback для этих диапазонов Unicode."
+      ]
+    }
+  ]
+}

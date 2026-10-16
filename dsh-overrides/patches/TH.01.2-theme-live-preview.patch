@@ -1,0 +1,100 @@
+# Goal:      live-превью тем в /theme (preview/revert ThemeProvider)
+# Family:    TH.01
+# Status:    live
+# Files:     lib/types/components/design-system/ThemeProvider.js,
+#            lib/types/screens/Chat.js
+# Evidence:  reports/live42-frames/; facts/patches-C.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 LIVE42
+
+--- a/lib/types/components/design-system/ThemeProvider.js
++++ b/lib/types/components/design-system/ThemeProvider.js
+@@ -44,6 +44,9 @@
+     theme: 'dark',
+     autoBase: 'dark',
+     setTheme: () => false,
++    // dsh-overrides 37: live-preview setters (ThemePicker fish_config flow).
++    previewTheme: () => false,
++    revertTheme: () => false,
+ });
+ /**
+  * DSH_TUI_THEME skips terminal detection (tests, debugging). Accepts a
+@@ -193,6 +196,27 @@
+      * the last detected base immediately and re-queries OSC 11 in the
+      * background, so a theme change since launch is picked up.
+      */
++    // dsh-overrides 37: LIVE PREVIEW — swap the palette immediately WITHOUT
++    // persisting (the ThemePicker previews the highlighted row while the
++    // cursor moves; Enter commits through setTheme above, Esc reverts
++    // through revertTheme). requestedThemeRef moves with the preview so
++    // the plugin-reappear restore effect below stays coherent.
++    const previewTheme = React.useCallback((name) => {
++        if (!isThemeAvailable(name))
++            return false;
++        requestedThemeRef.current = name;
++        setActive(name);
++        return true;
++    }, []);
++    /** Esc from the picker: back to the PERSISTED choice (never writes). */
++    const revertTheme = React.useCallback(() => {
++        const persisted = readThemePref() ?? AUTO_THEME_NAME;
++        requestedThemeRef.current = persisted;
++        setActive(persisted);
++        if (persisted === AUTO_THEME_NAME)
++            redetectAutoBase();
++        return true;
++    }, [redetectAutoBase]);
+     const setTheme = React.useCallback((name) => {
+         if (!isThemeAvailable(name)) {
+             console.warn(`[dsh-tui] theme "${name}" not found`);
+@@ -232,7 +256,7 @@
+         : isThemeAvailable(active)
+             ? active
+             : AUTO_THEME_NAME;
+-    const value = React.useMemo(() => ({ theme: renderedTheme, autoBase, setTheme }), [renderedTheme, autoBase, setTheme]);
++    const value = React.useMemo(() => ({ theme: renderedTheme, autoBase, setTheme, previewTheme, revertTheme }), [renderedTheme, autoBase, setTheme, previewTheme, revertTheme]);
+     useEffect(() => {
+         if (active !== null)
+             setActiveThemeName(renderedTheme);
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -394,7 +394,7 @@
+     const [presetOptions, setPresetOptions] = React.useState([]);
+     /** `/effort` adapter levels: load async before the slider opens. */
+     const [effortOptions, setEffortOptions] = React.useState([]);
+-    const [themeName, setTheme] = useTheme();
++    const [themeName, setTheme, previewTheme, revertTheme] = useTheme();
+     const { rows: terminalRows } = useTerminalSize();
+     /**
+      * dsh-overrides 11: inline bottom-anchor (bug B). In inline
+@@ -2863,6 +2863,13 @@
+             const query = overlay.query ?? '';
+             if (key.upArrow || key.downArrow) {
+                 dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: options.length });
++                // dsh-overrides 37: LIVE PREVIEW — the highlighted theme
++                // applies immediately (colors + background) while the cursor
++                // moves, without persisting; Enter commits, Esc reverts.
++                const nextIndex = wrapIndex(overlay.index, key.upArrow ? -1 : 1, options.length);
++                const previewName = options[nextIndex]?.value;
++                if (previewName !== undefined)
++                    previewTheme(previewName);
+             }
+             else if (plainReturn) {
+                 dispatchOverlay({ type: 'close' });
+@@ -2874,11 +2881,14 @@
+             }
+             else if (key.escape) {
+                 // Esc clears an active filter first; only an empty filter
+-                // closes the picker.
++                // closes the picker. dsh-overrides 37: closing reverts any
++                // live preview back to the persisted choice (no write).
+                 if (query !== '')
+                     dispatchOverlay({ type: 'theme-edit', query: '' });
+-                else
++                else {
++                    revertTheme();
+                     dispatchOverlay({ type: 'close' });
++                }
+             }
+             else if (key.backspace || key.delete) {
+                 if (query !== '')

@@ -1,0 +1,163 @@
+# Golden smoke-сьют кеш-верификации dsh — TG-DSH-CACHE-20260912 node 9.
+#
+# Замороженный минимальный E2E-набор: по одному прогону на поверхность
+# исполнения кеш-механики. ОБЯЗАТЕЛЬНЫЙ прогон после каждого изменения ядра
+# (dsh-tools / dsh-system-prompt / mcp-lazy / spot / пресеты). Расширение
+# сьюта = отдельный коммит + bump schemaVersion.
+#
+# Запуск одной командой: bash tests/golden/run.sh
+# (см. README.md — требования к целевой машине и что считается зелёным)
+schemaVersion: 1
+
+# Целевая машина: машина с доступом к cli-relay (http://127.0.0.1:8350)
+# и SSH. По умолчанию vmdev (закон SOC: тесты не на Zorin).
+# Override: GOLDEN_TARGET=host bash tests/golden/run.sh
+target: vmdev
+
+# Замороженные промпты сценариев (не менять без bump schemaVersion).
+scenarios:
+  a_code_mode_run_code:
+    description: code-mode сессия с run_code; кеш на устойчивых шагах
+    mode: tui
+    plan:
+      - send: >-
+          Посчитай через run_code: сумму всех простых чисел до 200 и количество
+          таких чисел. Выведи оба числа и проверь их вторым независимым способом.
+      - send: "Скажи \"ок\", а затем двумя-тремя предложениями опиши, что ты делал в предыдущем задании."
+    expects:
+      - run_code вызван (tool/call)
+      - system_stable (ровно 1 request/header, без change)
+      - cache_pct >= 97 на шагах с кешем
+
+  b_mcp_activate_and_call:
+    description: MCP-активация (schemaDelivery=message) + вызов тула сервера
+    mode: tui
+    plan:
+      - send: >-
+          Найди через MCP-инструментарий сервер context-mode, активируй его
+          и вызови любой его инструмент. После результата опиши двумя предложениями, какой инструмент вызвал, и заверши ответ словом activated.
+      - send: "Скажи \"ок\", а затем двумя-тремя предложениями опиши, что ты делал в предыдущем задании."
+    expects:
+      - активация (mcp__router__search_and_activate или *__activate)
+      - вызван тул вида mcp__context-mode__*
+      - system_stable НА ВСЁМ пути (активация не меняет header)
+      - cache_pct >= 97 (если провайдер пишет кеш)
+
+  c_spot_cold_load:
+    description: cold-tool load через spot_search/spot_load + использование
+    mode: tui
+    plan:
+      - send: >-
+          В коде run_code вызови tools.spot_search с запросом web search,
+          посмотри результат, затем вызови tools.spot_load для найденного
+          инструмента веб-поиска. Оба вызова обязательны. После этого ответь
+          и заверши ответ словом loaded, добавив перед ним два предложения о найденном инструменте.
+      - send: "Скажи \"ок\", а затем двумя-тремя предложениями опиши, что ты делал в предыдущем задании."
+    expects:
+      - spot_search и spot_load вызваны
+      - system_stable (схемы приходят сообщением, не в system)
+      - cache_pct >= 97 (если провайдер пишет кеш)
+
+  d_compaction:
+    description: ручная компакция + ход после неё
+    mode: tui
+    plan:
+      - send: >-
+          Запиши через run_code в файл /tmp/golden-d.txt три строки:
+          alpha, beta, gamma. Затем прочитай файл и перечисли содержимое.
+      - slash: /compact
+      - send: Какой файл мы только что создали и что в нём? Ответь кратко.
+    expects:
+      - compaction/start + compaction/end записи
+      - ход после компакции завершён (turn/end)
+      - system_stable ПОСЛЕ компакции (ровно 1 request/header)
+      - cache_pct >= 97 (если провайдер пишет кеш)
+
+  # TG-DSH-BACKLOG-20260914 nodes 2-3 (C-4/C-5): расширение сьюта, отдельный
+  # коммит. Формат артефактов не меняется — schemaVersion остаётся 1.
+  e_subagent_routing:
+    description: >-
+      рольные субагенты — пин модели (agentOptions в пресете code-lazy)
+      реально доезжает до дочерней сессии: subagent_research -> cli/haiku,
+      subagent_exec -> cli/sonnet (по request/header дочерних сессий)
+    mode: tui
+    plan:
+      - send: >-
+          Сначала вызови инструмент subagent_research (run_in_background:
+          false) с задачей: «Найди в этом каталоге все файлы и кратко
+          опиши, что здесь лежит». Дождись результата. Затем вызови
+          инструмент subagent_exec (run_in_background: false) с задачей:
+          «Посчитай количество строк в файле README.md и верни только
+          число». Дождись результата. После обоих субагентов опиши
+          двумя-тремя предложениями, какие субагенты ты вызвал и что они
+          вернули, и заверши ответ словом delegated.
+    expects:
+      - родитель вызвал subagent_research и subagent_exec (tool/call или code-dispatch)
+      - дочерняя сессия role=subagent_research с provider=cli, model=haiku
+        (маппинг по origin=subagent + parentSession + spawn-времени — своп
+        пинов ролей обязан FAIL-ить, а не PASS-ать по множеству моделей)
+      - дочерняя сессия role=subagent_exec с provider=cli, model=sonnet
+      - system_stable родителя (спавн не меняет header)
+      - usage-шаги пишутся (анти-вакуум); cache_steps_present обязателен,
+        если канал репортит кеш (см. cache_probe)
+
+  f_plan_mode_grill:
+    description: >-
+      план-мод рисёч+ — на материально неоднозначной задаче модель
+      спрашивает (ask_user_question) ДО exit_plan_mode и не мутирует
+      файлы до подачи плана
+    mode: tui
+    plan:
+      # «/plan on», НЕ голый «/plan»: Enter по голому «/plan» выбирает
+      # автодополнением «off» — план-мод молча не включается
+      - slash: /plan on
+      - sleep: 3
+      - respond:
+          # Нейтральный промпт: КАК вызывать ask_user_question — выбор модели
+          # (прямой tool/call или code-dispatch из run_code). Инструкция
+          # «только напрямую, НЕ через run_code» была workaround'ом мнимой
+          # «гонки провайдера» (backlog-20260914 ловушки 5-6): панель
+          # монтировалась всегда, слеп был contiguous-поиск маркера в raw
+          # байтах (ink cell-skip дифф) — детекция исправлена в драйвере
+          # (VirtualScreen, TG-DSH-FIXUP-20260914 node 1). Оба пути обязаны
+          # работать.
+          send: >-
+            Добавь кеширование в этот проект. Когда нужно уточнить что-то
+            у пользователя — спроси через ask_user_question; финальный план
+            подай через exit_plan_mode.
+          stop_on_call: exit_plan_mode
+          workdir: true
+    expects:
+      - ask_user_question вызван (tool/call или code-dispatch)
+      - exit_plan_mode вызван
+      - ask_user_question РАНЬШЕ exit_plan_mode (порядок в логе)
+      - мутаций work dir до exit_plan_mode нет (манифест драйвера)
+      # system_stable НЕ проверяется — ДОКУМЕНТИРОВАННОЕ исключение план-мода
+      # (review MAJOR#3, TG-DSH-FIXUP-20260914 node 3): вход в план-мод штатно
+      # меняет system-секцию (reason:"change"; репро f: headers=2, system
+      # 27979 -> 24527 символов). Вместо него tools_stable — каталог тулов
+      # не растёт между режимами («tool catalog stays the same across modes»).
+      - tools_stable (каталог тулов не растёт между режимами план-мода)
+      - usage-шаги пишутся (анти-вакуум); cache_steps_present обязателен,
+        если канал репортит кеш (см. cache_probe)
+
+# Кеш-метрика — общая для всех сценариев cli-группы (анти-вакуум, review
+# MAJOR#4 / TG-DSH-FIXUP-20260914 node 3): usage_steps_present обязателен
+# всегда; cache_steps_present + cache_pct>=97 обязательны, если канал
+# репортит кеш. Репортит ли канал — определяет ПРОБА run.sh (один прямой
+# запрос в relay до сценариев: есть ли кеш-поля в usage ответа). Проба
+# «не репортит» (свойство апстрима relay, НЕ dsh) фиксируется в отчёте
+# (checks.cache_reporting=channel-no-report) и не фейлит сценарии; dsh-регрессия
+# записи кеша при репортящем канале = честный FAIL.
+cache_probe: true
+
+# Порог зелёного сьюта: >= 5 из 6 сценариев PASS (один флaky-сценарий
+# допустим; run.sh читает отсюда список сценариев и этот порог).
+pass_threshold: 5
+
+# Метрики для отчёта (фиксируются в reports/cache-verification-*.md):
+metrics:
+  - system_chars     # размер system prompt (после B8-диеты: ~25491 на Zorin)
+  - system_sha256    # идентичность между сессиями одного стека
+  - cache_pct        # средний cacheRead/input по кешированным шагам
+  - header_count     # 1 = system заморожен

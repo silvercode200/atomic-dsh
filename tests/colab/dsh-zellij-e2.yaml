@@ -1,0 +1,245 @@
+program: dsh-zellij-e2
+# suite_version: 2 (2026-09-21, TG-DSH-REBUILD-20260921 узел 7 item 7.2 — E2 root-cause).
+# ФАКТ среды юзера (env живого dsh-процесса, /proc/<pid>/environ, 2026-09-21):
+#   TERM_PROGRAM=WezTerm, TERM_PROGRAM_VERSION=20240203-110809-5046fc22,
+#   TERM=xterm-256color, COLORTERM=truecolor, TMUX= (пусто).
+# zellij 0.44.x юзера ПРОБРАСЫВАЕТ TERM_PROGRAM=WezTerm в панель → dsh юзера
+# видит WezTerm → ink terminal.js isSynchronizedOutputSupported()=true →
+# BSU/ESU (DEC 2026) + DECSTBM-путь рендера ВКЛЮЧЕНЫ. Во ВСЕХ tmux-прогонах
+# (r1b/r1c2/p3/zj-v1) env.TMUX → sync-output ВЫКЛЮЧЕН → этот код-путь не
+# тестировался вообще. Гипотеза root-cause E2/E1-симптомов юзера: баг в
+# BSU/ESU+DECSTBM-пути рендера (кадр сталеет в WezTerm до полного перериса).
+#
+# Дизайн A/B/C в одном прогоне, одинаковая геометрия/конфиг/профиль:
+#   A dsh-plain: tmux → dsh (как r1c2) — меню ждём PASS (sync-off контроль);
+#   B dsh-zj:    tmux → zellij → dsh (env панели: TERM_PROGRAM нет) — v1 PASS;
+#   C dsh-zjw:   tmux → zellij → dsh с TERM_PROGRAM=WezTerm COLORTERM=truecolor
+#                (точная эмуляция env юзера) — ПРОБА: sync-путь ВКЛЮЧЕН.
+# Вердикты C:
+#   C без меню при живом A → root-cause = BSU/ESU+DECSTBM путь в env юзера —
+#   ВОСПРОИЗВЕДЕНО (RED — цель эскалации);
+#   C меню видно → sync-путь чист, искать дальше (WezTerm 20240203-специфика).
+#
+# zellij живёт ТОЛЬКО внутри Colab VM в изолированной тест-ячейке — локально
+# на машинах юзера не запускается (правило TermSeer от 2026-09-10).
+#
+# Запуск (драйвер):
+#   bash scripts/colab-dsh-live-check.sh --target current --label zj-e2w \
+#     --suite tests/colab/dsh-zellij-e2.yaml \
+#     --detectors zj_slash_menu_envuser --skip-deploy --max-wait 1800
+lane: colab
+vars:
+  zjframes: /root/dsh-zj-frames
+  zjwork: /root/dsh-zj
+  sess_a: dsh-plain
+  sess_b: dsh-zj
+  sess_c: dsh-zjw
+
+setup:
+  - run: 'mkdir -p $zjframes $zjwork && rm -rf $zjframes/* && echo DIRS_OK'
+    timeout: 90
+  # --- zellij-бинарь (идемпотентно; latest static musl) ----------------------
+  - id: zj_install
+    run: |
+      if [ -x /usr/local/bin/zellij ]; then echo ZJ_ALREADY; exit 0; fi
+      cd /root && curl -sL --connect-timeout 15 -o zj.tar.gz \
+        https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
+        && tar xzf zj.tar.gz && install -m 755 zellij /usr/local/bin/zellij \
+        && echo ZJ_INSTALLED
+      /usr/local/bin/zellij --version > $zjframes/zj-version.txt 2>&1 || true
+    timeout: 300
+  # --- минимальный layout: один pane, без рамок ------------------------------
+  - id: zj_layout
+    run: |
+      mkdir -p /root/.config/zellij
+      cat > /root/.config/zellij/layout-minimal.kdl <<'KEOF'
+      layout {
+          pane
+      }
+      KEOF
+      cat > /root/.config/zellij/config.kdl <<'KEOF'
+      pane_frames false
+      copy_command "true"
+      KEOF
+      echo ZJ_LAYOUT_OK
+    timeout: 60
+  # --- парити-слой: та же dsh-tui-секция юзера (fullscreen:false) ------------
+  - id: parity_settings
+    run: |
+      cp /root/.dsh/settings.yaml /root/.dsh/settings.yaml.zj-backup 2>/dev/null || true
+      awk '/^dsh-tui:/{s=1} s==1 && /^[^[:space:]#]/ && !/^dsh-tui:/{s=0} s==0{print}' /root/.dsh/settings.yaml > /root/.dsh/settings.yaml.new
+      cat >> /root/.dsh/settings.yaml.new <<'TUIEOF'
+      dsh-tui:
+        statusBar:
+          tokens: false
+          compact: false
+          contextBar: false
+          mode: true
+          trajectory: true
+          shortcutHint: false
+          activity: false
+          cache: false
+          gitBranch: false
+          compactThresholdRatio: 0.4768
+          tps: false
+          sessionTitle: false
+          sessionId: false
+          cwd: true
+          ctxBarMode: percent-only
+        fullscreen: false
+        minimal: false
+        toolBackground: subtle
+        appearance:
+          powerline: full
+          theme: tokyonight-moon
+          inputBorder: "#7aa2f7"
+      TUIEOF
+      mv /root/.dsh/settings.yaml.new /root/.dsh/settings.yaml
+      grep -n 'fullscreen' /root/.dsh/settings.yaml > $zjframes/settings-parity.txt 2>/dev/null || echo NO_FULLSCREEN_KEY >> $zjframes/settings-parity.txt
+      echo PARITY_APPLIED
+    timeout: 120
+  - id: parity_marker
+    run: |
+      if [ ! -f /root/.dsh-tui/migrations.json ]; then
+        printf '{\n  "fullscreen-factory-default": "2026-08-29T00:00:00.000Z"\n}\n' > /root/.dsh-tui/migrations.json
+      fi
+      echo MARKER_OK
+    timeout: 60
+  # --- сессии: A (контроль), B (zellij), C (zellij + env юзера) --------------
+  - run: 'tmux kill-session -t $sess_a 2>/dev/null; tmux kill-session -t $sess_b 2>/dev/null; tmux kill-session -t $sess_c 2>/dev/null; true'
+    timeout: 60
+    ignore_error: true
+  - run: 'tmux new-session -d -s $sess_a -x 47 -y 43 && tmux set -as terminal-overrides ",xterm-256color:Tc" && echo SA_OK'
+    timeout: 60
+  - run: 'tmux new-session -d -s $sess_b -x 47 -y 43 && echo SB_OK'
+    timeout: 60
+  - run: 'tmux new-session -d -s $sess_c -x 47 -y 43 && echo SC_OK'
+    timeout: 60
+  # B и C: zellij внутри tmux-панели; первый pane открывает shell
+  - id: launch_zj
+    run: |
+      for S in $sess_b $sess_c; do
+        tmux send-keys -t $S 'zellij --layout /root/.config/zellij/layout-minimal.kdl --session dshz-$S' Enter
+      done
+      for i in $(seq 1 30); do
+        sleep 1
+        tmux capture-pane -p -t $sess_b > $zjframes/zj-boot.txt
+        tmux capture-pane -p -t $sess_c > $zjframes/zjw-boot.txt
+        if grep -qE '\$|~' $zjframes/zj-boot.txt && grep -qE '\$|~' $zjframes/zjw-boot.txt; then echo ZJ_READY; exit 0; fi
+      done
+      echo ZJ_SHELL_TIMEOUT; exit 1
+    timeout: 150
+  # dsh в сессиях: A/B обычный env, C = env юзера (TERM_PROGRAM=WezTerm)
+  - run: 'tmux send-keys -t $sess_a "FAKE_LLM_KEY=fake-local-key dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-zj-a.err" Enter'
+    timeout: 60
+  - run: 'tmux send-keys -t $sess_b "FAKE_LLM_KEY=fake-local-key dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-zj-b.err" Enter'
+    timeout: 60
+  - run: 'tmux send-keys -t $sess_c "FAKE_LLM_KEY=fake-local-key TERM_PROGRAM=WezTerm TERM_PROGRAM_VERSION=20240203-110809-5046fc22 COLORTERM=truecolor dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-zj-c.err" Enter'
+    timeout: 60
+  - id: boot_poll_both
+    run: |
+      for i in $(seq 1 180); do
+        tmux capture-pane -p -t $sess_a > $zjframes/a-boot.txt
+        tmux capture-pane -p -t $sess_b > $zjframes/b-boot.txt
+        tmux capture-pane -p -t $sess_c > $zjframes/c-boot.txt
+        A=$(grep -cE '❯|for shortcuts' $zjframes/a-boot.txt || true)
+        B=$(grep -cE '❯|for shortcuts' $zjframes/b-boot.txt || true)
+        C=$(grep -cE '❯|for shortcuts' $zjframes/c-boot.txt || true)
+        if [ "$A" -ge 1 ] && [ "$B" -ge 1 ] && [ "$C" -ge 1 ]; then echo ALL_READY; exit 0; fi
+        sleep 1
+      done
+      echo "BOOT_TIMEOUT A=$A B=$B C=$C"; exit 1
+    timeout: 240
+
+tests:
+  # --- A/B/C: слэш-меню '/' — tmux vs zellij vs zellij+env юзера -------------
+  - name: zj_slash_menu_envuser
+    steps:
+      - run: |
+          for S in $sess_a $sess_b $sess_c; do
+            tmux send-keys -t $S 'SCENARIO:short warmup' Enter
+          done
+          sleep 12
+          echo WARMUP_DONE
+        timeout: 60
+      - run: |
+          for S in $sess_a $sess_b $sess_c; do
+            tmux send-keys -t $S C-c; sleep 0.3; tmux send-keys -t $S C-u; sleep 0.5
+          done
+          tmux send-keys -t $sess_a /; sleep 2
+          tmux capture-pane -p -t $sess_a > $zjframes/a-slash.txt
+          tmux capture-pane -pe -t $sess_a > $zjframes/a-slash.ansi
+          tmux send-keys -t $sess_a C-u; sleep 0.5
+          tmux send-keys -t $sess_b /; sleep 2
+          tmux capture-pane -p -t $sess_b > $zjframes/b-slash.txt
+          tmux capture-pane -pe -t $sess_b > $zjframes/b-slash.ansi
+          tmux send-keys -t $sess_b C-u; sleep 0.5
+          tmux send-keys -t $sess_c /; sleep 2
+          tmux capture-pane -p -t $sess_c > $zjframes/c-slash.txt
+          tmux capture-pane -pe -t $sess_c > $zjframes/c-slash.ansi
+          tmux send-keys -t $sess_c C-u; sleep 0.5
+          echo SLASH_ABC_CAPTURED
+        timeout: 150
+      # дополлнительный стимул: во время открытого меню — ещё буква (поиск),
+      # у юзера «пусто и первая буква» — буква видна, меню нет
+      - run: |
+          tmux send-keys -t $sess_c /; sleep 1
+          tmux send-keys -t $sess_c th; sleep 2
+          tmux capture-pane -p -t $sess_c > $zjframes/c-slash-th.txt
+          tmux capture-pane -pe -t $sess_c > $zjframes/c-slash-th.ansi
+          tmux send-keys -t $sess_c C-u; sleep 0.5
+          echo C_TYPED_CAPTURED
+        timeout: 90
+      - id: zj_detector
+        run: |
+          menu_cnt() { F=$1; h=$(grep -cE 'commands . [0-9]+ items' $F || true); c=$(grep -cE '│ *(❯ )?[a-z]+ +[A-Z]' $F || true); echo "$h/$c"; }
+          A=$(menu_cnt $zjframes/a-slash.txt)
+          B=$(menu_cnt $zjframes/b-slash.txt)
+          C=$(menu_cnt $zjframes/c-slash.txt)
+          CT=$(menu_cnt $zjframes/c-slash-th.txt)
+          echo "DETECTOR zj_slash_menu_envuser: A_tmux=$A | B_zj=$B | C_zj+WezEnv=$C | C_typed=$CT (формат hdr/cand; юзер-env = C; C hdr=0 cand=0 при живом A → root-cause BSU/ESU-путь)"
+          okA=$(echo $A | cut -d/ -f1); okB=$(echo $B | cut -d/ -f1); okC=$(echo $C | cut -d/ -f1)
+          if [ "$okA" -ge 1 ] 2>/dev/null; then
+            if [ "$okC" -ge 1 ] 2>/dev/null; then
+              echo 'VERDICT: WEZENV_RENDERS_MENU — sync-путь (TERM_PROGRAM=WezTerm) чист в zellij+tmux; искать WezTerm-20240203-специфику' > $zjframes/zj-verdict.txt
+            else
+              echo "VERDICT: E2_REPRODUCED_USER_ENV — меню отсутствует при TERM_PROGRAM=WezTerm (hdr=$okC) при живом контроле (hdr=$okA) → root-cause = BSU/ESU+DECSTBM путь рендера" > $zjframes/zj-verdict.txt
+            fi
+          else
+            echo "VERDICT: INVALID_RUN — контроль tmux мёртв (hdr=$okA)" > $zjframes/zj-verdict.txt
+          fi
+          cat $zjframes/zj-verdict.txt
+          grep -q 'WEZENV_RENDERS_MENU' $zjframes/zj-verdict.txt || grep -q 'INVALID_RUN' $zjframes/zj-verdict.txt
+        timeout: 60
+  # --- артефакты ---------------------------------------------------------------
+  - name: zj_artifacts
+    steps:
+      - run: |
+          tmux capture-pane -p -t $sess_c -S -200 > $zjframes/c-scrollback.txt 2>/dev/null || true
+          head -c 4000 $zjframes/c-slash.txt > $zjframes/c-slash-head.txt 2>/dev/null || true
+          echo ARTIFACTS_OK
+        timeout: 60
+
+  # --- чистый выход ------------------------------------------------------------
+  - name: zj_exit
+    steps:
+      - run: |
+          for S in $sess_a $sess_b $sess_c; do
+            tmux send-keys -t $S C-c; sleep 1; tmux send-keys -t $S q 2>/dev/null || true; sleep 1
+          done
+          sleep 2
+          for S in $sess_b $sess_c; do
+            tmux send-keys -t $S C-q 2>/dev/null || true
+          done
+          sleep 3
+          for p in $(pgrep -f "z[e]l.*--session" 2>/dev/null); do kill -9 $p 2>/dev/null; done
+          echo EXIT_SEQUENCE_DONE
+        timeout: 90
+      - run: |
+          for S in $sess_a $sess_b $sess_c; do
+            tmux kill-session -t $S 2>/dev/null
+          done
+          P=$(pgrep -c -f "[.]dsh/profiles" 2>/dev/null || echo 0)
+          echo "DETECTOR zj_exit: dsh_procs=$P expected=0"
+          [ "$P" -eq 0 ]
+        timeout: 60

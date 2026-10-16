@@ -1,0 +1,3 @@
+name: Code Lazy
+description: Code Mode SDK (run_code) + lazy skills via skill_search/skill_load — no full skill catalog injection.
+order: 6

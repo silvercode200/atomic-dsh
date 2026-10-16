@@ -1,0 +1,80 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -81,6 +81,50 @@
+ * @param config - empty executor config; provider registrations own policy.
+ * @param internals - non-serializable deterministic hooks for tests.
+ */
++// dsh-patch-retrybudget begin — time-budget retries (TG-DSH-TUI-RETRY-20260917 node api-retry)
++// Vanilla llm-retry лимитирует normal-режим счётчиком maxRetries (~50s окна с
++// дефолтным backoff); сетевые штоллы 16-17.09.2026 переживали его и убивали
++// ход. Бюджет-режим: при DSH_RETRY_BUDGET_MIN > 0 счётчик заменён wall-clock
++// бюджетом от первого durable llm/retry события цепочки; cap задержки поднят
++// до max(policy.maxDelayMs, DSH_RETRY_MAX_DELAY_MS=120s). AUTH не ретраится
++// (фильтр retryableCodes стоит раньше по коду). Исчерпание бюджета — тот же
++// vanilla-путь (turn/end error). Env отсутствует/0/битое — поведение
++// байт-идентично vanilla. Аномалии (нет event.time и т.п.) деградируют в
++// счётчик, никогда не дают бесконечный ретрай.
++function dshPatchRetryBudgetMs() {
++	try {
++		const raw = process.env.DSH_RETRY_BUDGET_MIN;
++		if (raw === void 0 || raw === null) return 0;
++		const minutes = Number(String(raw).trim());
++		if (!Number.isFinite(minutes) || minutes <= 0) return 0;
++		return minutes * 60000;
++	} catch {
++		return 0;
++	}
++}
++function dshPatchRetryCapMs() {
++	try {
++		const raw = process.env.DSH_RETRY_MAX_DELAY_MS;
++		if (raw === void 0 || raw === null) return 120000;
++		const ms = Number(String(raw).trim());
++		if (!Number.isFinite(ms) || ms <= 0) return 120000;
++		return Math.min(ms, 2147483647);
++	} catch {
++		return 120000;
++	}
++}
++function dshPatchBudgetExhausted(agent, turn, step, provider, policyKey, budgetMs, previousRetry, maxRetries) {
++	try {
++		const first = agent.session.events.find((event) => event.type === "llm/retry" && event.data.turn === turn && event.data.step === step && event.data.provider === provider && event.data.policyKey === policyKey);
++		if (first === void 0) return false;
++		const start = Number(first.time);
++		if (!Number.isFinite(start)) return previousRetry >= maxRetries;
++		return Date.now() - start >= budgetMs;
++	} catch {
++		return previousRetry >= maxRetries;
++	}
++}
++// dsh-patch-retrybudget end
+ function apply(ctx, config = {}, internals = {}) {
+ 	validateConfig(config);
+ 	const random = internals.random ?? Math.random;
+@@ -139,15 +183,21 @@
+ 		const policyKey = retryPolicyKey(policy);
+ 		const priorPolicyRetry = agent.session.events.findLast((event) => event.type === "llm/retry" && event.data.turn === turn && event.data.step === step && event.data.provider === provider && event.data.policyKey === policyKey);
+ 		const previousRetry = priorPolicyRetry?.data.retry ?? 0;
+-		if (policy.mode === "normal" && previousRetry >= policy.maxRetries) return next();
++		const dshPatchBudgetMs = policy.mode === "normal" ? dshPatchRetryBudgetMs() : 0;
++		if (policy.mode === "normal") {
++			if (dshPatchBudgetMs > 0) {
++				if (dshPatchBudgetExhausted(agent, turn, step, provider, policyKey, dshPatchBudgetMs, previousRetry, policy.maxRetries)) return next();
++			} else if (previousRetry >= policy.maxRetries) return next();
++		}
+ 		const retry = previousRetry + 1;
+ 		const retryId = priorPolicyRetry?.data.retryId ?? RetryId(randomUUID());
++		const dshPatchDelayPolicy = dshPatchBudgetMs > 0 ? { ...policy, maxDelayMs: Math.max(policy.maxDelayMs, dshPatchRetryCapMs()) } : policy;
+ 		let delayMs;
+-		if (failure.providerRetryAfterMs !== void 0 && Number.isFinite(failure.providerRetryAfterMs) && failure.providerRetryAfterMs > 0) if (failure.providerRetryAfterMs > policy.maxDelayMs) {
+-			if (policy.mode === "normal") return next();
+-			delayMs = localDelay(policy, retry, random);
++		if (failure.providerRetryAfterMs !== void 0 && Number.isFinite(failure.providerRetryAfterMs) && failure.providerRetryAfterMs > 0) if (failure.providerRetryAfterMs > dshPatchDelayPolicy.maxDelayMs) {
++			if (policy.mode === "normal" && dshPatchBudgetMs <= 0) return next();
++			delayMs = localDelay(dshPatchDelayPolicy, retry, random);
+ 		} else delayMs = failure.providerRetryAfterMs;
+-		else delayMs = localDelay(policy, retry, random);
++		else delayMs = localDelay(dshPatchDelayPolicy, retry, random);
+ 		return backoff(agent, turn, step, failure, provider, policy, policyKey, retry, retryId, delayMs, signal);
+ 	}
+ 	const disposeListener = ctx.on("agent/request-error", (payload, next) => {

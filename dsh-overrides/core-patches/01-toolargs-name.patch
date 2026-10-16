@@ -1,0 +1,29 @@
+--- a/lib/index.js	2026-09-10 13:29:39.420649920 +0300
++++ b/lib/index.js	2026-09-10 13:30:22.828067354 +0300
+@@ -811,10 +811,14 @@
+ var ToolArgsError = class extends HarnessError {
+ 	/** Individual violations in schema-walk order. */
+ 	violations;
+-	constructor(violations) {
+-		super(`invalid arguments: ${violations.join("; ")}`, "INVALID_ARGS");
++	// dsh-overrides core 01: tool name in ToolArgsError (TG-DSH-INVAL-SUDO-20260910)
++	toolName;
++	constructor(violations, toolName) {
++		// dsh-overrides core 01: name the tool so the agent knows WHICH call failed
++		super(toolName !== void 0 ? `invalid arguments for ${toolName}: ${violations.join("; ")}` : `invalid arguments: ${violations.join("; ")}`, "INVALID_ARGS");
+ 		this.name = "ToolArgsError";
+ 		this.violations = violations;
++		this.toolName = toolName;
+ 	}
+ };
+ /**
+@@ -861,7 +865,8 @@
+ 		...options.timeoutMs !== void 0 ? { timeoutMs: options.timeoutMs } : {},
+ 		async execute(args, exec) {
+ 			const violations = validate(args);
+-			if (violations.length > 0) throw new ToolArgsError(violations);
++			// dsh-overrides core 01: pass the tool name into ToolArgsError
++			if (violations.length > 0) throw new ToolArgsError(violations, options.name);
+ 			return userExecute(args, exec);
+ 		}
+ 	};

@@ -1,0 +1,24 @@
+# Goal:      формат контекста без вводящего в заблуждение percent
+# Family:    SB.02
+# Status:    live
+# Files:     lib/types/tuiDisplayPrefs.js
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-04, W1 — стартовый реестр 0.10.0-beta.4
+
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -62,9 +62,10 @@
+     if (!Number.isFinite(used) || !Number.isFinite(contextWindow) || used === undefined || contextWindow === undefined || contextWindow <= 0) {
+         return undefined;
+     }
++    // Percent (used/window) shown by the upstream build reads like cache fill
++    // and misleads next to the cache field; the bare token counts are the
++    // unambiguous reading, so the percent is dropped entirely.
+     const safeUsed = Math.max(0, used);
+-    const percent = Math.min(999, (safeUsed / contextWindow) * 100);
+-    const percentText = `${percent < 10 ? percent.toFixed(1) : Math.round(percent)}%`;
+     const counts = `${formatTokenCount(safeUsed)}/${formatTokenCount(contextWindow)}`;
+-    return compact ? `${percentText} (${counts})` : `${counts} (${percentText})`;
++    return counts;
+ }

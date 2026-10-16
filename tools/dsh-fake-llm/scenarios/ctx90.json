@@ -1,0 +1,31 @@
+{
+  "name": "ctx90",
+  "description": "Usage, заполняющий контекст до ~90% окна 262144 (input + cache_read + cache_creation = 235930)",
+  "usage": {
+    "input_tokens": 50000,
+    "output_tokens": 2200,
+    "cache_read_input_tokens": 180000,
+    "cache_creation_input_tokens": 5930
+  },
+  "segments": [
+    {
+      "thinking": [
+        "Сценарий ctx90: отчётность usage, заполняющая контекст до ~90% окна 262144. ",
+        "input 50000 + cache_read 180000 + cache_creation 5930 = 235930 токенов входа."
+      ]
+    },
+    {
+      "text": [
+        "Отчёт по заполнению контекста (окно 262144):\n\n",
+        "  input_tokens:               50000\n",
+        "  cache_read_input_tokens:   180000\n",
+        "  cache_creation_input_tokens: 5930\n",
+        "  --------------------------------\n",
+        "  вход итого:                235930  (~90.0% окна)\n",
+        "  output_tokens:              2200\n\n",
+        "Полоса контекста должна стоять у отметки 90%, компакция — показываться как предстоящая. ",
+        "Множитель FAKE_USAGE_SCALE масштабирует эти числа для проверки других порогов."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+# pristine-manifest.sha256 — I1 pristine-hash gate for dsh patch-stack
+# Package: @deepseek-harness-tui/dsh-tui
+# Version: 0.10.0-beta.4
+# Generated: 2026-10-16
+# Source: npm pack @deepseek-harness-tui/dsh-tui@0.10.0-beta.4 (canonical upstream)
+# Purpose: SHA-256 hashes of upstream files BEFORE patch-stack application.
+#          --verify compares live files against these hashes to detect drift.
+#
+# Files created by patches (NOT in upstream — verify ABSENCE after full revert):
+#   CREATED  lib/types/animationsMode.js
+#   CREATED  lib/types/appearancePrefs.js
+#   CREATED  lib/types/components/CustomizationHub.js
+#   CREATED  lib/types/components/EffectsPanel.js
+#   CREATED  lib/types/components/SettingsExamples.js
+#   CREATED  lib/types/components/ThemePreview.js
+#   CREATED  lib/types/components/hubSettings.js
+#   CREATED  lib/types/effectsCatalog.js
+#   CREATED  lib/types/effectsPrefs.js
+#   CREATED  lib/types/hubSections.js
+#   CREATED  lib/types/mksClient.js
+#   CREATED  lib/types/sparkline.js
+#   CREATED  lib/types/spinnerCatalog.js
+#   CREATED  lib/types/spinnerVerbsPrefs.js
+#   CREATED  lib/types/toolProgress.js
+#
+# Files modified by patches (exist in upstream — sha256 below is pristine):
+#
+7bed278ad17f12d19ea75787bdaa8ddff6e6571bf9d92b3446d5955094c7e1ea  lib/types/components/Chat/SubagentMessage.js
+80b2168ec131541018e1e353aa439bc8968db2df1d5d60a47d9c3e497749549b  lib/types/components/EffortInputBorder.js
+b8e63d6081bb192d0052a50c44f84b766dc583d85306fc8dd9565c95f7249800  lib/types/components/GoalTodoPanel.js
+21ed7fecb42a89198ad50c46429badb71185307963f67260c74385844b4dfd63  lib/types/components/HelpMenu.js
+3e8c3454b288e2ee66b63d00b5ca7681f5839ac7470c2d785d1d87bee72fb012  lib/types/components/LoadedContextPanel.js
+e5109aec3392436f49ca3755a8d7d5aa4aa10788101a9288db506f8754879bac  lib/types/components/LogoV2.js
+87a6dc0098f57b44953f58ec00143e46091b448f01b80350d03c8d1391ad542f  lib/types/components/MessageList.js
+3358644fbbdf6e33f8176daf74a403196db335be7018dd309c55509a18ee4380  lib/types/components/PromptInput.js
+076e1f25803ac30931a8ba0ffe87df9b28c94a7131cf89cde668bb74c9e0a824  lib/types/components/Spinner/GlimmerMessage.js
+5f303d5301306133ecf13ecc776f82ce7b1e7673e2c8a54e3a8ad6d1132dc752  lib/types/components/Spinner/SpinnerAnimationRow.js
+44ed72ed7357797b38d9a97b2c0793a1eb124ccbb3a7b0953cb5f2cb49c79ac0  lib/types/components/Spinner/SpinnerGlyph.js
+107624d538fd4a4b93cdb7b287cce01c93d8b987db616ec6752390d62ff241d1  lib/types/components/Spinner/spinnerUtils.js
+033427a407e294587c97438a7d248e673b24e20ae939c29a34d1f859351b4b5f  lib/types/components/SubagentCard.js
+98db9ca37e5bb8072d4a24b71661a6e7536da926abfbc68406c53f1264dd332e  lib/types/components/ThemePicker.js
+44404fb4ef54e84dd57a37c17927f311cfd75517da819a3a31d42548b6a41b6a  lib/types/components/ToolUseLoader.js
+2b0c3c28494e76ddb2071ff0791d5c16909c26ad429fe7ecc389fdfdbe69c99b  lib/types/components/WorkingSpinner.js
+b3dc4a38bf8c78bfd5c56b009370c139cd083a0a7bd6b5d8c7803af73b47f609  lib/types/components/design-system/ThemeProvider.js
+873e51772a81c06c6f366d9986e248d8e78e56d4d61afcd58d33cd6be9852dca  lib/types/components/design-system/ThemedText.js
+32c8a1c9b3ed1c5ca2a4272b7b4d87154662678680fba698c9dd4a31338b85c9  lib/types/components/messages/AssistantToolUseMessage.js
+31aa3e0f8c5700b4ed255dce5e066d3ecfe31cf1a5af728a476c6162f07ef777  lib/types/customTheme.js
+ae416542c539a9a79ab5d7a001f75aafc65db9154b3ecbd59819e38e9b4bb34b  lib/types/dsh-adapter/channel.js
+95d6e0b2c38cabaf99863097f833fffc04b36d25cc0d19ea7433f1da9763f37f  lib/types/dsh-adapter/plugin.js
+98890b5b4d0a3c0520767febeaf3fc328b6423bb1f541f77a13a395adf2a4999  lib/types/dsh-adapter/subagents.js
+2b315b32b8c2a3a092743d5d9c0dab806287a840e26aee8158e070cebe271385  lib/types/dsh-adapter/themes.js
+3c91cacc22da020bbe30d6e9d985d389de188aa0a7c9c74b6ee2c4be7dd6280d  lib/types/i18n.d.ts
+a3ebcb0dc1276226dbc4036e067544b6aae618434c6fee51aba780278689234e  lib/types/i18n.js
+7fca6fa9fb3affb2104d5db904aaa90cb9bce18e93b5a2de4cff7eefb09b6c8e  lib/types/ink/components/ScrollBox.js
+743c591c275bd121a51bd2dc9d489117e2c92d2f0fe94d45da4f5c4a61ab8b1a  lib/types/ink/events/input-event.js
+acbda2949a846d93c2103a4c4f95dfdf275e0ea644e03ffdbc5f5a554420d1f1  lib/types/ink/geometry-trace.js
+e529f45b7c6f4114d631e9d2d83b7e1e608760766e3c60c8f31fd59818ca800e  lib/types/ink/ink.js
+9260bde3874ffc83f27528d4ad90fed3d4b6fa9bdc1dddd2c52ea088682da620  lib/types/ink/log-update.js
+1a276ef975a9724b5b58df75807609975d070d9f335dfc6f6aba8a2e04e903a5  lib/types/ink/parse-keypress.js
+124e227ea4b096d2ea5bf8295d91324b6b275da000187e96fbb4502aca0315bb  lib/types/ink/render-node-to-output.js
+06995c224cfa241f5c52dedc14ec631f8ae2db81b49d31329670c98f2a9a0fb8  lib/types/ink/renderer.js
+a76394f2c2ab484c4d86886f97a354f99c72d813256ccd810680e83dab1c7cf2  lib/types/ink/terminal.js
+f2ef2ecfb2f9d144c19a855bfe59792e6d48c012842b2eff14333de963ddf565  lib/types/native-ts/yoga-layout/index.js
+36727fd1d87e3ab31ca3cafeb1003b5205aaefb28eddcaf59bdd59058dd0bce7  lib/types/screens/AgentView.js
+2be0bfb01ce5eb13d6ac9c56a4ba0a7a6a82ad5f0cc53f2641edcd085070d8e0  lib/types/screens/Chat.js
+a4ba4c19ef24861f725b347f635fb8c55a7a637bb72493df52daa115ae26617a  lib/types/screens/Settings.js
+16b5134524084151b2c73fd704a1d2336d8e74e807c541eae2cb849d960b3914  lib/types/screens/StatusLine.js
+09a959840fb524acfdb635981ac987ed5442fd4b492fb4f5710453c452f98cde  lib/types/screens/chatOverlay.js
+63d9184799c937dd94b150d36b2543caa12aedea375075f4fee0fa9bcdabde08  lib/types/theme.js
+df10df49c5e0f8e6c6d91cb387f55490c80bcde5f33c6ab304c2c4cdef0faad4  lib/types/themeCatalog.js
+4190af2dd65309fe4c1912278626ec24f393b9dfeb57d7d0d9a232457492cdaf  lib/types/themePrefs.js
+9d8db0d30181c4dc8b3cadfb66b5fa4ed9700360230423fcf90f807da9e6fdf1  lib/types/tuiDisplayPrefs.js
+5809d3553e0cacd60d82848df9238c28ac3f0ac41ec62857fecdddfd83d18843  lib/types/update.js
+673ae7791986cfd9282ee6ece478213cfb93c812fa146038a18510eda3255209  lib/types/utils/keymap.js

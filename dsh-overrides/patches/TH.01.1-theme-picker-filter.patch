@@ -1,0 +1,183 @@
+# Goal:      пикер тем: фильтр-поиск + 8 свотчей
+# Family:    TH.01
+# Status:    live
+# Files:     lib/types/components/ThemePicker.js, lib/types/i18n.js,
+#            lib/types/screens/Chat.js, lib/types/screens/chatOverlay.js
+# Evidence:  TG-DSH-CLEAN-20260910 узел 7; facts/patches-A.md;
+#            reports/theme-picker-20260918/
+# Upstream:  not-applicable
+# Added:     2026-09-10, W3 (TG-DSH-CLEAN-20260910 узел 7)
+
+--- a/lib/types/components/ThemePicker.js
++++ b/lib/types/components/ThemePicker.js
+@@ -9,17 +9,32 @@
+ import { useRuntimeThemeSnapshot } from '../hooks/useRuntimeThemeSnapshot.js';
+ /** One double-block swatch character per preview key, in a row. */
+ const SWATCH = '██';
+-/** Theme keys previewed in the picker, chosen for visual contrast. */
+-const SWATCH_KEYS = ['claude', 'text', 'success'];
++/**
++ * Theme keys previewed in the picker, chosen for visual contrast.
++ * dsh-overrides 12: fish_config-style preview — widened from 3 to 8 key
++ * palette tokens so a row reads as a miniature of the theme.
++ */
++const SWATCH_KEYS = ['background', 'text', 'success', 'warning', 'error', 'suggestion', 'claude', 'permission'];
++/**
++ * Rows visible at once. Every option renders two terminal rows (label +
++ * description), so 11 options ≈ 22 rows + chrome stays inside a 40-row
++ * terminal without clipping the hint zone below the list.
++ */
++const VISIBLE_OPTION_COUNT = 11;
+ function swatches(theme) {
+     return (_jsx(_Fragment, { children: SWATCH_KEYS.map(key => (_jsx(Text, { color: theme[key], children: SWATCH }, key))) }));
+ }
+-/** A picker row: display name + color swatches. */
++/**
++ * A picker row: display name + color swatches. `filterText` is the
++ * precomputed lowercase haystack (name + displayName) for the picker filter —
++ * the label is JSX and cannot be substring-matched directly.
++ */
+ function optionFor(name, displayName, theme, description) {
+     return {
+         value: name,
+         label: (_jsxs(_Fragment, { children: [displayName, '  ', swatches(theme)] })),
+         description,
++        filterText: `${name} ${displayName}`.toLowerCase(),
+     };
+ }
+ /**
+@@ -41,15 +56,30 @@
+     });
+ }
+ /**
++ * dsh-overrides 12: fish_config-style filter. Case-insensitive substring
++ * match over the precomputed `filterText` (name + displayName); an empty or
++ * whitespace-only query returns the full list untouched. Shared by the
++ * picker render and Chat's keyboard handler so indices always resolve
++ * against the same narrowed list.
++ */
++export function filterThemeOptions(options, query) {
++    const q = (query ?? '').trim().toLowerCase();
++    if (q === '')
++        return options;
++    return options.filter(option => (option.filterText ?? option.value.toLowerCase()).includes(q));
++}
++/**
+  * Color-theme picker in the ActivityPicker style: a permission-colored Pane
+  * listing the `auto` pseudo-theme and built-in palettes first, followed by
+  * static JSON and plugin themes — each row shows the display name, base and
+- * three key color swatches; `❯` marks focus, `✓` the active theme. Enter
++ * eight key color swatches; `❯` marks focus, `✓` the active theme. Typing
++ * filters the list fish_config-style (name/displayName substring); Enter
+  * applies through the ThemeProvider setter (persists to ~/.dsh-tui/theme.json
+- * and hot swaps), Esc cancels.
++ * and hot swaps), Esc clears the filter or cancels.
+  */
+-export function ThemePicker({ focusIndex, currentTheme, themeHost, onPick, }) {
++export function ThemePicker({ focusIndex, currentTheme, themeHost, onPick, query = '' }) {
+     const runtimeThemeSnapshot = useRuntimeThemeSnapshot(themeHost);
+     const options = React.useMemo(() => getThemeOptions(themeHost), [runtimeThemeSnapshot, themeHost]);
+-    return (_jsx(Pane, { color: "permission", children: _jsxs(Box, { flexDirection: "column", children: [_jsx(Box, { marginBottom: 1, children: _jsx(Text, { color: "remember", bold: true, children: t('picker-title-theme') }) }), _jsx(Select, { options: options, focusIndex: focusIndex, selectedValue: currentTheme, visibleOptionCount: 6, onPick: onPick ? index => onPick(index) : undefined }), _jsx(Text, { dimColor: true, italic: true, children: _jsx(HintLine, { text: t('hint-confirm-exit') }) })] }) }));
++    const filtered = React.useMemo(() => filterThemeOptions(options, query), [options, query]);
++    return (_jsx(Pane, { color: "permission", children: _jsxs(Box, { flexDirection: "column", children: [_jsx(Box, { marginBottom: 1, children: _jsx(Text, { color: "remember", bold: true, children: t('picker-title-theme') }) }), _jsx(Box, { marginBottom: 1, children: _jsxs(Text, { children: [t('theme-filter-label'), ' ', _jsx(Text, { color: "remember", children: query }), _jsx(Text, { dimColor: true, children: "▏" }), _jsx(Text, { dimColor: true, children: t('theme-filter-count', { shown: filtered.length, total: options.length }) })] }) }), filtered.length === 0 && (_jsx(Text, { dimColor: true, children: t('theme-filter-no-match') })), _jsx(Select, { options: filtered, focusIndex: focusIndex, selectedValue: currentTheme, visibleOptionCount: VISIBLE_OPTION_COUNT, onPick: onPick ? index => onPick(index) : undefined }), _jsx(Text, { dimColor: true, italic: true, children: _jsx(HintLine, { text: t('hint-theme-picker') }) })] }) }));
+ }
+--- a/lib/types/i18n.js
++++ b/lib/types/i18n.js
+@@ -761,6 +761,11 @@
+     'skills-source-runtime': { zh: '运行时', en: 'runtime' },
+     'skills-source-custom': { zh: '自定义', en: 'custom' },
+     'picker-title-theme': { zh: '颜色主题', en: 'Color theme' },
++    // dsh-overrides 12: theme picker filter (fish_config-style).
++    'theme-filter-label': { zh: '过滤:', en: 'filter:' },
++    'theme-filter-count': { zh: '{{shown}}/{{total}} 个主题', en: '{{shown}}/{{total}} themes' },
++    'theme-filter-no-match': { zh: '没有匹配的主题', en: 'No themes match' },
++    'hint-theme-picker': { zh: '**Enter** 确认 · 输入即过滤 · Esc 清除过滤或退出', en: '**Enter** to confirm · type to filter · Esc clears filter or exits' },
+     'picker-title-activity': { zh: '指示器预设', en: 'Indicator preset' },
+     'picker-title-color': { zh: '会话强调色', en: 'Session accent color' },
+     'picker-title-effort': { zh: '推理强度', en: 'Reasoning effort' },
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -63,7 +63,7 @@
+ import { PermissionsPicker } from '../components/PermissionsPicker.js';
+ import { PlanPicker } from '../components/PlanPicker.js';
+ import { LangPicker } from '../components/LangPicker.js';
+-import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js';
++import { ThemePicker, getThemeOptions, filterThemeOptions } from '../components/ThemePicker.js';
+ import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js';
+ import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js';
+ import { ThinkingToggle } from '../components/ThinkingToggle.js';
+@@ -1205,6 +1205,8 @@
+                     overlay: {
+                         kind: 'theme',
+                         index: Math.max(0, getThemeOptions(themeHost).findIndex(option => option.value === themeName)),
++                        // dsh-overrides 12: filter state for the picker.
++                        query: '',
+                     },
+                 });
+                 return true;
+@@ -2776,7 +2778,12 @@
+             return;
+         }
+         if (overlay.kind === 'theme') {
+-            const options = getThemeOptions(themeHost);
++            // dsh-overrides 12: fish_config-style filter — typing edits the
++            // query (backspace/^U delete, Esc clears it), and arrows/Enter
++            // operate on the narrowed list so the picked index resolves
++            // against the same options the picker renders.
++            const options = filterThemeOptions(getThemeOptions(themeHost), overlay.query);
++            const query = overlay.query ?? '';
+             if (key.upArrow || key.downArrow) {
+                 dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: options.length });
+             }
+@@ -2789,7 +2796,23 @@
+                 }
+             }
+             else if (key.escape) {
+-                dispatchOverlay({ type: 'close' });
++                // Esc clears an active filter first; only an empty filter
++                // closes the picker.
++                if (query !== '')
++                    dispatchOverlay({ type: 'theme-edit', query: '' });
++                else
++                    dispatchOverlay({ type: 'close' });
++            }
++            else if (key.backspace || key.delete) {
++                if (query !== '')
++                    dispatchOverlay({ type: 'theme-edit', query: query.slice(0, -1) });
++            }
++            else if (key.ctrl && (input === 'u' || input === 'U')) {
++                if (query !== '')
++                    dispatchOverlay({ type: 'theme-edit', query: '' });
++            }
++            else if (!key.ctrl && !key.meta && !key.super && input) {
++                dispatchOverlay({ type: 'theme-edit', query: query + input });
+             }
+             return;
+         }
+@@ -3480,9 +3503,9 @@
+                                             return;
+                                         dispatchOverlay({ type: 'close' });
+                                         applyLang(lang);
+-                                    } }) })), overlay.kind === 'theme' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(ThemePicker, { focusIndex: overlay.index, currentTheme: themeName, themeHost: themeHost, onPick: (index) => {
++                                    } }) })), overlay.kind === 'theme' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(ThemePicker, { focusIndex: overlay.index, currentTheme: themeName, themeHost: themeHost, query: overlay.query ?? '', onPick: (index) => {
+                                         dispatchOverlay({ type: 'close' });
+-                                        const name = getThemeOptions(themeHost)[index]?.value;
++                                        const name = filterThemeOptions(getThemeOptions(themeHost), overlay.query ?? '')[index]?.value;
+                                         if (name !== undefined) {
+                                             const ok = setTheme(name);
+                                             channel.notify(ok ? t('theme-switched-saved', { name }) : t('theme-switch-failed', { name }), { color: ok ? 'success' : 'error' });
+--- a/lib/types/screens/chatOverlay.js
++++ b/lib/types/screens/chatOverlay.js
+@@ -59,6 +59,12 @@
+         }
+         case 'set-index':
+             return state.kind === action.kind ? { ...state, index: action.index } : state;
++        // dsh-overrides 12: theme picker filter edit (fish_config-style). Any
++        // query change resets the cursor to the top of the narrowed list.
++        case 'theme-edit':
++            return state.kind === 'theme'
++                ? { ...state, query: action.query, index: 0 }
++                : state;
+         case 'history-edit':
+             return state.kind === 'history'
+                 ? {

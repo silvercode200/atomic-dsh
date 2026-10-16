@@ -1,0 +1,207 @@
+# Goal:      пульс todo-глифа, мини-бар, дыхание ctx-бара
+# Family:    EF.03
+# Status:    live
+# Files:     lib/types/theme.js, lib/types/customTheme.js,
+#            lib/types/components/GoalTodoPanel.js,
+#            lib/types/screens/StatusLine.js
+# Evidence:  reports/live42-frames/; facts/patches-C.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 LIVE42
+
+--- a/lib/types/theme.js
++++ b/lib/types/theme.js
+@@ -95,6 +95,8 @@
+     toolDotWrite: rgb('#B3A0D4'), // soft violet — edit/write
+     toolDotWeb: rgb('#7DA1DE'), // mist blue — web search/fetch
+     toolDotTask: rgb('#D194AE'), // mist rose — subagent/jobs
++    // dsh-overrides 34: live-todo pulse firmware pair (lighter rose crest)
++    todoActiveShimmer: rgb('#E8CBDA'),
+     syntaxKeyword: rgb('#78A0D6'), // muted anchor blue
+     syntaxString: rgb('#79AD91'), // mist green, distinct without neon saturation
+     syntaxComment: rgb('#74808D'), // neutral blue-grey
+@@ -199,6 +201,8 @@
+     toolDotWrite: rgb('#7A5CA8'),
+     toolDotWeb: rgb('#4A63A8'),
+     toolDotTask: rgb('#B04A5A'),
++    // dsh-overrides 34: live-todo pulse firmware pair
++    todoActiveShimmer: rgb('#D8949F'),
+     syntaxKeyword: rgb('#3F68B5'), // clear primary blue without neon saturation
+     syntaxString: rgb('#3F805F'), // readable muted green
+     syntaxComment: rgb('#7D858F'), // neutral blue-grey
+@@ -306,6 +310,8 @@
+     toolDotWrite: 'ansi:magentaBright',
+     toolDotWeb: 'ansi:blueBright',
+     toolDotTask: 'ansi:redBright',
++    // dsh-overrides 34: live-todo pulse firmware pair
++    todoActiveShimmer: 'ansi:magentaBright',
+     syntaxKeyword: 'ansi:blueBright',
+     syntaxString: 'ansi:greenBright',
+     syntaxComment: 'ansi:blackBright',
+--- a/lib/types/customTheme.js
++++ b/lib/types/customTheme.js
+@@ -219,7 +219,7 @@
+ // shimmer into one flat foreign color. After the overlay merge the base
+ // palette's animation keys win back, so the shimmer keeps the brand hues
+ // under any user theme. DSH_TUI_ALLOW_THEME_SHIMMER=1 bypasses the guard.
+-const SHIMMER_FIRMWARE_KEYS = [
++export const SHIMMER_FIRMWARE_KEYS = [
+     'claudeShimmer',
+     'rainbow_red_shimmer',
+     'rainbow_orange_shimmer',
+@@ -228,6 +228,8 @@
+     'rainbow_blue_shimmer',
+     'rainbow_indigo_shimmer',
+     'rainbow_violet_shimmer',
++    // dsh-overrides 34: the live-todo pulse pair (GoalTodoPanel SubGlyph)
++    'todoActiveShimmer',
+ ];
+ /**
+  * Restore the animation-firmware keys a theme overlay may have flattened.
+--- a/lib/types/components/GoalTodoPanel.js
++++ b/lib/types/components/GoalTodoPanel.js
+@@ -1,6 +1,9 @@
+ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+ import React from 'react';
+-import { Box, Text } from '../ui.js';
++import { Box, Text, useAnimationFrame, useTheme } from '../ui.js';
++import { getTheme } from '../theme.js';
++import { parseRGB } from './Spinner/spinnerUtils.js';
++import { breathingColor, effectEnabled } from '../animationsMode.js';
+ import { t } from '../i18n.js';
+ import { modLabel } from '../utils/modifiers.js';
+ import { effectiveCombos } from '../utils/keymap.js';
+@@ -101,12 +104,40 @@
+  * (patch 13 rule); no agent names, no "subagent" word, no emoji.
+  */
+ function SubGlyph({ live, completed }) {
++    // dsh-overrides 34: the live glyph PULSES toolDotTask↔todoActiveShimmer
++    // (firmware pair, protected from theme recolor like claudeShimmer) on
++    // the shared animation clock; effect off / reduced-motion keeps the
++    // static mist rose. The hook must run unconditionally (React rules).
++    const [themeName] = useTheme();
++    const pulse = live && effectEnabled('todoPulse');
++    const [, time] = useAnimationFrame(pulse ? 120 : null);
++    let color = 'toolDotTask';
++    if (pulse) {
++        const theme = getTheme(themeName);
++        const base = parseRGB(theme.toolDotTask);
++        const crest = parseRGB(theme.todoActiveShimmer);
++        if (base !== null && crest !== null && base !== crest)
++            color = breathingColor(base, crest, time, 1600);
++    }
+     if (completed)
+         return _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "✓ " });
+     if (live)
+-        return _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "◐ " });
++        return _jsx(Text, { color: color, wrap: "truncate", children: "◐ " });
+     return _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "○ " });
+ }
++/**
++ * dsh-overrides 34: the header mini progress bar (replaces the `✓ 0/2`
++ * text with a 5-cell gauge; the same h-block mechanics as the ctx bar).
++ * @returns {fill, track} strings totalling `cells` columns.
++ */
++export function todoProgressCells(done, total, cells = 5) {
++    const eighths = total > 0 ? Math.round((Math.min(done, total) / total) * cells * 8) : 0;
++    const whole = Math.min(cells, Math.floor(eighths / 8));
++    const rem = whole < cells ? eighths % 8 : 0;
++    const H = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
++    const fill = '█'.repeat(whole) + (rem > 0 ? H[rem] : '');
++    return { fill, track: '·'.repeat(Math.max(0, cells - fill.length)) };
++}
+ // dsh-overrides 27: subagent fold auto-expands once per channel. The flag is
+ // a module-level WeakSet (not a component ref) so a Chat/panel remount can
+ // not re-trigger the expand — the user's manual collapse after it sticks,
+@@ -230,6 +261,24 @@
+  * instead of a duplicate. When the anchor row is gone, the group is NOT
+  * lost — it renders at the root, after the main tree.
+  */
++/**
++ * dsh-overrides 34: the header's 5-cell progress gauge replacing the
++ * `✓ done/total` text. Cells breathe toolDotTask↔todoActiveShimmer while
++ * the LIVE42 gate is on (time from the panel's shared-clock subscription);
++ * static mist rose otherwise; ANSI themes fall back to the key.
++ */
++function TodoProgressBar({ done, total, themeName, time }) {
++    const { fill, track } = todoProgressCells(done, total);
++    let color = 'toolDotTask';
++    if (effectEnabled('todoProgressBar')) {
++        const theme = getTheme(themeName);
++        const base = parseRGB(theme.toolDotTask);
++        const crest = parseRGB(theme.todoActiveShimmer);
++        if (base !== null && crest !== null && base !== crest)
++            color = breathingColor(base, crest, time, 1600);
++    }
++    return (_jsx(Text, { color: color, wrap: "truncate", children: [fill, track] }));
++}
+ export function GoalTodoPanel({ channel, collapsed = false, onToggle, }) {
+     const goal = channel.goal;
+     const allTodos = channel.todos ?? [];
+@@ -244,6 +293,12 @@
+     const [now, setNow] = React.useState(() => Date.now());
+     // Hover tint for the clickable todo fold header (mouse affordance).
+     const [headerHovered, setHeaderHovered] = React.useState(false);
++    // dsh-overrides 34: header glimmer — the mini progress bar's cells
++    // breathe toolDotTask↔todoActiveShimmer on the shared clock (120ms;
++    // static color when the LIVE42 gate is off). Runs even collapsed so
++    // the fold header keeps a visible live-progress signal.
++    const [glThemeName] = useTheme();
++    const [, headerTime] = useAnimationFrame(effectEnabled('todoProgressBar') || effectEnabled('headerGlimmer') ? 120 : null);
+     React.useEffect(() => {
+         // Tick only while the goal is open; a complete goal freezes the last
+         // elapsed reading instead of counting past the finish line.
+@@ -401,7 +456,7 @@
+     if (hiddenSubRows > 0)
+         combined.push({ content: t('goal-todo-agent-more', { n: hiddenSubRows }), sub: { live: false, overflow: true } });
+     const rows = walkTree(combined, [], { mainCount: 0, merged: mergedRunning }, []);
+-    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "�� " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "│ " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["✓ ", doneCount, "/", allTodos.length] }), liveAgents.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · ", _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "◐" }), " agents ", liveAgents.length] })), liveJobs.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · jobs ", liveJobs.length] })), _jsxs(Text, { dimColor: true, children: [" · ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["● ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["→ ○ ", next.content] }) })), !collapsed && (_jsx(Box, { flexDirection: "column", children: rows.map((row, index) => {
++    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "�� " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "│ " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["✓ "] }), _jsx(TodoProgressBar, { done: doneCount, total: allTodos.length, themeName: glThemeName, time: headerTime }), liveAgents.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · ", _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "◐" }), " agents ", liveAgents.length] })), liveJobs.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · jobs ", liveJobs.length] })), _jsxs(Text, { dimColor: true, children: [" · ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["● ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["→ ○ ", next.content] }) })), !collapsed && (_jsx(Box, { flexDirection: "column", children: rows.map((row, index) => {
+                 // dsh-overrides 14: one flat row list from the tree walk.
+                 // Main rows keep the patch-13 look (dim branches, ● ○ ✓);
+                 // subagent rows are mist-rose with ◐ (works) / ○ (waits for
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -5,7 +5,8 @@
+ import { getTheme } from '../theme.js';
+ import { stringWidth } from '../ink/stringWidth.js';
+ import { sweep } from '../components/shimmer.js';
+-import { parseRGB } from '../components/Spinner/spinnerUtils.js';
++import { breathingColor, effectEnabled } from '../animationsMode.js';
++import { interpolateColor, parseRGB } from '../components/Spinner/spinnerUtils.js';
+ import { t } from '../i18n.js';
+ import { formatContextUsage, DEFAULT_STATUS_BAR, normalizePowerlineStyle, normalizeStatusBar } from '../tuiDisplayPrefs.js';
+ import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js';
+@@ -124,6 +125,22 @@
+     return { fill, track: '·'.repeat(Math.max(0, CTX_BAR_CELLS - fill.length)) };
+ }
+ /**
++ * dsh-overrides 34: the ctx segment's fill blocks breathe while a turn
++ * runs (fillKey lifted 30% toward white on the shared clock; static
++ * otherwise — pressure colors are data, not decoration, so only the
++ * brightness pulses, never the escalation hue).
++ */
++function BreathingCtxFill({ fillKey, text }) {
++    const [themeName] = useTheme();
++    const [, time] = useAnimationFrame(effectEnabled('ctxBarBreath') ? 120 : null);
++    const theme = getTheme(themeName);
++    const base = parseRGB(theme[fillKey]);
++    if (base === null)
++        return _jsx(Text, { color: fillKey, wrap: "truncate", children: text });
++    const lift = interpolateColor(base, { r: 255, g: 255, b: 255 }, 0.3);
++    return _jsx(Text, { color: breathingColor(base, lift, time, 1400), wrap: "truncate", children: text });
++}
++/**
+  * The live turn-timer segment. Mounted only while `working`, so the
+  * animation clock subscription exists exactly for the turn's duration.
+  */
+@@ -171,7 +188,9 @@
+         const { fill, track } = ctxBarCells(frac);
+         const fillKey = pct >= PRESSURE_DANGER_PCT ? 'error' : pct >= PRESSURE_WARN_PCT ? 'warning' : 'inverseText';
+         const ctxWidth = 3 + CTX_BAR_CELLS + 1 + stringWidth(`${pct}%`) + 1;
+-        add('ctx', 'toolDotWrite', ctxWidth, _jsxs(PowerlineSegment, { bg: "toolDotWrite", fg: "inverseText", id: "ctx", hoverProps: hoverProps, plain: plain, children: [" ⚡", _jsx(Text, { color: fillKey, wrap: "truncate", children: fill }), _jsx(Text, { dimColor: true, wrap: "truncate", children: track }), ` ${pct}% `] }, "ctx"));
++        add('ctx', 'toolDotWrite', ctxWidth, _jsxs(PowerlineSegment, { bg: "toolDotWrite", fg: "inverseText", id: "ctx", hoverProps: hoverProps, plain: plain, children: [" ⚡", channel.working && effectEnabled('ctxBarBreath')
++                    ? _jsx(BreathingCtxFill, { fillKey: fillKey, text: fill })
++                    : _jsx(Text, { color: fillKey, wrap: "truncate", children: fill }), _jsx(Text, { dimColor: true, wrap: "truncate", children: track }), ` ${pct}% `] }, "ctx"));
+     }
+     if (channel.working && channel.turnStart > 0) {
+         const elapsed = Math.max(0, Date.now() - channel.turnStart);

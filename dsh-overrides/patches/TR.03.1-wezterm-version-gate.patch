@@ -1,0 +1,53 @@
+# Goal:      WezTerm version gate: старые сборки → plain-путь
+# Family:    TR.03
+# Status:    live
+# Files:     lib/types/ink/terminal.js
+# Evidence:  TG-DSH-REBUILD-20260921 узел 7.2;
+#            reports/colab-w4green-20260922T170736Z/
+# Upstream:  not-applicable
+# Added:     2026-09-23 (TG-DSH-REBUILD-20260921 узел 7.2)
+
+# 60-wezterm-version-gate (TG-DSH-REBUILD-20260921, узел 7 item 7.2 —
+# E2 «слэш-меню невидимо» + мигание рамки ввода на старте): версионный
+# гейт WezTerm — старые сборки автоматически уходят с sync-пути рендера,
+# без ручного env.
+# Локус (бисекция узла 4 + память dsh-startup-input-frame-flicker):
+#   WezTerm 20240203 (последний официальный stable, фев 2024; свежее —
+#   только nightly) криво рендерит BSU/ESU (DEC 2026) + DECSTBM:
+#   слэш-меню невидимо (E2), рамка ввода мигает на старте. На VM
+#   (tmux / zellij / zellij+env юзера) sync-путь dsh чист — виновата
+#   сборка WezTerm.
+# Механика: TERM_PROGRAM_VERSION = «YYYYMMDD-hash», пробрасывается через
+#   zellij (проверено в панели юзера). WezTerm с датой сборки < 20250101
+#   (или без/с битой версией) → isSynchronizedOutputSupported()=false →
+#   plain-путь рендера. Мы ставим юзеру nightly 20260117 → гейт открыт,
+#   sync-путь возвращается (атомарные кадры). Env kill-switch патча 57
+#   остаётся жёстким оверрайдом для любых новых сборок.
+# Проверка: probe sync-output-wezterm-gate (reports/statusbar-fix-20260919/):
+#   WezTerm+20240203 → false; WezTerm+20260117 → true; WezTerm без
+#   версии → false; iTerm без версии → true (гейт только для WezTerm).
+--- a/lib/types/ink/terminal.js
++++ b/lib/types/ink/terminal.js
+@@ -85,6 +85,22 @@
+     // broken atomicity by chunking. Skip to save 16 bytes/frame + parser work.
+     if (process.env.TMUX)
+         return false;
++    // dsh-overrides 60: WezTerm version gate (2026-09-23, opt «1+2»):
++    // builds older than 2025-01-01 — including the last official stable
++    // 20240203 — mishandle the BSU/ESU + DECSTBM interplay: E2 (slash-menu
++    // overlay invisible in inline mode) and the startup input-frame
++    // flicker. TERM_PROGRAM_VERSION is «YYYYMMDD-…» and propagates through
++    // zellij, so the build date is observable. Missing/unparseable version
++    // → plain render path (safe default). Newer WezTerm misbehaving → the
++    // 57 kill-switch above stays the hard override (DSH_TUI_SYNC_OUTPUT=0).
++    if (process.env.TERM_PROGRAM === 'WezTerm') {
++        const wtBuild = parseInt(
++            (process.env.TERM_PROGRAM_VERSION || '').slice(0, 8),
++            10,
++        );
++        if (!(wtBuild >= 20250101))
++            return false;
++    }
+     const termProgram = process.env.TERM_PROGRAM;
+     const term = process.env.TERM;
+     // Modern terminals with known DEC 2026 support

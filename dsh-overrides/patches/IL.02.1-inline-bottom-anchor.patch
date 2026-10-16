@@ -1,0 +1,168 @@
+# Goal:      inline-футер прилипает к низу (anchor + rate-limit)
+# Family:    IL.02
+# Status:    live
+# Files:     lib/types/screens/Chat.js, lib/types/ink/renderer.js
+# Evidence:  TG-DSH-CLEAN-20260910 узел 4; facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-10, W3 (TG-DSH-CLEAN-20260910 узел 4)
+
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -1,5 +1,9 @@
+ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+ import React from 'react';
++// dsh-overrides 11: PIN_TRACE diagnostic (env-gated) — logs every inline
++// pin/unpin measurement decision to /tmp/dsh-pin-trace.log so PTY repro runs
++// can see the measure oscillation the update-overflow ratchet feeds on.
++import { appendFileSync } from 'node:fs';
+ import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS } from '../i18n.js';
+ import { readThemePref } from '../themePrefs.js';
+ import { readPresetPref } from '../presetPrefs.js';
+@@ -141,6 +145,11 @@
+ const TITLE_ANIMATION_FRAMES = ['⠂', '⠐'];
+ /** Searchable transcript text for one row (`/` incsearch, CC semantics:
+  *  user text, assistant text, thinking, tool args/results, local output). */
++/**
++ * dsh-overrides 11: minimum delay between inlinePinned flips (ms). See the
++ * inline bottom-anchor effect in Chat — this is the #185 ratchet breaker.
++ */
++const PIN_FLIP_MIN_INTERVAL_MS = 250;
+ function searchableText(row) {
+     switch (row.kind) {
+         case 'tool':
+@@ -377,6 +386,85 @@
+     const [effortOptions, setEffortOptions] = React.useState([]);
+     const [themeName, setTheme] = useTheme();
+     const { rows: terminalRows } = useTerminalSize();
++    /**
++     * dsh-overrides 11: inline bottom-anchor (bug B). In inline
++     * (non-fullscreen) mode the ink root has no fixed height, so flexGrow
++     * cannot push the footer (input + statusline) down — a dialog shorter
++     * than the terminal left the frame glued to the TOP with blank rows
++     * under the statusbar. While the natural frame fits, the root Box below
++     * is pinned to `height: terminalRows` (justifyContent flex-end) so the
++     * footer lands on the last terminal row; renderer.js mirrors the
++     * alt-screen viewport+1/cursor-clamp hack for the pinned frame. The
++     * measurements read the PREVIOUS yoga layout pass (one frame stale) —
++     * fine: the decision converges on the next render, and the 1-row
++     * hysteresis (pin only below terminalRows-1, unpin only past the
++     * viewport) keeps the boundary from flapping while row heights settle;
++     * the flip rate-limit (see setPinned) keeps a boundary oscillation from
++     * feeding the #185 nested-update ratchet.
++     */
++    const [inlinePinned, setInlinePinned] = React.useState(false);
++    const inlineFooterRef = React.useRef(null);
++    // dsh-overrides 11 (review fix): flip rate-limit. This effect measures
++    // layout after EVERY commit (streaming appends to the same row, so row
++    // count does not change — a deps array would miss in-place growth), and
++    // at the pin boundary the measurement can oscillate: pin → layout
++    // change → measure flips back → commit → … Consecutive flip-flops feed
++    // React's nestedUpdateCount ratchet (50 nested commits → Minified
++    // React error #185 — see update-overflow-guard.js). Refusing to flip
++    // more often than every PIN_FLIP_MIN_INTERVAL_MS breaks the ratchet: the
++    // effect run that declines to setState leaves the next commit
++    // update-free, resetting the counter. The value-change guard below is
++    // belt-and-braces (React bails out on identical setState, but be
++    // explicit about intent).
++    const lastPinFlipRef = React.useRef(0);
++    React.useEffect(() => {
++        const setPinned = (next) => {
++            if (next === inlinePinned)
++                return;
++            const now = Date.now();
++            if (now - lastPinFlipRef.current < PIN_FLIP_MIN_INTERVAL_MS)
++                return;
++            lastPinFlipRef.current = now;
++            if (process.env.DSH_TUI_PIN_TRACE) {
++                try { appendFileSync('/tmp/dsh-pin-trace.log', `${now} flip pinned=${inlinePinned}->${next}\n`); } catch { }
++            }
++            setInlinePinned(next);
++        };
++        if (fullscreen || terminalRows <= 0) {
++            if (inlinePinned)
++                setPinned(false);
++            return;
++        }
++        if (inlinePinned) {
++            // Pinned: the ScrollBox viewport is clamped to what remains of
++            // terminalRows after the footer. Content taller than that viewport
++            // must return to the normal inline flow into scrollback, or its
++            // tail stays clipped inside the pinned frame.
++            const contentHeight = handle?.getFreshScrollHeight() ?? 0;
++            const viewportHeight = handle?.getViewportHeight() ?? 0;
++            const unpin = Number.isFinite(contentHeight) && Number.isFinite(viewportHeight) &&
++                viewportHeight > 0 && contentHeight > viewportHeight;
++            if (process.env.DSH_TUI_PIN_TRACE) {
++                try { appendFileSync('/tmp/dsh-pin-trace.log', `${Date.now()} pinned contentH=${contentHeight} viewportH=${viewportHeight} termRows=${terminalRows} unpin=${unpin}\n`); } catch { }
++            }
++            if (unpin)
++                setPinned(false);
++        }
++        else {
++            // Unpinned: the ScrollBox is unconstrained, so its content box IS
++            // the natural transcript height (logo + rows); the footer Box
++            // keeps flexShrink 0, so its yoga height is natural too.
++            const contentHeight = handle?.getFreshScrollHeight() ?? 0;
++            const footerHeight = inlineFooterRef.current?.yogaNode?.getComputedHeight();
++            const pin = Number.isFinite(contentHeight) && Number.isFinite(footerHeight) &&
++                footerHeight > 0 && contentHeight + footerHeight < terminalRows - 1;
++            if (process.env.DSH_TUI_PIN_TRACE) {
++                try { appendFileSync('/tmp/dsh-pin-trace.log', `${Date.now()} unpinned contentH=${contentHeight} footerH=${footerHeight} termRows=${terminalRows} pin=${pin}\n`); } catch { }
++            }
++            if (pin)
++                setPinned(true);
++        }
++    });
+     const [showAllMessages, setShowAllMessages] = React.useState(false);
+     /**
+      * Fold state for the GoalTodoPanel todo section (ctrl/cmd+q or click).
+@@ -3255,7 +3343,7 @@
+     const anchorUserText = anchorUserRowId === null
+         ? null
+         : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null;
+-    return (_jsxs(Box, { ref: wakeTickRef, flexDirection: "column", flexGrow: 1, width: "100%", children: [!isSticky && anchorUserText && (_jsx(StickyPromptHeader, { text: anchorUserText, onClick: () => {
++    return (_jsxs(Box, { ref: wakeTickRef, flexDirection: "column", flexGrow: 1, width: "100%", ...(inlinePinned ? { height: terminalRows, flexShrink: 0, justifyContent: "flex-end" } : {}), children: [!isSticky && anchorUserText && (_jsx(StickyPromptHeader, { text: anchorUserText, onClick: () => {
+                     // Click snaps the pinned prompt to the viewport top (CC's
+                     // StickyPromptHeader). Jump by the SAME content coordinate the
+                     // rail's tick uses (timeline turn top = the prompt TEXT top):
+@@ -3291,7 +3379,7 @@
+                             return _jsx(ScrollbarGutter, { handle: handle, terminalWidth: terminalColumns });
+                         }
+                         return (_jsx(TimelineRail, { handle: handle, turns: timeline.turns, activeId: timeline.activeId, upId: timeline.upId, downId: timeline.downId, terminalWidth: terminalColumns, hoverEnabled: !promptSelectionActive, onRevealTurn: revealAndSeekRow }));
+-                    })()] }), _jsxs(Box, { flexDirection: "column", flexShrink: 0, children: [showPill && (_jsx(NewMessagesPill, { count: unseenCount, onClick: () => handle?.scrollToBottom() })), channel.working &&
++                    })()] }), _jsxs(Box, { ref: inlineFooterRef, flexDirection: "column", flexShrink: 0, children: [showPill && (_jsx(NewMessagesPill, { count: unseenCount, onClick: () => handle?.scrollToBottom() })), channel.working &&
+                         (channel.activityEnabled &&
+                             !channel.minimal &&
+                             channel.workingActivity !== undefined &&
+--- a/lib/types/ink/renderer.js
++++ b/lib/types/ink/renderer.js
+@@ -129,7 +129,19 @@
+                 // scrolls — the cursor.y clamp below keeps the cursor-restore
+                 // from emitting an LF. With the standard diff path, every frame
+                 // is incremental; no fullResetSequence_CAUSES_FLICKER.
+-                height: options.altScreen ? terminalRows + 1 : terminalRows,
++                // dsh-overrides 11: an INLINE pinned frame (Chat's root Box
++                // pinned to `height: terminalRows`, bottom-anchored footer) is
++                // the inline twin of that case: without the +1 the exactly-
++                // filling frame triggers offscreen full-resets on every
++                // steady-state diff, and the cursor-restore LF at the last row
++                // scrolls the stationary frame one row per update. Detected by
++                // yogaHeight === terminalRows rather than a flag: the pinned
++                // root is the only inline layout whose yoga height exactly
++                // equals the terminal, and a coincidentally exactly-fitting
++                // inline frame gets the same stabilization for free. Pin/unpin
++                // transitions flip this value, which log-update treats as a
++                // resize → clean in-place viewport repaint (no duplicates).
++                height: options.altScreen || yogaHeight === terminalRows ? terminalRows + 1 : terminalRows,
+             },
+             cursor: {
+                 x: 0,
+@@ -139,7 +151,7 @@
+                 // cursor-restore LF at the last row, scrolling one row off the top
+                 // of the alt buffer and desyncing the diff's cursor model. The
+                 // cursor is hidden so its position only matters for diff coords.
+-                y: options.altScreen
++                y: options.altScreen || yogaHeight === terminalRows
+                     ? Math.max(0, Math.min(screen.height, terminalRows) - 1)
+                     : screen.height,
+                 // Hide cursor when there's dynamic output to render (only in TTY mode)

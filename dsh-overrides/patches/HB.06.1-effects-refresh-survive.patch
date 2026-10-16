@@ -1,0 +1,62 @@
+# Goal:      /effects-entry выживает refreshCommandList (module-level)
+# Family:    HB.06
+# Status:    live
+# Files:     lib/types/dsh-adapter/channel.js
+# Evidence:  reports/colab-effects52-green-20260919T040348Z/ (волна 50+52, узел
+#            3)
+# Upstream:  not-applicable
+# Added:     2026-09-19, W5 (волна 50+52, узел 3)
+
+# 52-effects-refresh-survive (TG-DSH-COLAB-LIVE-20260919, узел 3):
+# slash_menu_effects + effects_panel — один root-cause. Патч 38 кладёт
+# /effects ТОЛЬКО в init-state commandList (channel.js), но
+# refreshCommandList() пересобирает commandList из голого LOCAL_COMMANDS,
+# и commands/change (гарантированно стреляет при старте: dsh-commands
+# register → ScopedLayers insert-callback → notifyChange) затирал запись.
+# Следствия: (а) completeCommands('/ef') не видел effects → меню
+# «commands · 1 items» (только effort); (б) PromptInput tryRunCommand
+# known-gate false → /effects ушёл МОДЕЛИ («not one of my available
+# tools» + ask_user_question) — case 'effects' в Chat.js был мёртв.
+# Фикс: entry в модульной константе EFFECTS_COMMAND_ENTRY (после импорта
+# LOCAL_COMMANDS — до createChannel, TDZ-safe), init и refreshCommandList
+# используют ОДИН источник — effects переживает любой refresh.
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -22,6 +22,14 @@
+ import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions';
+ import { extname, isAbsolute, join } from 'node:path';
+ import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isLocalCommandName, LOCAL_COMMANDS, parseCommandName } from '../commands.js';
++
++// dsh-overrides 52: the /effects entry must survive refreshCommandList
++// rebuilds. commands/change fires at startup (dsh-commands register →
++// ScopedLayers insert-callback → notifyChange) and every rebuild used a
++// bare [...LOCAL_COMMANDS], erasing the init-only entry of patch 38 —
++// /effects vanished from the slash menu and fell through to the model.
++// Init state and every refresh share this one module-level constant.
++export const EFFECTS_COMMAND_ENTRY = { name: 'effects', description: 'Toggle UI effects (dsh-overrides 38)' };
+ import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js';
+ import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js';
+ import { buildSessionTree, forkTarget, liveTailWindow, rewindTarget, turnUserText, } from './sessionTree.js';
+@@ -2309,8 +2317,9 @@
+         todos: [],
+         loadedContext: undefined,
+         pending: [],
+-        // dsh-overrides 38: /effects — the LIVE42 effects dashboard.
+-        commandList: [...LOCAL_COMMANDS, { name: 'effects', description: 'Toggle UI effects (dsh-overrides 38)' }],
++        // dsh-overrides 38+52: /effects — single source of the entry (the
++        // const at refreshCommandList below) so every rebuild keeps it.
++        commandList: [...LOCAL_COMMANDS, EFFECTS_COMMAND_ENTRY],
+         commandCompletions(input) {
+             // Warm the async vocabularies as soon as the input could be heading
+             // for their commands (`/m`, `/pre`, …) — by the time a trailing space
+@@ -5688,8 +5697,10 @@
+     const refreshCommandList = () => {
+         const target = agent;
+         const token = ++commandListSeq;
+-        const merged = [...LOCAL_COMMANDS];
++        // dsh-overrides 52: keep /effects across rebuilds (see the const
++        // above); registry/skill entries still win name collisions below.
++        const merged = [...LOCAL_COMMANDS, EFFECTS_COMMAND_ENTRY];
+         if (commandService) {
+             for (const descriptor of commandService.list(target)) {
+                 // Hidden TUI commands (e.g. /deepseek) stay out of the public

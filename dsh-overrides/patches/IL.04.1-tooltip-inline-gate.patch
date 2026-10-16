@@ -1,0 +1,55 @@
+# Goal:      tooltip-слой fullscreen-only (inline без дубля)
+# Family:    IL.04
+# Status:    live
+# Files:     lib/types/screens/Chat.js
+# Evidence:  TG-DSH-VISUAL-20260925 узел 3;
+#            reports/colab-golden68-run2-20260925T213346Z/
+# Upstream:  not-applicable
+# Added:     2026-09-26 (TG-DSH-VISUAL-20260925 узел 3)
+
+# 68-tooltip-inline-gate — dsh-overrides 68 (TG-DSH-VISUAL-20260925, node 3)
+# Goal:      гейт tooltip-слоя на fullscreen: в inline-сессиях с mouse-passthrough
+#            (WezTerm+zellij) hover по своему сообщению всплывал бесполезным
+#            дублем текста поверх inline-кадра; docstring Tooltip.js заявляет
+#            hover как fullscreen-only (alternate screen + mouse tracking) —
+#            гейт приводит код к заявленному инварианту.
+# Family:    E (visual/tooltip); порядковая схема 01-65 — миграция SUBSYS.FF.B
+#            утверждена отдельной big-bang волной, до неё новые патчи порядковые.
+# Status:    live
+# Files:     lib/types/screens/Chat.js (mount TooltipLayer, post65 ~3709)
+# Evidence:  .tmp-probes/68-work/verify-apply.txt — fresh-apply на чистую копию
+#            post65, failed=0; TaskGate TG-DSH-VISUAL-20260925 node 3.
+#
+# Механика: Chat получает fullscreen-проп из plugin.js (bootedFullscreen,
+# plugin.js:1403, latched при монтировании — режим не меняется на лету).
+# TooltipLayer монтируется ТОЛЬКО в главном return Chat — оверлей-ветки
+# (Chat.js:3301+, inline-обёртки AlternateScreen) его не содержат, т.е. в
+# оверлеях тултипов не было и до гейта. Гейт: `fullscreen ? TooltipLayer :
+# null` — inline-дерево никогда не монтирует единственного читателя стора
+# → карточка физически не может отрендериться (store writes в inline
+# остаются без подписчика, 600ms-таймер one-shot, чистится onMouseLeave/
+# unmount). Fullscreen-путь не изменён: при fullscreen=true выражение
+# рендерит ровно тот же _jsx(TooltipLayer, ...), что и до патча.
+# Маркер: 'dsh-overrides 68' (уникален по версии патча).
+# Регистрация в MARKERS/marker_file apply-скрипта — за main (единый changeset
+# с параллельными 66/67; скрипт в write-set узла не входит).
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -3706,7 +3706,16 @@
+                                         const path = overlay.path;
+                                         dispatchOverlay({ type: 'close' });
+                                         runFileAction(index, path);
+-                                    } }) })), overlay.kind === 'search' && _jsx(TranscriptSearchBar, { query: searchQuery, cursorOffset: searchCursor, count: searchCount, current: searchCurrent })] }))] }), _jsx(TooltipLayer, { invalidationKey: `${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`, subscribeInvalidation: subscribeTooltipInvalidation }), _jsx(PromptEditorLayer, {})] }));
++                                    } }) })), overlay.kind === 'search' && _jsx(TranscriptSearchBar, { query: searchQuery, cursorOffset: searchCursor, count: searchCount, current: searchCurrent })] }))] }),
++            // dsh-overrides 68: the tooltip layer is a fullscreen-only affordance.
++            // AlternateScreen (DEC 1049) is what enables SGR mouse tracking, so
++            // the documented hover/dwell flow only ever worked on a fullscreen
++            // tree. Inline trees never requested mouse events, but multiplexers
++            // with mouse passthrough (WezTerm+zellij) still deliver them, and
++            // the dwell timer then pops a ghost duplicate-text card over the
++            // inline frame. Never mounting the layer in inline leaves the
++            // tooltip store unread — no card can render; fullscreen unchanged.
++            fullscreen ? _jsx(TooltipLayer, { invalidationKey: `${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`, subscribeInvalidation: subscribeTooltipInvalidation }) : null, _jsx(PromptEditorLayer, {})] }));
+ }
+ /**
+  * The pinned prompt header shown above the ScrollBox while the user has

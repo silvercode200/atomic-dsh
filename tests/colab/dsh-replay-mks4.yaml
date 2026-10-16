@@ -1,0 +1,612 @@
+program: dsh-replay-mks4
+# suite_version: 1 (2026-10-07, TG-DSH-MKS4-20260928 узел 5): replay-верификация
+# сессии юзера через dsh-fake-llm. Сценарий replay-mks4-user.json
+# (kind=session-replay, 1 turn, 206 chunks = 23 thinking + 183 text,
+# userText="clear", delayMs 4180мс) — реальная сессия deepseek_harness юзера
+# f6957da1 от 26.09, конвертирована tools/dsh-fake-llm. Сьют проверяет:
+# saw_flips==0 (пила scrollHeight при стриминге ответа) + dsh не падает после
+# replay. Без wheel-инъекций: replay = проигрывание сессии, не синтетический
+# скролл; короткий ответ (~8 строк) не требует скролла. Setup и детектор
+# скопированы из tests/colab/dsh-saw-probe.yaml (v9); детектор — trace-metrics.py
+# (--expect clean --require-frames 50, без --require-sticky-off — скролл
+# не обязателен при коротком ответе). Деплой НЕ в сьюте:
+# scripts/colab-dsh-up.sh --target current --fake-model ДО socctl verify.
+# fake-llm подхвачен деплоем, сценарий в scenarios/.
+# Запуск: socctl verify --root <repo> --file tests/colab/dsh-replay-mks4.yaml \
+#   --lane colab --label <label>
+lane: colab
+vars:
+  sess: dsh-replay
+  frames: /root/dsh-live-frames
+  e1: /root/dsh-live-frames/e1
+  e2: /root/dsh-live-frames/e2
+  swp: /root/dsh-live-frames/sweep
+  mode: /root/dsh-live-frames/mode
+  stall: /root/dsh-live-frames/stall
+  work: /root/dsh-inline
+  pin: /tmp/dsh-pin-trace.log
+
+setup:
+  - id: dirs_init
+    run: 'mkdir -p $frames $work && rm -rf $frames/e1 $frames/e2 $frames/sweep $frames/mode $frames/compact $frames/stall && mkdir -p $e1 $e2 $swp $mode $work && rm -f $frames/*.txt $frames/*.ansi $swp/fuzz-*.txt $work/compact-*.txt $work/smoke-*.txt $work/cards-*.txt $work/fuzz-*.txt $work/stall-*.txt $work/stall-t0.marker $work/anim-*.txt $work/anim-*.marker $work/anim-*.mjs $work/saw-*.txt $work/saw-*.marker $work/replay-*.txt $work/replay-*.marker && rm -rf $frames/anim $frames/scroll; echo DIRS_OK'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: sess_kill
+    run: 'tmux kill-session -t $sess 2>/dev/null; true'
+    timeout: 180
+    ignore_error: true
+    idempotent: true
+    retry: 2
+  # Пустая панель-оболочка (без команды) — как в live-сьюте: send-keys
+  # уходит в shell панели. Геометрия юзера с самого старта: 47×43.
+  - id: sess_new
+    # v8: defensive kill — sess_kill глотает транспортный фейл под ignore_error,
+    # ретрай не срабатывает, выжившая сессия = «duplicate session» на new-session.
+    run: 'tmux kill-session -t $sess 2>/dev/null; true; tmux new-session -d -s $sess -x 47 -y 43'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: term_overrides
+    run: 'tmux set -as terminal-overrides ",xterm-256color:Tc"'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Парити-слой: юзер-dsh-tui-секция → /root/.dsh/settings.yaml ---------
+  # Срезаем существующую dsh-tui секцию (до следующего top-level ключа),
+  # дописываем юзерскую дословно. Провайдеры/fake-роут не трогаем.
+  # v6: appearance.animations: false (BOOLEAN) — дословно из юзерского
+  # ~/.dsh/settings.yaml (появился у юзера 2026-09-23; v5-парити писался
+  # 2026-09-21, до этого ключа).
+  # v6.1 (2026-09-26, root-cause golden68-run1 + VM-реплика): boolean
+  # НЕ «игнорируется нормализацией» — он бросает ValidationError в схеме
+  # (Schema.union(['full','custom','off'])) и ОТВЕРГАЕТ ВСЮ секцию dsh-tui
+  # («keeps the last good section» = дефолты на свежем буте) → теряются
+  # fullscreen:false (→ FULLSCREEN-бут из cordis.patch.yml), statusBar,
+  # appearance. На 01-65 это роняло mode_inline/sweep_w47/geometry_fuzz
+  # — 3 «неожидаемых» фейла прогона = один корень. «Эмпирика юзера»
+  # (inline при boolean) была frozen-latch: TUI забутан ДО правки настроек.
+  # Патч 66 v2 чинит на уровне схемы (boolean маппится на границе).
+  # Парити остаётся дословным — объект гейта animations_gate.
+  - id: parity_settings
+    run: |
+      cp /root/.dsh/settings.yaml /root/.dsh/settings.yaml.parity-backup 2>/dev/null || true
+      awk '/^dsh-tui:/{s=1} s==1 && /^[^[:space:]#]/ && !/^dsh-tui:/{s=0} s==0{print}' /root/.dsh/settings.yaml > /root/.dsh/settings.yaml.new
+      cat >> /root/.dsh/settings.yaml.new <<'TUIEOF'
+      dsh-tui:
+        statusBar:
+          tokens: false
+          compact: false
+          contextBar: false
+          mode: true
+          trajectory: true
+          shortcutHint: false
+          activity: false
+          cache: false
+          gitBranch: false
+          compactThresholdRatio: 0.4768
+          tps: false
+          sessionTitle: false
+          sessionId: false
+          cwd: true
+          ctxBarMode: percent-only
+        fullscreen: false
+        minimal: false
+        toolBackground: subtle
+        appearance:
+          powerline: full
+          theme: tokyonight-moon
+          inputBorder: "#7aa2f7"
+          animations: false
+      TUIEOF
+      mv /root/.dsh/settings.yaml.new /root/.dsh/settings.yaml
+      cp /root/.dsh/settings.yaml $mode/settings-parity.txt
+      grep -n 'fullscreen' /root/.dsh/settings.yaml > $mode/settings-fullscreen-parity.txt 2>/dev/null || echo 'NO_FULLSCREEN_KEY' > $mode/settings-fullscreen-parity.txt
+      grep -n 'animations' /root/.dsh/settings.yaml > $mode/settings-animations-parity.txt 2>/dev/null || echo 'NO_ANIMATIONS_KEY' > $mode/settings-animations-parity.txt
+      echo PARITY_APPLIED
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Парити-маркер миграции: fullscreen-factory-default = done ------------
+  # Без маркера первый boot сносит юзерский fullscreen:false ('unset' план).
+  - id: parity_marker
+    run: |
+      # VM-рецикл вытирает /root/.dsh-tui целиком: mkdir обязателен до записи
+      # маркера (упало 2× на свежих VM 20260929T1718Z / 20260930T1126Z).
+      mkdir -p /root/.dsh-tui
+      if [ ! -f /root/.dsh-tui/migrations.json ]; then
+        printf '{\n  "fullscreen-factory-default": "2026-08-29T00:00:00.000Z"\n}\n' > /root/.dsh-tui/migrations.json
+      fi
+      cp /root/.dsh-tui/migrations.json $mode/migrations-at-parity.json 2>/dev/null || echo MARKER_ABSENT > $mode/migrations-at-parity.json
+      test -f /root/.dsh-tui/migrations.json && echo MARKER_PRESENT
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Запуск TUI (fake-роут, pin-trace, geometry-trace) + самовосст. boot --
+  # Flaky-boot (agent-bootstrap hang): интро-анимация крутится вечно (~кадр/
+  # 50мс, 18k+ кадров, геометрия статична — golden-63 2026-09-24), TUI не
+  # доходит до ❯. Лечение (memory dsh-flaky-boot-agent-bootstrap-hang):
+  # kill процесса + relaunch, до 3 попыток. Деплойный boot-smoke на том же
+  # стеке проходит — это НЕ регрессия стека, транзиент висящего бинаря.
+  # v6: DSH_TUI_GEOMETRY_TRACE=$work/geo.jsonl — детерминированный
+  # трейс-путь сессии сьюта (патч 61 always-on; оверрайд-прецедент —
+  # scripts/colab-dsh-geometry-trace.sh). Отдельный путь нужен: деплойный
+  # boot-smoke держит СВОЙ dsh на дефолтном трейсе (~root/.dsh-tui/trace/)
+  # — общий файл дал бы два писателя. Ротация 8МБ → geo.jsonl.1: детекторы
+  # глобят 'geo.jsonl*'; каждый launch начинает с чистого файла.
+  # v7: DSH_TUI_DEBUG_MOUSE=1 — logMouseDebug (App.js processKeysInBatch)
+  # пишет per-item 'wheel arrive' в /root/.dsh-tui/mouse-debug.log: гейт
+  # доставки колесных байтов scroll_jitter (boot-smoke его не пишет — у
+  # него env не поднят; каждый launch чистит лог, ретраи шага отфильтрованы
+  # окном [t0..t1]).
+  - id: boot_launch
+    run: |
+      dsh_launch() {
+        rm -f $pin $work/geo.jsonl $work/geo.jsonl.1
+        rm -f /root/.dsh-tui/mouse-debug.log
+        tmux send-keys -t $sess "FAKE_LLM_KEY=fake-local-key DSH_TUI_DEBUG_MOUSE=1 DSH_TUI_PIN_TRACE=1 DSH_TUI_GEOMETRY_TRACE=$work/geo.jsonl dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-boot-inline.err" Enter
+      }
+      boot_poll() {
+        for i in $(seq 1 $1); do
+          tmux capture-pane -p -t $sess > $mode/boot.txt
+          if grep -qE '❯|for shortcuts' $mode/boot.txt; then return 0; fi
+          sleep 1
+        done
+        return 1
+      }
+      dsh_launch
+      for attempt in 1 2 3; do
+        if boot_poll 60; then echo "BOOT_READY (attempt $attempt)"; exit 0; fi
+        echo "BOOT_RETRY attempt=$attempt: hung TUI, kill + relaunch"
+        tmux send-keys -t $sess C-c 2>/dev/null || true
+        sleep 1
+        pkill -f '/usr/local/bin/dsh --profile' 2>/dev/null || true
+        sleep 2
+        tmux send-keys -t $sess reset Enter 2>/dev/null || true
+        sleep 1
+        dsh_launch
+      done
+      echo NOT_READY
+      exit 1
+    timeout: 320
+    idempotent: true
+    retry: 2
+  # Warmup: первый turn глотает SCENARIO-маркер (дефолт fake = short).
+  # После warmup — непустая история для режим-проб и живые SCENARIO.
+  - id: warmup_short
+    run: |
+      tmux capture-pane -p -t $sess | { grep -c '●' > $work/warmup-base.txt || true; }; true
+      tmux send-keys -t $sess "SCENARIO:short привет, ответь кратко" Enter
+      base=$(cat $work/warmup-base.txt)
+      for w in $(seq 1 45); do
+        tmux capture-pane -p -t $sess > $work/warmup-done.txt
+        n=$(grep -c '●' $work/warmup-done.txt || true)
+        [ "$n" -gt "$base" ] && { echo WARMUP_DONE; exit 0; }
+        sleep 2
+      done
+      echo WARMUP_TIMEOUT
+      exit 1
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # v6 (TG-DSH-VISUAL-20260925 узел 5): канонический детектор
+  # trace-метрик = tests/colab/trace-metrics.py. Кладём на VM двумя
+  # heredoc-чанками (транспорт colabctl ~15К на шаг — один чанк не
+  # влезает), затем ast-гейт: файл на VM обязан быть синтаксически
+  # валиден. ВНИМАНИЕ: тело heredoc НЕ содержит $переменных программы
+  # сьюта ($work и пр.) — executor раскрывает их в тексте шага ДО
+  # отправки на VM и сломал бы байт-синхронность с файлом в репо.
+  - id: trace_metrics_lib
+    run: |
+      cat > /root/dsh-inline/trace-metrics.py <<'PYEOF'
+      #!/usr/bin/env python3
+      """trace-metrics — детекторы golden-сьюта dsh по geometry-трейсу (патч 61).
+
+        saw  — пила scrollHeight при sticky=false (репорт 2026-09-25: при скролле
+               от дна экран «мигает и дёргается», высота осциллирует 39↔42;
+               B1/B2-семья в ветке ручного скролла — патч 54 закрыл стриминг).
+               Флип пилы = смена scrollHeight у кадра sticky=false, НЕ являющаяся
+               монотонным ростом: рост = виртуализация замеряет скрытые ряды
+               (легитимно), пила = спады и возвраты вниз.
+        anim — кадры cause='animation' (ClockContext.tick): в IDLE-окне при
+               animations:'off' их быть не должно — все idle-потребители часов
+               гейтятся effectEnabled → mode 'off'. До патча 66 boolean false в
+               settings.yaml → undefined → 'full' → дыхание рамки ~16 fps
+               (memory dsh-animations-boolean-ignored). Окно обязано быть idle:
+               таймер хода/спиннер легитимно тикают во время работы.
+
+      Этот же код встроен в tests/colab/dsh-tui-inline.yaml (setup-шаг
+      trace_metrics_lib, suite_version 9) и на VM живёт как
+      /root/dsh-inline/trace-metrics.py — держать синхронно байт-в-байт
+      (скрипт не содержит переменных программы сьюта: executor раскрывает
+      их в тексте шага ДО отправки на VM — синхронность сломается).
+
+      Формат строки: {"t": ISO|epoch, "pid": int, "frame": int, "cause": str,
+      "scroll": [{"sticky": bool, "scrollHeight": n, "prevScrollHeight": n}]}.
+      Ротация 8МБ → <file>.1 — поэтому --trace принимает glob ('geo.jsonl*').
+
+      Локальная валидация (юзер-трейс 24.09, memory dsh-scroll-height-saw-jitter):
+        trace-metrics.py --trace ~/.dsh-tui/trace/geometry-2026-09-24.jsonl* \
+          --from 2026-09-24T20:56:00Z --to 2026-09-24T20:57:00Z   # SAW: flips>0
+        trace-metrics.py --trace ~/.dsh-tui/trace/geometry-2026-09-24.jsonl* \
+          --from 2026-09-24T21:15:00Z --to 2026-09-24T21:16:00Z   # CLEAN: 0
+
+      Инфра-гейты (ложный «0» ≠ продукт-GREEN): --require-frames N — кадров в
+      окне < N = рендер/трейс мёртв (exit 2, clean и report); --require-sticky-off
+      — нет кадров sticky=false = скролл не сработал (exit 2). INLINE-семантика
+      suite v9 (патч 73, fixed terminalRows-кадр): maxScroll>0 → скролл чтения
+      истории — ФИЧЕЙ (гейт 67) → sticky_off>0 обязателен, ноль = скролл не
+      сработал (exit 2, НЕ продукт-GREEN); продукт-гейт = saw_flips (пила
+      scrollHeight): saw_flips>0 = продукт-RED exit 1.
+      --forbid-sticky-off — [v7-ЛЕГАСИ, до патча 73] sticky_off>0 = RED: v7 исходил
+      из «inline вьюпорт = контенту, maxScroll=0, колесо = visual no-op»; патч 73
+      сломал предпосылку намеренно (кадр фиксирован terminalRows, контент утекает
+      в скроллбек — чтение истории и есть фича).
+      Сьют различает их по exit code (0/1/2 = PASS/RED/инфра).
+      """
+      from __future__ import annotations
+
+      import argparse
+      import glob
+      import json
+      import sys
+      from collections import Counter
+      from datetime import datetime, timezone
+      from typing import Any, Optional
+
+
+      def parse_t(value: Any) -> Optional[datetime]:
+          """Поле 't' кадра (ISO / epoch-s / epoch-ms) → datetime UTC или None."""
+          if value is None:
+              return None
+          if isinstance(value, (int, float)) and not isinstance(value, bool):
+              seconds = float(value)
+              if seconds > 1e12:  # epoch-миллисекунды
+                  seconds /= 1000.0
+              try:
+                  return datetime.fromtimestamp(seconds, tz=timezone.utc)
+              except (ValueError, OSError, OverflowError):
+                  return None
+          try:
+              parsed = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
+          except ValueError:
+              return None
+          if parsed.tzinfo is None:  # наивная строка = UTC
+              parsed = parsed.replace(tzinfo=timezone.utc)
+          return parsed
+
+
+      def read_frames(pattern: str, t_from: datetime, t_to: datetime,
+                      pid: Optional[int]) -> tuple:
+          """Кадры окна [t_from..t_to] из всех файлов glob-паттерна.
+
+          Returns: (files, frames, stats) — файлы; кадры {t,pid,cause,sticky,sh,psh};
+          счётчики lines/bad_lines/read_errors.
+          """
+          files = sorted(glob.glob(pattern))
+          frames, stats = [], Counter()
+          for path in files:
+              try:
+                  with open(path, encoding='utf-8', errors='replace') as fh:
+                      for line in fh:
+                          line = line.strip()
+                          if not line:
+                              continue
+                          try:
+                              rec = json.loads(line)
+                          except ValueError:
+                              stats['bad_lines'] += 1
+                              continue
+                          stats['lines'] += 1
+                          dt = parse_t(rec.get('t'))
+                          if dt is None or dt < t_from or dt > t_to:
+                              continue
+                          if pid is not None and rec.get('pid') != pid:
+                              continue
+                          scroll = rec.get('scroll') or []
+                          entry = scroll[0] if isinstance(scroll, list) and scroll else {}
+                          if not isinstance(entry, dict):
+                              entry = {}
+                          frames.append({'t': dt, 'pid': rec.get('pid'),
+                                         'cause': rec.get('cause'),
+                                         'sticky': entry.get('sticky'),
+                                         'sh': entry.get('scrollHeight'),
+                                         'psh': entry.get('prevScrollHeight')})
+              except OSError as exc:
+                  stats['read_errors'] += 1
+                  print('trace-metrics: WARN cannot read {}: {}'.format(path, exc),
+      PYEOF
+      echo TRACE_METRICS_PART1_OK
+    timeout: 180
+    retry: 2
+    idempotent: true
+  # Второй чанк (cat >>) + ast-гейт синтаксиса.
+  - id: trace_metrics_lib2
+    run: |
+      cat >> /root/dsh-inline/trace-metrics.py <<'PYEOF'
+                        file=sys.stderr)
+          return files, frames, stats
+
+
+      def saw_metrics(frames: list) -> tuple:
+          """Пила scrollHeight при sticky=false по цепочке кадров каждого pid.
+
+          Цепочка = кадры одного pid в окне, отсортированные по t (ротация
+          раскладывает хронологию по двум файлам — сортировка восстанавливает).
+          Флип = scrollHeight кадра != предыдущему в цепочке, кадр sticky=false:
+            dec         — высота уменьшилась: видимый джиттер вниз = пила;
+            inc_rebound — рост, ниже которого высота позже в окне ВОЗВРАЩАЕТСЯ
+                          (откат = осцилляция); монотонный рост без возврата —
+                          легитимный замер виртуализации, исключён.
+
+          Returns: (metrics dict, Counter пар (psh->sh)).
+          """
+          per_pid = {}
+          for fr in frames:
+              per_pid.setdefault(fr['pid'], []).append(fr)
+          m = {'frames': len(frames), 'sticky_off': 0,
+               'record_flips': 0, 'record_dec': 0, 'record_inc': 0,
+               'chain_flips': 0, 'saw_dec': 0, 'saw_inc_rebound': 0}
+          pairs = Counter()
+          for p in sorted(per_pid, key=str):
+              seq = sorted(per_pid[p], key=lambda f: f['t'])
+              for fr in seq:
+                  if fr['sticky'] is False:
+                      m['sticky_off'] += 1
+                      sh, psh = fr['sh'], fr['psh']
+                      if sh is not None and psh is not None and sh != psh:
+                          m['record_flips'] += 1
+                          m['record_dec' if sh < psh else 'record_inc'] += 1
+                          pairs[(psh, sh)] += 1
+              values = [(fr['sh'], fr['sticky']) for fr in seq if fr['sh'] is not None]
+              n = len(values)
+              suffix_min = [None] * n  # suffix_min[i] = минимум значений ПОСЛЕ i
+              running = None
+              for i in range(n - 1, -1, -1):
+                  suffix_min[i] = running
+                  running = values[i][0] if running is None else min(running, values[i][0])
+              for i in range(1, n):
+                  sh, sticky = values[i]
+                  prev = values[i - 1][0]
+                  if sticky is not False or sh == prev:
+                      continue
+                  m['chain_flips'] += 1
+                  if sh < prev:
+                      m['saw_dec'] += 1
+                  else:
+                      later_min = suffix_min[i]
+                      if later_min is not None and later_min < sh:
+                          m['saw_inc_rebound'] += 1
+          m['saw_flips'] = m['saw_dec'] + m['saw_inc_rebound']
+          return m, pairs
+
+
+      def anim_metrics(frames: list) -> dict:
+          """Кадры cause='animation' в окне (+ топ-причины для диагностики)."""
+          causes = Counter(str(fr['cause']) for fr in frames)
+          return {'frames': len(frames),
+                  'animation_frames': causes.get('animation', 0),
+                  'top_causes': causes.most_common(5)}
+
+
+      def main() -> int:
+          """CLI: метрики окна → stdout-маркеры; exit 0/1/2 = PASS/FAIL/инфра."""
+          ap = argparse.ArgumentParser(
+              description='Метрики пилы scrollHeight и гейта анимаций по '
+                          'geometry-трейсу dsh (патч 61).')
+          ap.add_argument('--trace', required=True,
+                          help="glob файлов трейса ('geo.jsonl*' ловит ротацию .1)")
+          ap.add_argument('--from', dest='t_from', required=True,
+                          help='начало UTC-окна, ISO')
+          ap.add_argument('--to', dest='t_to', required=True, help='конец UTC-окна, ISO')
+          ap.add_argument('--pid', type=int, default=None, help='фильтр по pid')
+          ap.add_argument('--metric', choices=['saw', 'anim', 'all'], default='all')
+          ap.add_argument('--expect', choices=['report', 'clean', 'dirty'],
+                          default='report',
+                          help='report — только метрики; clean — ассерт «0»; '
+                               'dirty — доказательство «пила найдена»')
+          ap.add_argument('--require-frames', type=int, default=0, metavar='N',
+                          help='clean/report-режимы: кадров в окне < N = рендер/'
+                               'трейс мёртв — инфра-FAIL (exit 2), НЕ продукт-RED '
+                               '(гейт живости: resize-пульс/стрим обязаны давать '
+                               'кадры; report без гейта = чистые метрики)')
+          ap.add_argument('--require-sticky-off', action='store_true',
+                          help='clean-режим saw: кадров sticky=false нет = скролл '
+                               'не сработал (v9 inline-контракт: maxScroll>0 с '
+                               'патча 73, чтение истории — фича гейта 67) — '
+                               'инфра-FAIL (exit 2), НЕ продукт-RED')
+          ap.add_argument('--forbid-sticky-off', action='store_true',
+                          help='[v7-ЛЕГАСИ, до патча 73] clean-режим saw: кадров '
+                               'sticky=false > 0 = RED — v7 исходил из «inline '
+                               'вьюпорт = контенту, maxScroll=0, колесо = visual '
+                               'no-op»; патч 73 сломал предпосылку (см. '
+                               '--require-sticky-off)')
+          ap.add_argument('--detector-name', default='trace_metrics',
+                          help='имя DETECTOR-маркера (в сьюте = имя теста)')
+          args = ap.parse_args()
+
+          t_from, t_to = parse_t(args.t_from), parse_t(args.t_to)
+          if t_from is None or t_to is None or t_from > t_to:
+              print('trace-metrics: FAIL bad --from/--to', file=sys.stderr)
+              return 2
+          files, frames, stats = read_frames(args.trace, t_from, t_to, args.pid)
+          if not files:
+              print('DETECTOR {}: FAIL (trace_files=0 по {} — трейс не пишется, '
+                    'инфра-условие, НЕ продукт-RED)'.format(args.detector_name,
+                                                            args.trace))
+              return 2
+
+          saw_flips = animation_frames = sticky_off_frames = 0
+          print('TRACE {} files={} lines={} bad={} window=[{}..{}] frames_in_window={}'.format(
+              args.trace, len(files), stats['lines'], stats['bad_lines'],
+              t_from.isoformat(), t_to.isoformat(), len(frames)))
+          if args.metric in ('saw', 'all'):
+              m, pairs = saw_metrics(frames)
+              saw_flips = m['saw_flips']
+              sticky_off_frames = m['sticky_off']
+              pair_txt = ' '.join('{}->{}x{}'.format(a, b, c)
+                                  for (a, b), c in pairs.most_common(5))
+              print('SAW frames_sticky_off={} record_flips={} (dec={} inc={}) '
+                    'chain_flips={} saw_dec={} saw_inc_rebound={} saw_flips={} '
+                    'pairs={}'.format(m['sticky_off'], m['record_flips'], m['record_dec'],
+                                      m['record_inc'], m['chain_flips'], m['saw_dec'],
+                                      m['saw_inc_rebound'], m['saw_flips'], pair_txt or '-'))
+          if args.metric in ('anim', 'all'):
+              a = anim_metrics(frames)
+              animation_frames = a['animation_frames']
+              top = ' '.join('{}={}'.format(c, n) for c, n in a['top_causes'])
+              print('ANIM animation_frames={} of frames={} causes={}'.format(
+                  animation_frames, a['frames'], top or '-'))
+
+          # Гейт живости (НЕ продукт-RED, оба режима): dead-рендер/мёртвый трейс
+          # дают ложное «пусто в окне» — отсекаем до любого вердикта.
+          if args.require_frames > 0 and len(frames) < args.require_frames:
+              print('DETECTOR {}: FAIL (frames_in_window={} < {} — рендер/трейс '
+                    'мёртв в окне, инфра-условие, НЕ продукт-RED)'.format(
+                        args.detector_name, len(frames), args.require_frames))
+              return 2
+          if args.expect == 'report':
+              print('DETECTOR {}: INFO (report: saw_flips={} animation_frames={})'.format(
+                  args.detector_name, saw_flips, animation_frames))
+              return 0
+          if args.expect == 'clean':
+              # Инфра-гейты окна (НЕ продукт-RED): не-сработавший скролл даёт
+              # ложный «0 флипов» — отсекаем ДО вердикта.
+              if args.require_sticky_off and args.metric in ('saw', 'all'):
+                  if sticky_off_frames == 0:
+                      print('DETECTOR {}: FAIL (frames_sticky_off=0 — скролл не '
+                            'сработал (контент не выше вьюпорта или колесо не '
+                            'дошло), инфра-условие, НЕ продукт-RED)'.format(
+                                args.detector_name))
+                      return 2
+              problems = []
+              if args.metric in ('saw', 'all') and saw_flips > 0:
+                  problems.append('saw_flips={} (пила scrollHeight при sticky=false — '
+                                  'джиттер ручного скролла)'.format(saw_flips))
+              # [v7-ЛЕГАСИ, до патча 73] INLINE-контракт гейта 67: вьюпорт = высоте
+              # контента (maxScroll=0), колесо у дна обязано быть visual no-op —
+              # sticky не имеет права упасть вовсе (пила 39↔42 юзер-трейса 24.09);
+              # v9 (патч 73): maxScroll>0, sticky-off легитимен (--require-sticky-off).
+              if (args.forbid_sticky_off and args.metric in ('saw', 'all')
+                      and sticky_off_frames > 0):
+                  problems.append('frames_sticky_off={} (inline: гейт 67 обязан '
+                                  'глотать колесо при maxScroll=0 — sticky упал, '
+                                  'пила вьюпорта вернулась)'.format(sticky_off_frames))
+              if args.metric in ('anim', 'all') and animation_frames > 0:
+                  problems.append('animation_frames={} (часы анимаций тикают в '
+                                  'idle-окне при animations off)'.format(animation_frames))
+              if problems:
+                  print('DETECTOR {}: FAIL ({})'.format(args.detector_name,
+                                                        '; '.join(problems)))
+                  return 1
+              ok_parts = []
+              if args.metric in ('saw', 'all'):
+                  ok_parts.append('saw_flips=0')
+                  if args.forbid_sticky_off:
+                      ok_parts.append('sticky_off=0')
+                  if args.require_sticky_off:
+                      ok_parts.append('sticky_off={} (скролл чтения работает)'
+                                      .format(sticky_off_frames))
+              if args.metric in ('anim', 'all'):
+                  ok_parts.append('animation_frames=0')
+              print('DETECTOR {}: PASS ({} — окно чисто)'.format(
+                  args.detector_name, ' '.join(ok_parts)))
+              return 0
+          # expect == dirty: доказательство, что детектор ловит пилу
+          if saw_flips > 0:
+              print('DETECTOR {}: PASS (dirty-proof: saw_flips={} > 0 — пила '
+                    'детектирована)'.format(args.detector_name, saw_flips))
+              return 0
+          print('DETECTOR {}: FAIL (dirty-proof: saw_flips=0 — ожидавшаяся пила '
+                'не найдена)'.format(args.detector_name))
+          return 1
+
+
+      if __name__ == '__main__':
+          sys.exit(main())
+      PYEOF
+      python3 -c 'import ast; ast.parse(open("/root/dsh-inline/trace-metrics.py").read()); print("TRACE_METRICS_AST_OK")'
+      wc -c /root/dsh-inline/trace-metrics.py
+      echo TRACE_METRICS_LIB_OK
+    timeout: 180
+    retry: 2
+    idempotent: true
+
+tests:
+  # --- replay_session: реплей сессии юзера через fake-llm ----------------------
+  # Сценарий replay-mks4-user (1 turn, 206 chunks) проигрывается фейк-сервером:
+  # 23 thinking-chunks + 183 text-chunks с delayMs 4180мс + медиана паузы 25мс =
+  # ~9с стрим. Без wheel-инъекций (replay = проигрывание сессии, не синтетический
+  # скролл). saw detector проверяет height-oscillation на стрим-фазе; assert
+  # pane alive — dsh не упал после replay.
+  - name: replay_session
+    steps:
+      # Шаг 1: сброс + отправка SCENARIO-маркера + userText из сессии ("clear").
+      # C-c/C-u — idempotent сброс (прерывает предыдущий ход, чистит инпут).
+      # t0 — маркер начала окна трейса (до отправки, ловит стрим-фазу).
+      - run: |
+          tmux send-keys -t $sess C-c; sleep 1
+          tmux send-keys -t $sess C-u; sleep 0.3
+          date -u +%Y-%m-%dT%H:%M:%SZ > $work/replay-t0.marker
+          tmux send-keys -t $sess "SCENARIO:replay-mks4-user clear" Enter
+          echo REPLAY_SENT
+        timeout: 120
+        retry: 2
+        idempotent: true
+      # Шаг 2: ждать стрим — 206 chunks × ~25мс медиана + delayMs 4180мс = ~9с;
+      # 20с margin покрывает транспорт + thinking-паузы. t1 — маркер конца окна.
+      # Захват финального кадра + скроллбека для артефактов.
+      - run: |
+          sleep 20
+          date -u +%Y-%m-%dT%H:%M:%SZ > $work/replay-t1.marker
+          tmux capture-pane -p -t $sess > $work/replay-final.txt
+          tmux capture-pane -p -S -2000 -t $sess > $work/replay-scrollback.txt
+          echo REPLAY_WAIT_DONE
+        timeout: 180
+        retry: 2
+        idempotent: true
+      # Шаг 3: saw detector на geometry-trace. Без wheel-инъекций: проверяет
+      # saw_flips==0 (пила scrollHeight при sticky=false) на окне [t0..t1].
+      # --require-frames 50: гейт живости трейса (стрим-фаза обязана дать кадры).
+      # Без --require-sticky-off: ответ короткий, скролл не обязателен —
+      # sticky_off=0 легитимно (saw_flips==0 тривиально). pane_dead гейт —
+      # TUI мёртв = инфра-fail (exit 2), НЕ продукт-RED. Артефакты (маркеры,
+      # кадр, скроллбек, geo.jsonl*.gz) — в $frames/replay/ для отчёта.
+      - run: |
+          mkdir -p $frames/replay
+          cp $work/replay-t0.marker $work/replay-t1.marker $work/replay-final.txt \
+             $work/replay-scrollback.txt $frames/replay/ 2>/dev/null || true
+          for f in $work/geo.jsonl*; do
+            [ -e "$f" ] || continue
+            gzip -c "$f" > $frames/replay/$(basename "$f").gz
+          done
+          dead=$(tmux display-message -p -t $sess '#{pane_dead}')
+          if [ "$dead" != "0" ]; then
+            echo "DETECTOR replay_session: FAIL (TUI мёртв: pane_dead=$dead — инфра-условие, НЕ продукт-RED)"
+            exit 2
+          fi
+          T0=$(cat $work/replay-t0.marker)
+          T1=$(cat $work/replay-t1.marker)
+          python3 $work/trace-metrics.py --trace "$work/geo.jsonl*" \
+            --from "$T0" --to "$T1" --metric saw --expect clean \
+            --require-frames 50 --detector-name replay_session
+        timeout: 120
+        retry: 2
+        idempotent: true
+      # Шаг 4: assert pane alive — dsh не упал после replay.
+      # pane_dead=0 (жив) + pane_current_command=node (dsh процесс).
+      - run: |
+          dead=$(tmux display-message -p -t $sess '#{pane_dead}')
+          cmd=$(tmux display-message -p -t $sess '#{pane_current_command}')
+          echo "DETECTOR replay_alive: pane_dead=$dead pane_cmd=$cmd expected: dead=0 cmd=node"
+          [ "$dead" = "0" ] && [ "$cmd" = "node" ]
+        timeout: 180
+        retry: 2
+        idempotent: true
+
+teardown:
+  - run: 'tmux kill-session -t $sess 2>/dev/null || true'
+    timeout: 180
+    idempotent: true
+    retry: 2
+    ignore_error: true

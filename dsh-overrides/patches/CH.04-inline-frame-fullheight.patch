@@ -1,0 +1,50 @@
+# Goal:      inline-кадр ВСЕГДА полной высоты терминала — Direction A
+#            (TG-DSH-MKS4-20260928): root Box получает height: terminalRows
+#            + flexShrink: 0 безусловно в inline (латч pin/unpin высотой
+#            кадра больше не владеет). Viewport физически не может превысить
+#            termRows — узкий resize не взрывает кадр (баг-3, +95 строк в
+#            пейне 23); бут-кадр заполняет пейн — рамка ввода у ноги (баг-2);
+#            пин-флип больше не меняет viewport — E1-механизм-2 (ложный
+#            resize) умирает как класс. Скролл транскрипта — внутренний
+#            (ScrollBox), паритет с fullscreen, канон B5-inline.
+# Family:    CH.04
+# Status:    live
+# Files:     lib/types/screens/Chat.js
+# Evidence:  TG-DSH-MKS4-20260928 узел 3;
+#            reports/mks4-visual-bugs-20260928/FIX-SPEC-73.md,
+#            ROOT-CAUSE.md; RED job 215635 (violations=18, worst=+682)
+# Upstream:  not-applicable
+# Added:     2026-09-29 (TG-DSH-MKS4-20260928 узел 3)
+
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -3490,7 +3490,19 @@
+     // overridden by settings appearance.background, always overridden by
+     // env DSH_TUI_BACKGROUND. undefined = the terminal's own default.
+     const appBackground = resolveAppBackground(process.env.DSH_TUI_BACKGROUND, channel.appearance?.background, getTheme(themeName).appBackground);
+-    return (_jsxs(Box, { ref: wakeTickRef, backgroundColor: appBackground, flexDirection: "column", flexGrow: 1, width: "100%", ...(inlinePinned || fullscreen ? { justifyContent: "flex-end", ...(inlinePinned ? { height: terminalRows, flexShrink: 0 } : {}) } : {}), children: [!isSticky && anchorUserText && (_jsx(StickyPromptHeader, { text: anchorUserText, onClick: () => {
++    // DSH-P73-INLINE-FULLHEIGHT: the inline frame is ALWAYS exactly
++    // terminalRows tall (Direction A, TG-DSH-MKS4-20260928). height +
++    // flexShrink 0 apply unconditionally outside fullscreen — the pin/unpin
++    // latch no longer owns frame height; its flips change no geometry, so
++    // renderer's yogaHeight === terminalRows stabilization and log-update's
++    // viewport bookkeeping hold on every frame (the E1 pin-flip-as-resize
++    // dies as a class). The transcript scrolls INSIDE the ScrollBox
++    // viewport (fullscreen parity, canon B5-inline): the viewport can never
++    // exceed termRows (narrow-resize explosion, MKS4 bug-3), and the boot
++    // frame fills the pane so the input frame sits at the terminal foot
++    // (MKS4 bug-2). terminalRows <= 0 (degenerate) keeps the old
++    // unbounded flow instead of a zero-height frame.
++    return (_jsxs(Box, { ref: wakeTickRef, backgroundColor: appBackground, flexDirection: "column", flexGrow: 1, width: "100%", justifyContent: "flex-end", ...(fullscreen || terminalRows <= 0 ? {} : { height: terminalRows, flexShrink: 0 }), children: [!isSticky && anchorUserText && (_jsx(StickyPromptHeader, { text: anchorUserText, onClick: () => {
+                     // Click snaps the pinned prompt to the viewport top (CC's
+                     // StickyPromptHeader). Jump by the SAME content coordinate the
+                     // rail's tick uses (timeline turn top = the prompt TEXT top):
+@@ -3519,7 +3531,7 @@
+                 // flex-end the slack always stays ABOVE the transcript: the
+                 // footer never moves and content grows upward, terminal-
+                 // style. No-op when the content fills the viewport.
+-                contentJustify: inlinePinned || fullscreen ? 'flex-end' : undefined, children: [_jsx(LogoHeader, { model: channel.model, effort: channel.reasoningEffort, cwd: channel.displayCwd, whale: channel.whale,
++                contentJustify: 'flex-end', children: [_jsx(LogoHeader, { model: channel.model, effort: channel.reasoningEffort, cwd: channel.displayCwd, whale: channel.whale,
+                                 // Resuming a long session skips the ~3.4s opening animation: it
+                                 // keeps firing low-frequency React commits that compete with the
+                                 // transcript mount batches (and the first wheel events) for the

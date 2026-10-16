@@ -1,0 +1,41 @@
+# Goal:      модификатор в fold-хинте (i18n {{mod}})
+# Family:    TG.02
+# Status:    live
+# Files:     lib/types/i18n.js, lib/types/i18n.d.ts
+# Evidence:  reports/wavec-c/; facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-12, W3C Wave C (status bar)
+
+--- a/lib/types/i18n.js
++++ b/lib/types/i18n.js
+@@ -575,8 +575,9 @@
+     'help-complete-command': { zh: 'tab 补全命令', en: 'tab to complete command' },
+     'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
+     'help-open-editor': { zh: 'ctrl+g 打开编辑器', en: 'ctrl+g to open editor' },
+-    'help-fold-todos': { zh: '{{mod}}m 折叠待办', en: '{{mod}}m to fold todos' },
+-    'goal-todo-fold-hint': { zh: '{{mod}}m 折叠', en: '{{mod}}m to fold' },
++    // dsh-overrides 19: fold hint without the trailing 'm' (todoFold binds ctrl+q, not ctrl+m)
++    'help-fold-todos': { zh: '{{mod}} 折叠待办', en: '{{mod}} to fold todos' },
++    'goal-todo-fold-hint': { zh: '{{mod}} 折叠', en: '{{mod}} to fold' },
+     // dsh-overrides 13: overflow line for mirrored subagent todos (GoalTodoPanel).
+     'goal-todo-agent-more': { zh: '+{{n}} 更多', en: '+{{n}} more' },
+     'help-commands-title': { zh: '命令：', en: 'commands:' },
+--- a/lib/types/i18n.d.ts
++++ b/lib/types/i18n.d.ts
+@@ -1917,12 +1917,12 @@
+         readonly en: "ctrl+g to open editor";
+     };
+     readonly 'help-fold-todos': {
+-        readonly zh: "{{mod}}q 折叠待办";
+-        readonly en: "{{mod}}q to fold todos";
++        readonly zh: "{{mod}} 折叠待办";
++        readonly en: "{{mod}} to fold todos";
+     };
+     readonly 'goal-todo-fold-hint': {
+-        readonly zh: "{{mod}}q 折叠";
+-        readonly en: "{{mod}}q to fold";
++        readonly zh: "{{mod}} 折叠";
++        readonly en: "{{mod}} to fold";
+     };
+     readonly 'help-commands-title': {
+         readonly zh: "命令：";

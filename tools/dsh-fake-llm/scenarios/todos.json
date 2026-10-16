@@ -1,0 +1,68 @@
+{
+  "name": "todos",
+  "description": "todo_write tool_use с 15 задачами (overflow MAX_TODOS=12 при 80×24). 1 completed + 1 in_progress + 13 pending; 2 задачи с children для рендера веток дерева. GoalTodoPanel рендерит FOLD_HDR + BRANCH_ROW + «+3 more» overflow. Safety net для E7 (todo-panel overflow в scrollback).",
+  "usage": {
+    "input_tokens": 1200,
+    "output_tokens": 800,
+    "cache_read_input_tokens": 600,
+    "cache_creation_input_tokens": 200
+  },
+  "segments": [
+    {
+      "thinking": [
+        "Создаю развёрнутый список из 15 задач для проверки E7 todo-overflow. ",
+        "15 элементов превышают MAX_TODOS=12 — панель должна показать \"+3 more\" overflow."
+      ]
+    },
+    {
+      "text": [
+        "Создаю структурированный список из 15 задач с подзадачами.\n"
+      ]
+    },
+    {
+      "tool_use": {
+        "name": "todo_write",
+        "input": {
+          "todos": [
+            {
+              "content": "Анализ архитектуры патч-стека",
+              "status": "completed",
+              "children": [
+                { "content": "Инвентарь 83 патчей", "status": "completed" },
+                { "content": "Карта семей SUBSYS.FF.B", "status": "completed" }
+              ]
+            },
+            {
+              "content": "Миграция SUBSYS.FF.B нумерации",
+              "status": "in_progress",
+              "children": [
+                { "content": "Этап 0: DEP-3 шапки", "status": "completed" },
+                { "content": "Этап 1: tooling I1-I5", "status": "in_progress" },
+                { "content": "Этап 2: golden safety net", "status": "pending" }
+              ]
+            },
+            { "content": "Pristine-hash гейт I1", "status": "pending" },
+            { "content": "Drift-детектор I2", "status": "pending" },
+            { "content": "Lint шапок патчей I3", "status": "pending" },
+            { "content": "Regen скрипт ветвей I4", "status": "pending" },
+            { "content": "Multi-file marker_file fix", "status": "pending" },
+            { "content": "Golden safety net E7", "status": "pending" },
+            { "content": "Kitty CSI-u leak test", "status": "pending" },
+            { "content": "Saw unit tests 76/77/78/80", "status": "pending" },
+            { "content": "Big-bang family split 3A", "status": "pending" },
+            { "content": "Dead/absorbed removal 3B", "status": "pending" },
+            { "content": "Companion squash 3C", "status": "pending" },
+            { "content": "MS.01 K5-line squash 3D", "status": "pending" },
+            { "content": "GitHub use/dev split", "status": "pending" }
+          ]
+        }
+      }
+    },
+    {
+      "text": [
+        "Список из 15 задач создан. ",
+        "Todo-панель отображает дерево с 12 видимыми элементами и \"+3 more\" overflow.\n"
+      ]
+    }
+  ]
+}

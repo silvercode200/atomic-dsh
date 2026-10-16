@@ -1,0 +1,1053 @@
+# Goal:      хаб кастомизации внутри /settings (hubSettings)
+# Family:    HB.04
+# Status:    live
+# Files:     lib/types/hubSections.js, lib/types/components/EffectsPanel.js,
+#            lib/types/components/design-system/ThemeProvider.js,
+#            lib/types/screens/Settings.js, lib/types/dsh-adapter/plugin.js,
+#            lib/types/screens/Chat.js, lib/types/components/hubSettings.js,
+#            lib/types/components/CustomizationHub.js
+# Evidence:  TG-DSH-HUB-SETTINGS-20260918 узел 1;
+#            reports/hub-settings-wave-20260918/
+# Upstream:  not-applicable
+# Added:     2026-09-18, W5 (TG-DSH-HUB-SETTINGS-20260918 узел 1)
+
+--- a/lib/types/hubSections.js
++++ b/lib/types/hubSections.js
+@@ -5,15 +5,22 @@
+  * a component: the hub root, navigation and the /effects argument jump all
+  * pick it up automatically (the plugin-like extension point the user asked
+  * for; see reports/hub-wave-20260918.md «как добавить секцию»).
++ *
++ * dsh-overrides 46: the hub moved INSIDE the native /settings screen —
++ * each section now names the dsh-tui settings GROUP that renders it
++ * ({id, title, group}); '/effects <section>' opens /settings directly on
++ * that group (an alias, not an overlay). A future section = one entry here
++ * + the fields in hubSettings.js hubSettingsSectionParts() (the screen,
++ * navigation and the /effects jump pick it up the same way).
+  */
+ export const HUB_SECTIONS = [
+-    { id: 'appearance', title: 'Оформление' },
+-    { id: 'effects', title: 'Эффекты' },
+-    { id: 'theme', title: 'Тема' },
+-    { id: 'border', title: 'Рамка' },
+-    { id: 'spinner', title: 'Спиннеры' },
+-    { id: 'statusrow', title: 'Статус-ряд' },
+-    { id: 'progress', title: 'Прогресс' },
++    { id: 'appearance', title: 'Оформление', group: 'hub-appearance' },
++    { id: 'effects', title: 'Эффекты', group: 'hub-effects' },
++    { id: 'theme', title: 'Тема', group: 'hub-theme' },
++    { id: 'border', title: 'Рамка', group: 'hub-border' },
++    { id: 'spinner', title: 'Спиннеры', group: 'hub-spinner' },
++    { id: 'statusrow', title: 'Статус-ряд', group: 'status-bar' },
++    { id: 'progress', title: 'Прогресс', group: 'hub-progress' },
+ ];
+ /** Find a section by id (the /effects <section> argument jump). */
+ export function hubSectionById(id) {
+--- a/lib/types/components/EffectsPanel.js
++++ b/lib/types/components/EffectsPanel.js
+@@ -41,7 +41,7 @@
+ /** Each demo drives the SAME effect gate it demonstrates.
+  * dsh-overrides 39: `large` renders the detail-block variant — the same
+  * animation code, a bigger canvas (longer border/bar/verb samples). */
+-function EffectDemo({ effect, time, large = false }) {
++export function EffectDemo({ effect, time, large = false }) {
+     const [themeName] = useTheme();
+     const theme = getTheme(themeName);
+     const on = effectEnabled(effect);
+--- a/lib/types/components/design-system/ThemeProvider.js
++++ b/lib/types/components/design-system/ThemeProvider.js
+@@ -266,10 +266,15 @@
+     return _jsx(ThemeContext.Provider, { value: value, children: children });
+ }
+ /**
+- * Resolves the active theme name and the runtime setter. Returns
+- * `[themeName, setTheme]` — the first element matches Claude Code's shape.
++ * Resolves the active theme name and the runtime swap controls. Returns
++ * `[themeName, setTheme, previewTheme, revertTheme]` — the first two match
++ * Claude Code's shape; the preview pair is the patch-37 live-preview chain.
++ * dsh-overrides 46: the hook now returns the FULL quartet — patch 37's Chat
++ * destructured four elements while this returned two, so every /theme
++ * arrow key threw (previewTheme was undefined). The settings-hub theme row
++ * (hubSettings.js) consumes the same quartet.
+  */
+ export function useTheme() {
+-    const { theme, setTheme } = useContext(ThemeContext);
+-    return [theme, setTheme];
++    const { theme, setTheme, previewTheme, revertTheme } = useContext(ThemeContext);
++    return [theme, setTheme, previewTheme, revertTheme];
+ }
+--- a/lib/types/screens/Settings.js
++++ b/lib/types/screens/Settings.js
+@@ -9,6 +9,9 @@
+ import { POINTER, TICK, MULTIPLICATION_X } from '../cc/figures.js';
+ import { getLang, t } from '../i18n.js';
+ import { SettingsForm } from '../dsh-adapter/settingsEditor.js';
++// dsh-overrides 46: the appearance-hub rows + demo widgets (the patch-44
++// CustomizationHub overlay moved INSIDE this screen; see hubSettings.js).
++import { HubCustomEntry, HUB_FIELD_DEMOS } from '../components/hubSettings.js';
+ /** Pick the provider-owned translation for the active language. */
+ function pick(text, descriptions) {
+     return descriptions?.[getLang()] ?? text;
+@@ -95,7 +98,7 @@
+  * settingsEditor.ts), so the brief in-flight window and a failed save keep
+  * their `*` / badge feedback.
+  */
+-export function Settings({ channel, onClose, }) {
++export function Settings({ channel, onClose, initialGroup = null, }) {
+     // Explicit terminal size (not flexGrow) — the same rule SessionBrowser's
+     // root follows inside the alternate screen's fixed-height box.
+     const { columns, rows } = useTerminalSize();
+@@ -106,7 +109,9 @@
+     const [sections, setSections] = React.useState(() => channel.settingsSections());
+     const [mode, setMode] = React.useState('list');
+     const [editing, setEditing] = React.useState(null);
+-    const [activeGroup, setActiveGroup] = React.useState(null);
++    // dsh-overrides 46: the hub alias (/effects) opens the screen directly
++    // on a section's group ({ns, id}); a bare /settings opens the list.
++    const [activeGroup, setActiveGroup] = React.useState(initialGroup);
+     const [focusIndex, setFocusIndex] = React.useState(0);
+     const [notice, setNotice] = React.useState(undefined);
+     /** Configured status of every secret field's credential ref. */
+@@ -134,7 +139,10 @@
+             const view = namespaces.find(entry => entry.ns === section.ns);
+             const kept = formsRef.current.get(section.ns);
+             const reuse = kept !== undefined && (kept.namespace === view || kept.shell().dirty);
+-            const form = reuse ? kept : new SettingsForm(host, view, section.fields);
++            // dsh-overrides 46: custom rows (kind 'custom') never touch the
++            // form — they persist through their own chains (theme.json,
++            // spinner/effects host writes) and own their key handling.
++            const form = reuse ? kept : new SettingsForm(host, view, section.fields.filter(field => field.kind !== 'custom'));
+             forms.set(section.ns, form);
+         }
+     }
+@@ -252,6 +260,11 @@
+             setWindowStart(0);
+             return;
+         }
++        // dsh-overrides 46: custom rows own their keys (←/→ preview, enter
++        // commits inside the row component) — the screen's Enter is a no-op
++        // so the two useInput layers never double-fire.
++        if (entry.field.kind === 'custom')
++            return;
+         const form = forms.get(entry.ns);
+         if (form === undefined || !form.available)
+             return;
+@@ -411,11 +424,37 @@
+         const isFocused = focused?.kind === 'field' && focused.ns === section.ns && focused.field === field;
+         // Field rows are always exactly one line: the hint lives in the bottom
+         // help bar, so focusing a field never reflows the list below it.
++        // dsh-overrides 46: custom rows render through HubCustomEntry (their
++        // demo lives INSIDE the entry, sharing its preview state); plain
++        // fields may declare a live demo (`demo` id + `demoLines`) rendered
++        // below the row while focused — the focus-follow windowing counts
++        // the demo lines, so the row never scrolls itself out of view.
++        if (field.kind === 'custom') {
++            const demoLines = isFocused ? (field.custom?.demoLines ?? 0) : 0;
++            entries.push({
++                key: `field:${section.ns}:${field.path.join('.')}`,
++                lines: 1 + demoLines,
++                focus: index,
++                node: (_jsx(HubCustomEntry, { field: field, focused: isFocused, channel: channel, bump: bump, rowSlot: children => (_jsx(CardRow, { highlight: isFocused, children: _jsx(Box, { onClick: () => {
++                                if (mode !== 'edit')
++                                    setFocusIndex(index);
++                            }, onMouseEnter: () => {
++                                if (mode !== 'edit')
++                                    setFocusIndex(index);
++                            }, children: children }) })) })),
++            });
++            return;
++        }
++        const demoId = typeof field.demo === 'string' ? field.demo : undefined;
++        const Demo = demoId !== undefined ? HUB_FIELD_DEMOS[demoId] : undefined;
++        const demoLines = isFocused && Demo !== undefined ? (field.demoLines ?? 1) : 0;
++        const form = forms.get(section.ns);
++        const demoValue = form !== undefined ? form.field(field).text : '';
+         entries.push({
+             key: `field:${section.ns}:${field.path.join('.')}`,
+-            lines: 1,
++            lines: 1 + demoLines,
+             focus: index,
+-            node: _jsx(CardRow, { highlight: isFocused, children: renderField(section, field, index) }),
++            node: (_jsxs(React.Fragment, { children: [_jsx(CardRow, { highlight: isFocused, children: renderField(section, field, index) }), demoLines > 0 && Demo !== undefined ? (_jsx(Box, { paddingLeft: 4, height: demoLines, overflow: "hidden", children: _jsx(Demo, { value: demoValue, channel: channel, field: field }) })) : null] })),
+         });
+     };
+     if (activeSection !== undefined && activeGroupSpec !== undefined) {
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -19,10 +19,12 @@
+ // dsh-overrides 33: the effect registry drives the schema's effects map.
+ import { EFFECT_KEYS } from '../animationsMode.js';
+ import { readEffectsPref } from '../effectsPrefs.js';
+-import { readAppearancePref, mergeAppearanceOver } from '../appearancePrefs.js';
+ import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js';
+ import { readModelPref } from '../modelPrefs.js';
+ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js';
++// dsh-overrides 46: the appearance hub's groups/fields ride the dsh-tui
++// settings-section registration (the hub moved INSIDE /settings).
++import { hubSettingsSectionParts } from '../components/hubSettings.js';
+ import { migratePresetPref, readPresetPref } from '../presetPrefs.js';
+ import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js';
+ import { ensurePackagedPresets } from './packaged-presets.js';
+@@ -680,16 +682,19 @@
+         // written here at boot (before the tree mounts), hot-swapped
+         // in-session by /theme.
+         const applyAppearance = (value) => {
+-            // dsh-overrides 38/44: the interactive layers — effects.json
+-            // (per-effect toggles) AND appearance.json (the hub's general
+-            // customization store) — merge OVER the settings.yaml layer
+-            // (file wins per key; settings-only keys survive).
++            // dsh-overrides 38: the /effects panel's interactive toggles
++            // persist to ~/.dsh-tui/effects.json (the theme.json mechanism);
++            // that fresher layer merges OVER the settings.yaml effects map.
++            // dsh-overrides 44 added a general appearance.json layer for the
++            // hub overlay; dsh-overrides 46 RETIRED it — the hub now lives
++            // in /settings and writes settings.yaml directly, so no third
++            // layer may shadow those writes (per-key file-wins would undo
++            // every settings-screen change made after a hub-era write).
+             const settingsAppearance = value.appearance ?? {};
+             const interactive = readEffectsPref();
+-            const hubLayer = readAppearancePref();
+-            const hubAppearance = mergeAppearanceOver(settingsAppearance, hubLayer.appearance);
+-            const hubEffects = { ...(hubAppearance.effects ?? {}), ...interactive };
+-            const merged = { ...hubAppearance, effects: Object.keys(hubEffects).length > 0 ? hubEffects : (hubAppearance.effects ?? {}) };
++            const merged = Object.keys(interactive).length > 0
++                ? { ...settingsAppearance, effects: { ...(settingsAppearance.effects ?? {}), ...interactive } }
++                : settingsAppearance;
+             channel.setAppearance(merged);
+             // dsh-overrides 35: verb customization rides the same apply.
+             channel.setSpinnerVerbs(value.spinnerVerbs);
+@@ -866,6 +871,12 @@
+     // same registry either way.
+     {
+         const settingsSections = getHostSettingsSections(ctx.get('tuiSettingsSections')) ?? getLocalSettingsSectionsHost();
++        // dsh-overrides 46: the appearance hub lives INSIDE /settings — the
++        // hub's groups (Оформление/Эффекты/Тема/Рамка/Спиннеры/Прогресс) and
++        // its fields (plain settings-backed rows + custom rows with live
++        // demos: theme chain, spinner catalog, effect registry) extend this
++        // registration; Статус-ряд rides the native status-bar group.
++        const hubParts = hubSettingsSectionParts();
+         const unregister = settingsSections.register({
+             ns: 'dsh-tui',
+             title: 'dsh-tui',
+@@ -873,6 +884,7 @@
+                 { id: 'status-bar', title: 'Status bar', descriptions: { zh: '底栏设置' } },
+                 { id: 'shortcuts', title: 'Shortcuts', descriptions: { zh: '快捷键' } },
+                 { id: 'session', title: 'Session', descriptions: { zh: '会话' } },
++                ...hubParts.groups,
+             ],
+             fields: [
+                 {
+@@ -1196,6 +1208,7 @@
+                     hintDescriptions: { zh: '隐藏开屏头部、emoji 状态符与装饰性配色；代码高亮与工具配色保留，底栏只留模型与目录。' },
+                     kind: 'boolean',
+                 },
++                ...hubParts.fields,
+             ],
+         });
+         ctx.effect(() => unregister);
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -71,11 +71,10 @@
+ import { PlanPicker } from '../components/PlanPicker.js';
+ import { LangPicker } from '../components/LangPicker.js';
+ import { ThemePicker, getThemeOptions, filterThemeOptions } from '../components/ThemePicker.js';
+-// dsh-overrides 38: /effects dashboard + registry access.
+-import { EffectsPanel } from '../components/EffectsPanel.js';
+-// dsh-overrides 44: the customization hub (registry-driven sections).
+-import { CustomizationHub, hubEnterAction } from '../components/CustomizationHub.js';
+-import { hubSectionById, HUB_SECTIONS } from '../hubSections.js';
++// dsh-overrides 44/46: the hub's section registry — /effects is now an
++// ALIAS that opens /settings on a hub section's group (the overlay and the
++// CustomizationHub module are retired; the sections live in Settings).
++import { hubSectionById } from '../hubSections.js';
+ import { EFFECT_KEYS, animationsMode, effectEnabled, setAnimationsMode, setEffectsMode } from '../animationsMode.js';
+ import { readEffectsPref, writeEffectsPref } from '../effectsPrefs.js';
+ import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js';
+@@ -394,6 +393,9 @@
+      *  browser, a screen rather than a panel: it owns its own focus, staged
+      *  drafts and keyboard; Chat only opens it. */
+     const [settingsOpen, setSettingsOpen] = React.useState(false);
++    // dsh-overrides 46: the /effects alias opens the settings screen
++    // directly on a hub section's group (null = the plain section list).
++    const [settingsEntryGroup, setSettingsEntryGroup] = React.useState(null);
+     const [workspaceTargets, setWorkspaceTargets] = React.useState([]);
+     const workspaceFlowRequestRef = React.useRef(0);
+     const workspaceFlowAbortRef = React.useRef(null);
+@@ -1306,18 +1308,16 @@
+                     ]);
+                     return true;
+                 }
+-                // dsh-overrides 44: /effects opens the customization HUB
+-                // (registry sections); '/effects <section>' jumps straight
+-                // into a sub-section (effects/appearance/theme/border/
+-                // spinner/statusrow/progress).
++                // dsh-overrides 46: the hub lives INSIDE /settings — /effects
++                // is an alias: open the settings screen directly on the
++                // requested hub section's group (default Эффекты), so the
++                // 'dashboard opens' flows keep working.
+                 const sectionArg = parts[0];
+                 const jump = sectionArg !== undefined && sectionArg !== 'status'
+-                    ? (hubSectionById(sectionArg.toLowerCase())?.id ?? null)
++                    ? (hubSectionById(sectionArg.toLowerCase())?.group ?? null)
+                     : null;
+-                dispatchOverlay({
+-                    type: 'open',
+-                    overlay: { kind: 'effects', index: 0, section: jump },
+-                });
++                setSettingsEntryGroup(jump ?? 'hub-effects');
++                setSettingsOpen(true);
+                 return true;
+             }
+             case 'color': {
+@@ -2874,36 +2874,10 @@
+             }
+             return;
+         }
+-        if (overlay.kind === 'effects') {
+-            // dsh-overrides 44: the hub drives the keys — root = section
+-            // list (Enter enters), sub-sections cycle values through the
+-            // interactive layer (appearance.json / effects.json over
+-            // settings.yaml); Esc goes back to the root, then out.
+-            // Row counts are section-aware (effects = EFFECT_KEYS).
+-            const inRoot = (overlay.section ?? null) === null;
+-            const count = inRoot ? HUB_SECTION_COUNT : overlay.section === 'effects' ? EFFECT_KEYS.length : 24;
+-            if (key.upArrow || key.downArrow) {
+-                dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count });
+-            }
+-            else if (plainReturn || (input === ' ' && !key.ctrl)) {
+-                if (inRoot) {
+-                    dispatchOverlay({ type: 'set-index', kind: 'effects', index: overlay.index });
+-                    const target = HUB_SECTIONS[overlay.index];
+-                    if (target !== undefined)
+-                        dispatchOverlay({ type: 'open', overlay: { kind: 'effects', index: 0, section: target.id } });
+-                }
+-                else {
+-                    hubEnterAction(overlay.section, overlay.index);
+-                }
+-            }
+-            else if (key.escape) {
+-                if (inRoot)
+-                    dispatchOverlay({ type: 'close' });
+-                else
+-                    dispatchOverlay({ type: 'open', overlay: { kind: 'effects', index: 0, section: null } });
+-            }
+-            return;
+-        }
++        // dsh-overrides 46: the 'effects' overlay key handler is GONE — the
++        // hub overlay (and its never-defined HUB_SECTION_COUNT, a latent
++        // ReferenceError on every keypress while it was open) was retired;
++        // /effects is an alias into the settings screen now.
+         if (overlay.kind === 'lang') {
+             if (key.upArrow || key.downArrow) {
+                 dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: 2 });
+@@ -3398,7 +3372,13 @@
+     // conversation (an early return after every hook above has run), so there
+     // is no transcript underneath to be repainted or bled through.
+     if (settingsOpen) {
+-        const screen = _jsx(Settings, { channel: channel, onClose: () => setSettingsOpen(false) });
++        // dsh-overrides 46: initialGroup lands the screen on a hub section's
++        // group (/effects alias); closing resets the entry so a later bare
++        // /settings opens the list again.
++        const screen = _jsx(Settings, { channel: channel, initialGroup: settingsEntryGroup === null ? null : { ns: 'dsh-tui', id: settingsEntryGroup }, onClose: () => {
++            setSettingsOpen(false);
++            setSettingsEntryGroup(null);
++        } });
+         return fullscreen ? screen : _jsx(AlternateScreen, { children: screen });
+     }
+     // Subagent detail scene: displays detailed view of a specific subagent.
+@@ -3683,7 +3663,7 @@
+                                             return;
+                                         dispatchOverlay({ type: 'close' });
+                                         applyLang(lang);
+-                                    } }) })), overlay.kind === 'effects' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(CustomizationHub, { openSection: overlay.section ?? null, focusIndex: overlay.index }) })), overlay.kind === 'theme' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(ThemePicker, { focusIndex: overlay.index, currentTheme: themeName, themeHost: themeHost, query: overlay.query ?? '', onPick: (index) => {
++                                    } }) })), overlay.kind === 'theme' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(ThemePicker, { focusIndex: overlay.index, currentTheme: themeName, themeHost: themeHost, query: overlay.query ?? '', onPick: (index) => {
+                                         dispatchOverlay({ type: 'close' });
+                                         const name = filterThemeOptions(getThemeOptions(themeHost), overlay.query ?? '')[index]?.value;
+                                         if (name !== undefined) {
+--- /dev/null
++++ b/lib/types/components/hubSettings.js
+@@ -0,0 +1,445 @@
++import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
++import React from 'react';
++import { Box, Text, useInput, useTheme, useAnimationFrame } from '../ui.js';
++import { getTheme } from '../theme.js';
++import { POINTER } from '../cc/figures.js';
++import { isValidThemeColor } from '../customTheme.js';
++import { getThemeOptions } from './ThemePicker.js';
++// dsh-overrides 46: the /effects-era demo components are REUSED as the
++// settings screen's per-effect live demos (the panel itself is gone; the
++// demo widgets are the point).
++import { EffectDemo } from './EffectsPanel.js';
++import { SPINNER_NAMES, getSpinnerStyle } from '../spinnerCatalog.js';
++import { EFFECT_KEYS, effectEnabled } from '../animationsMode.js';
++import { getEffectDescription } from '../effectsCatalog.js';
++import { subCells } from '../tuiDisplayPrefs.js';
++/**
++ * dsh-overrides 46: appearance hub lives inside the settings screen.
++ *
++ * The patch-44 CustomizationHub overlay is retired: every appearance knob
++ * renders as a field of the native /settings screen (the dsh-tui section,
++ * extended through the tuiSettingsSections seam). This module owns:
++ *
++ * - hubSettingsSectionParts(): the hub's groups + fields for the seam
++ *   registration (plugin.js spreads them into the dsh-tui section). Fields
++ *   come in two kinds: plain settings-backed fields (select/text — the
++ *   SettingsForm writes them through the revision-fenced mutate and the
++ *   plugin's watch applies them live) and CUSTOM rows (kind 'custom'):
++ *   theme (the /theme live-preview chain), spinner styles (settings.yaml
++ *   dsh-tui.spinner → channel.setSpinnerPrefs) and effect toggles (the
++ *   effect registry semantics: a toggle writes effects.<key> AND switches
++ *   animations to 'custom' in ONE host write — full mode ignores the
++ *   per-key map, so an explicit toggle must own the mode, exactly like the
++ *   old hub's persistEffect).
++ * - HubCustomEntry: the custom row renderer (row + live demo share state,
++ *   so the demo previews the un-committed candidate).
++ * - HUB_FIELD_DEMOS: live demo widgets for the plain fields (every
++ *   appearance setting demos itself, per the wave requirement).
++ * - writeDshSettings/cycleStyle: the small shared helpers (exported for
++ *   tests).
++ */
++/** Theme keys previewed in the demo swatch row (the ThemePicker set). */
++const SWATCH_KEYS = ['background', 'text', 'success', 'warning', 'error', 'suggestion', 'claude', 'permission'];
++/** The effect rows shown in the Эффекты group (sparks/statusrow + progress live elsewhere). */
++const EFFECT_GROUP_KEYS = () => EFFECT_KEYS.filter(key => key !== 'sparkTps' && key !== 'sparkCache' && key !== 'toolProgressBars');
++/**
++ * The hub's share of the dsh-tui settings section: 6 new groups (the 7th
++ * hub section, Статус-ряд, IS the native `status-bar` group) + the fields.
++ * Plain fields carry `demo` (a HUB_FIELD_DEMOS id); custom rows carry
++ * `custom` ({type, demoLines}) and manage their own persistence.
++ */
++export function hubSettingsSectionParts() {
++    return {
++        groups: [
++            { id: 'hub-appearance', title: 'Оформление' },
++            { id: 'hub-effects', title: 'Эффекты' },
++            { id: 'hub-theme', title: 'Тема' },
++            { id: 'hub-border', title: 'Рамка' },
++            { id: 'hub-spinner', title: 'Спиннеры' },
++            { id: 'hub-progress', title: 'Прогресс' },
++        ],
++        fields: [
++            // ── Оформление ──
++            {
++                path: ['appearance', 'powerline'],
++                label: 'Powerline-ряд',
++                kind: 'select',
++                group: 'hub-appearance',
++                demo: 'powerline',
++                options: [
++                    { value: 'full', label: 'full (сегменты с заливкой)' },
++                    { value: 'plain', label: 'plain (❯-разделители)' },
++                    { value: 'off', label: 'off (стоковый ряд)' },
++                ],
++                hint: 'Статус-ряд в стиле powerlevel/fish: заполненные сегменты [✦ модель][путь][⎇ ветка][⚡ ctx][таймер] + приглушённый хвост. off — обычный ряд полей.',
++            },
++            {
++                path: ['appearance', 'background'],
++                label: 'Фон приложения',
++                kind: 'text',
++                group: 'hub-appearance',
++                demo: 'background',
++                parse: parseThemeColor,
++                hint: 'Цвет фона всего TUI (#rrggbb / rgb() / ansi256()); пусто — фон темы (appBackground). Применяется живьём.',
++            },
++            {
++                path: ['appearance', 'animations'],
++                label: 'Режим анимаций',
++                kind: 'select',
++                group: 'hub-appearance',
++                demo: 'animations',
++                options: [
++                    { value: 'full', label: 'full (все эффекты вкл)' },
++                    { value: 'custom', label: 'custom (по-эффектно)' },
++                    { value: 'off', label: 'off (статика)' },
++                ],
++                hint: 'Гейт LIVE42-волны: full — всё включено (кроме opt-in спарклайнов), custom — решает каждый тумблер Эффектов, off — всё статично. Env DSH_TUI_ANIMATIONS/REDUCED_MOTION выше.',
++            },
++            // ── Тема ──
++            {
++                path: ['hub', 'theme'],
++                label: 'Тема',
++                kind: 'custom',
++                group: 'hub-theme',
++                custom: { type: 'theme', demoLines: 1 },
++                hint: '←/→ — живой превью (палитра применяется сразу, без записи), enter — закрепить (та же цепочка, что /theme: живьём + персист theme.json). Фокус ушёл без enter — откат к закреплённой.',
++            },
++            // ── Рамка ──
++            {
++                path: ['appearance', 'inputBorder'],
++                label: 'Цвет рамки ввода',
++                kind: 'text',
++                group: 'hub-border',
++                demo: 'inputBorder',
++                parse: parseThemeColor,
++                hint: 'Акцент рамки поля ввода (#rrggbb / rgb() / ansi256()); пусто — ключ темы promptBorder. Валидируется формами customTheme; применяется живьём.',
++            },
++            // ── Спиннеры ──
++            {
++                path: ['spinner', 'main'],
++                label: 'Спиннер: главный',
++                kind: 'custom',
++                group: 'hub-spinner',
++                custom: { type: 'spinner', place: 'main', demoLines: 1 },
++                hint: 'Стиль главного спиннера (каталог патча 43, 58 стилей). ←/→ — перелистать с живым демо, enter — закрепить (settings.yaml dsh-tui.spinner.main, живьём через channel.setSpinnerPrefs).',
++            },
++            {
++                path: ['spinner', 'subagent'],
++                label: 'Спиннер: строки субагентов',
++                kind: 'custom',
++                group: 'hub-spinner',
++                custom: { type: 'spinner', place: 'subagent', demoLines: 1 },
++                hint: 'Стиль спиннера в строках субагентов (AgentView). ←/→ + enter — как у главного.',
++            },
++            {
++                path: ['spinner', 'toolCard'],
++                label: 'Спиннер: карточки инструментов',
++                kind: 'custom',
++                group: 'hub-spinner',
++                custom: { type: 'spinner', place: 'toolCard', demoLines: 1 },
++                hint: 'Стиль лоадера карточки инструмента (ToolUseLoader). ←/→ + enter — как у главного.',
++            },
++            // ── Эффекты ──
++            ...EFFECT_GROUP_KEYS().map(key => effectField(key, 'hub-effects')),
++            // ── Статус-ряд (нативная группа status-bar) ──
++            {
++                path: ['statusBar', 'ctxBarMode'],
++                label: 'Режим ctx-бара',
++                kind: 'select',
++                group: 'status-bar',
++                demo: 'ctxBarMode',
++                options: [
++                    { value: 'full', label: 'full (6 ячеек)' },
++                    { value: 'narrow', label: 'narrow (3 ячейки)' },
++                    { value: 'percent-only', label: 'percent-only (без бара)' },
++                ],
++                hint: 'Форма ⚡-сегмента контекста в powerline-ряду (ключ statusBar.ctxBarMode — до патча 46 хаб писал мёртвый appearance.ctxBarMode).',
++            },
++            {
++                path: ['appearance', 'cwdMode'],
++                label: 'Путь в статус-ряду',
++                kind: 'select',
++                group: 'status-bar',
++                demo: 'cwdMode',
++                options: [
++                    { value: 'full', label: 'full (весь путь)' },
++                    { value: 'compact', label: 'compact (последний сегмент)' },
++                ],
++                hint: 'Форма пути в сегменте/поле cwd. НЕ statusBar.compact (тот гасит powerline целиком).',
++            },
++            {
++                path: ['hub', 'effect', 'sparkTps'],
++                label: 'sparkTps (спарклайн t/s)',
++                kind: 'custom',
++                group: 'status-bar',
++                custom: { type: 'effect', key: 'sparkTps', demoLines: 1 },
++                hint: `${getEffectDescription('sparkTps')}. OPT-IN: включается только явно (реестр эффектов, effectEnabled).`,
++            },
++            {
++                path: ['hub', 'effect', 'sparkCache'],
++                label: 'sparkCache (спарклайн кеша)',
++                kind: 'custom',
++                group: 'status-bar',
++                custom: { type: 'effect', key: 'sparkCache', demoLines: 1 },
++                hint: `${getEffectDescription('sparkCache')}. OPT-IN: включается только явно (реестр эффектов, effectEnabled).`,
++            },
++            // ── Прогресс ──
++            {
++                path: ['hub', 'effect', 'toolProgressBars'],
++                label: 'toolProgressBars (мини-бары инструментов)',
++                kind: 'custom',
++                group: 'hub-progress',
++                custom: { type: 'effect', key: 'toolProgressBars', demoLines: 1 },
++                hint: `${getEffectDescription('toolProgressBars')}. Важно: канал не стримит вывод работающего инструмента — бар появляется ПОСЛЕ завершения (итоговый разбор curl/wget/tqdm).`,
++            },
++        ],
++    };
++}
++/** One custom effect-toggle row spec. */
++function effectField(key, group) {
++    return {
++        path: ['hub', 'effect', key],
++        label: key,
++        kind: 'custom',
++        group,
++        custom: { type: 'effect', key, demoLines: 1 },
++        hint: `${getEffectDescription(key)} — enter/space переключает (реестр эффектов, effectEnabled; дубли гейтов не создаются).`,
++    };
++}
++/**
++ * Write path ops into the dsh-tui settings namespace through the settings
++ * host (the same revision-fenced mutate the SettingsForm uses), with one
++ * retry on a stale-revision conflict. Resolves false when the write could
++ * not land (the row keeps its previous value — never a silent loss).
++ */
++export async function writeDshSettings(channel, ops) {
++    const host = channel?.settingsHost?.();
++    if (host === undefined || host === null || ops.length === 0)
++        return false;
++    const ns = 'dsh-tui';
++    const revision = () => host.listNamespaces().find(entry => entry.ns === ns)?.revision;
++    try {
++        try {
++            await host.write(ns, ops, revision());
++        }
++        catch (error) {
++            if (error?.code !== 'SETTINGS_CONFLICT')
++                throw error;
++            // A concurrent write landed between seed and save: re-seed the
++            // revision once and retry (the SettingsForm.save contract).
++            await host.write(ns, ops, revision());
++        }
++        return true;
++    }
++    catch {
++        return false;
++    }
++}
++/**
++ * Cycle through a style list (wraps). An unknown current value starts from
++ * the first entry, then applies the delta — the preview never gets stuck.
++ */
++export function cycleStyle(current, delta, list) {
++    if (list === undefined || list === null || list.length === 0)
++        return current ?? '';
++    const idx = list.indexOf(current);
++    const base = idx < 0 ? 0 : idx;
++    const step = delta === 0 ? 0 : delta > 0 ? 1 : -1;
++    return list[(base + step + list.length * 2) % list.length];
++}
++/** parse() for color text fields: only valid customTheme color forms pass. */
++function parseThemeColor(text) {
++    const trimmed = text.trim();
++    if (trimmed === '')
++        return { kind: 'clear' };
++    return isValidThemeColor(trimmed) ? { kind: 'set', value: trimmed } : undefined;
++}
++/** The row's pointer column, padded like FieldRow (CJK-safe width). */
++function pointer(focused) {
++    return focused ? `${POINTER} ` : '  ';
++}
++// ── Custom entries (row + demo share one component, so the demo can
++// preview the un-committed candidate) ─────────────────────────────────
++/**
++ * The custom-field renderer the Settings screen mounts. `rowSlot(children)`
++ * wraps the one-line row content in the screen's CardRow (borders,
++ * highlight); the entry appends its demo line(s) below while focused.
++ */
++export function HubCustomEntry({ field, focused, channel, bump, rowSlot }) {
++    const custom = field.custom ?? {};
++    if (custom.type === 'theme')
++        return _jsx(ThemeEntry, { field: field, focused: focused, bump: bump, rowSlot: rowSlot });
++    if (custom.type === 'spinner')
++        return _jsx(SpinnerEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
++    return _jsx(EffectEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
++}
++/** Тема: ←/→ live preview (patch-37 chain), Enter commits via setTheme. */
++function ThemeEntry({ field, focused, bump, rowSlot }) {
++    const [themeName, setTheme, previewTheme, revertTheme] = useTheme();
++    const names = React.useMemo(() => getThemeOptions(undefined).map(option => option.value), []);
++    const [candidate, setCandidate] = React.useState(null);
++    const previewRef = React.useRef(null);
++    useInput((input, key) => {
++        if (!focused)
++            return;
++        if (key.leftArrow || key.rightArrow) {
++            const current = candidate ?? (names.includes(themeName) ? themeName : names[0] ?? 'auto');
++            const next = cycleStyle(current, key.rightArrow ? 1 : -1, names);
++            setCandidate(next);
++            previewRef.current = next;
++            previewTheme(next);
++            bump();
++        }
++        else if (key.return && candidate !== null) {
++            // Commit through the SAME chain /theme uses: live hot-swap +
++            // persist to theme.json (ThemeProvider.setTheme).
++            if (setTheme(candidate)) {
++                previewRef.current = null;
++                setCandidate(null);
++            }
++            bump();
++        }
++    });
++    // Leaving the row without a commit reverts to the persisted choice —
++    // the picker's Esc semantics, played by focus loss here (no write).
++    React.useEffect(() => {
++        if (focused)
++            return;
++        if (previewRef.current !== null) {
++            previewRef.current = null;
++            setCandidate(null);
++            revertTheme();
++            bump();
++        }
++    }, [focused, revertTheme, bump]);
++    const shown = candidate ?? themeName;
++    const theme = getTheme(shown);
++    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: shown }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" }), candidate !== null ? _jsx(Text, { color: "warning", children: " *" }) : null] })] }));
++    const demo = (_jsxs(Text, { children: [...SWATCH_KEYS.map(key => _jsx(Text, { color: theme?.[key], children: "██" }, key)), _jsx(Text, { dimColor: true, children: "  ←/→ живой превью · enter закрепить (theme.json)" })] }));
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
++}
++/** Спиннер: ←/→ cycles the catalog (live frames), Enter writes spinner.<place>. */
++function SpinnerEntry({ field, focused, channel, bump, rowSlot }) {
++    const place = field.custom?.place ?? 'main';
++    const current = channel?.spinnerPrefs?.[place] ?? '';
++    const names = React.useMemo(() => ['', ...SPINNER_NAMES], []);
++    const [candidate, setCandidate] = React.useState(null);
++    const shown = candidate ?? current;
++    const style = getSpinnerStyle(shown);
++    const [, time] = useAnimationFrame(focused && style !== undefined ? style.interval : null);
++    useInput((input, key) => {
++        if (!focused)
++            return;
++        if (key.leftArrow || key.rightArrow) {
++            setCandidate(previous => cycleStyle(previous ?? current, key.rightArrow ? 1 : -1, names));
++            bump();
++        }
++        else if (key.return) {
++            const pick = candidate ?? current;
++            if (pick === current)
++                return;
++            // settings.yaml dsh-tui.spinner.<place> — the plugin's watch
++            // applies it live (channel.setSpinnerPrefs + module mirrors).
++            void writeDshSettings(channel, [{ op: 'set', path: ['spinner', place], value: pick }]).then(ok => {
++                if (ok) {
++                    setCandidate(null);
++                    bump();
++                }
++            });
++        }
++    });
++    // An un-committed browse does not survive focus loss.
++    React.useEffect(() => {
++        if (!focused)
++            setCandidate(null);
++    }, [focused]);
++    const frame = style !== undefined
++        ? style.frames[Math.floor(time / style.interval) % style.frames.length]
++        : undefined;
++    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: `${frame ?? '·'} ${shown === '' ? '(встроенный)' : shown}` }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" }), candidate !== null && candidate !== current ? _jsx(Text, { color: "warning", children: " *" }) : null] })] }));
++    const demo = style !== undefined
++        ? (_jsxs(Text, { children: [_jsx(Text, { color: "claude", children: style.frames.slice(0, 12).join('') }), _jsxs(Text, { dimColor: true, children: ["  ", style.frames.length, " кадров · ", style.interval, "ms/кадр"] })] }))
++        : _jsx(Text, { dimColor: true, children: "встроенный вид спиннера (глагол + glimmer); ←/→ — листать каталог, enter — закрепить" });
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
++}
++/**
++ * Эффект: Enter/Space toggles. One host write carries BOTH the per-key
++ * value and animations='custom' — full mode ignores the effects map (the
++ * patch-33 registry semantics), so an explicit toggle must own the mode;
++ * the old hub's persistEffect did exactly this pair.
++ */
++function EffectEntry({ field, focused, channel, bump, rowSlot }) {
++    const key = field.custom?.key;
++    const on = key !== undefined && effectEnabled(key);
++    useInput((input, keyPress) => {
++        if (!focused || key === undefined)
++            return;
++        if (keyPress.return || (input === ' ' && !keyPress.ctrl)) {
++            void writeDshSettings(channel, [
++                { op: 'set', path: ['appearance', 'effects', key], value: !on },
++                { op: 'set', path: ['appearance', 'animations'], value: 'custom' },
++            ]).then(ok => {
++                if (ok)
++                    bump();
++            });
++        }
++    });
++    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, wrap: "truncate-end", children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsx(Text, { color: on ? 'success' : 'inactive', bold: focused, children: on ? '[✓] on' : '[  ] off' })] }));
++    const [, time] = useAnimationFrame(120);
++    const demo = (_jsxs(Text, { dimColor: true, children: [_jsx(EffectDemo, { effect: key, time: time }), _jsxs(Text, { dimColor: true, children: ["  ", key !== undefined ? getEffectDescription(key) : ''] })] }));
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
++}
++// ── Demos for the plain (settings-backed) fields ────────────────────────
++/** Live demo registry: every plain appearance field demos itself. */
++export const HUB_FIELD_DEMOS = {
++    powerline: PowerlineDemo,
++    background: BackgroundDemo,
++    animations: AnimationsDemo,
++    inputBorder: InputBorderDemo,
++    ctxBarMode: CtxBarModeDemo,
++    cwdMode: CwdModeDemo,
++};
++/** Powerline chain sample in the selected style (theme-colored). */
++function PowerlineDemo({ value }) {
++    const [themeName] = useTheme();
++    const theme = getTheme(themeName);
++    if (value === 'off') {
++        return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "стоковый ряд: " }), _jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" }), _jsx(Text, { dimColor: true, children: " · " }), _jsx(Text, { color: "inactiveShimmer", children: "~/…/deepseek_harness" })] }));
++    }
++    if (value === 'plain') {
++        return (_jsxs(Text, { children: [_jsx(Text, { color: "claude", children: " ✦ glm-5.3 " }), _jsx(Text, { dimColor: true, children: "❯" }), _jsx(Text, { color: "text", children: " ~/…/deepseek_harness " }), _jsx(Text, { dimColor: true, children: "❯" }), _jsx(Text, { color: "text", children: " ⎇ main " })] }));
++    }
++    return (_jsxs(Text, { children: [_jsx(Text, { backgroundColor: theme.claude, color: "inverseText", children: " ✦ glm-5.3 " }), _jsx(Text, { color: "claude", children: "" }), _jsx(Text, { backgroundColor: theme.toolCardBackground, color: "text", children: " ~/…/dsh " }), _jsx(Text, { color: "toolCardBackground", children: "" }), _jsx(Text, { backgroundColor: theme.success, color: "inverseText", children: " ⎇ main " })] }));
++}
++/** Background color sample (the whole row paints). */
++function BackgroundDemo({ value }) {
++    const valid = typeof value === 'string' && value.trim() !== '' && isValidThemeColor(value.trim());
++    if (!valid)
++        return _jsx(Text, { dimColor: true, children: "пусто = фон темы (appBackground); формы: #rrggbb, rgb(), ansi256()" });
++    return _jsx(Text, { backgroundColor: value.trim(), children: "  фон приложения:████████████  " });
++}
++/** Animations mode sample: the breathing input frame, live when allowed. */
++function AnimationsDemo() {
++    const [, time] = useAnimationFrame(120);
++    return (_jsxs(Text, { dimColor: true, children: ["сэмпл: ", _jsx(EffectDemo, { effect: "inputBorderBreath", time: time })] }));
++}
++/** Input frame sample in the chosen color. */
++function InputBorderDemo({ value }) {
++    const valid = typeof value === 'string' && value.trim() !== '' && isValidThemeColor(value.trim());
++    return (_jsxs(Text, { children: ["╭────────────╮  ", valid
++            ? _jsx(Text, { color: value.trim(), children: "╭────────────╮" })
++            : _jsx(Text, { dimColor: true, children: "пусто = цвет темы (promptBorder)" })] }));
++}
++/** Ctx-bar sample in the selected mode (subCells smoothing included). */
++function CtxBarModeDemo({ value }) {
++    const mode = value === 'narrow' || value === 'percent-only' ? value : 'full';
++    if (mode === 'percent-only')
++        return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⚡ " }), _jsx(Text, { color: "inverseText", children: "69%" })] }));
++    const cells = mode === 'narrow' ? 3 : 6;
++    const { fill, track } = effectEnabled('subCellBars') ? subCells(0.69, cells) : subCells(Math.round(0.69 * cells) / cells, cells);
++    return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⚡" }), _jsx(Text, { color: "inverseText", children: fill }), _jsx(Text, { dimColor: true, children: track }), _jsx(Text, { dimColor: true, children: " 69%" })] }));
++}
++/** Status-row path shape sample. */
++function CwdModeDemo({ value }) {
++    return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "full: " }), _jsx(Text, { color: "text", children: "~/…/deepseek_harness" }), _jsx(Text, { dimColor: true, children: "  ·  compact: " }), _jsx(Text, { color: "text", children: "deepseek_harness" })] }));
++}
+--- a/lib/types/components/CustomizationHub.js
++++ /dev/null
+@@ -1,236 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-import React from 'react';
+-import { Box, Text, useAnimationFrame } from '../ui.js';
+-import { Pane } from './design-system/Pane.js';
+-import { HUB_SECTIONS } from '../hubSections.js';
+-import { EFFECT_KEYS, animationsMode, effectEnabled, setAnimationsMode, setEffectsMode } from '../animationsMode.js';
+-import { getEffectDescription } from '../effectsCatalog.js';
+-import { SPINNER_NAMES, SPINNER_CATALOG, getSpinnerStyle } from '../spinnerCatalog.js';
+-import { readAppearancePref, writeAppearancePref, mergeAppearanceOver } from '../appearancePrefs.js';
+-/**
+- * dsh-overrides 44: the customization hub — ONE entry point for every
+- * dsh-tui appearance knob (the user's «одним пунктом с подпунктами»).
+- * Root = the section list (registry-driven: a future section is one
+- * HUB_SECTIONS entry + one component here); arrows+Enter navigate, Esc
+- * goes back. Every sub-section edits through the interactive layer
+- * (appearance.json / effects.json merged over settings.yaml — file wins
+- * per key) and applies LIVE through the process-wide registries.
+- */
+-/** Read the current interactive appearance snapshot (live registries + file). */
+-function currentAppearance() {
+-    const pref = readAppearancePref();
+-    return {
+-        powerline: pref.appearance.powerline,
+-        theme: pref.appearance.theme,
+-        inputBorder: pref.appearance.inputBorder,
+-        background: pref.appearance.background,
+-        cwdMode: pref.appearance.cwdMode,
+-    };
+-}
+-/** Persist one appearance key through the interactive layer. */
+-function persistAppearance(key, value) {
+-    const pref = readAppearancePref();
+-    pref.appearance[key] = value;
+-    writeAppearancePref(pref);
+-}
+-function persistEffect(key, value) {
+-    const pref = readAppearancePref();
+-    pref.effects[key] = value;
+-    writeAppearancePref(pref);
+-    setAnimationsMode('custom');
+-    setEffectsMode(mergeEffectsLive());
+-    return pref;
+-}
+-function mergeEffectsLive() {
+-    const pref = readAppearancePref();
+-    const map = {};
+-    for (const k of EFFECT_KEYS)
+-        if (typeof pref.effects[k] === 'boolean')
+-            map[k] = pref.effects[k];
+-    return map;
+-}
+-/** A small selectable list row. */
+-function HubRow({ focused, label, value, color }) {
+-    // dsh-overrides 44: the label needs flexShrink — a long name
+-    // (inputBorderBreath) must not be clipped by the fixed-width layout.
+-    return (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'remember' : undefined, bold: focused, children: focused ? '❯ ' : '  ' }), _jsx(Text, { color: focused ? 'remember' : undefined, wrap: 'truncate-end', children: label }), value !== undefined ? _jsxs(Text, { dimColor: true, children: [': ', _jsx(Text, { color: color ?? 'claude', children: String(value) })] }) : null] }));
+-}
+-/** Cycle a value through a list (wraps). */
+-function cycle(value, list) {
+-    const idx = list.indexOf(value);
+-    return list[(idx + 1 + list.length) % list.length];
+-}
+-// ── Sections (each gets {focus, onKey} — Enter cycles/edits, live-applied) ──
+-function AppearanceSection({ focus }) {
+-    // Cycle-rows: powerline, theme(None=по theme.json), inputBorder(None=тема),
+-    // background(None=тема), animations, cwdMode, sparklines (custom opt-in).
+-    const rows = [
+-        { id: 'powerline', label: 'Powerline', values: ['full', 'plain', 'off'] },
+-        { id: 'theme', label: 'Тема', values: [undefined, 'tokyonight-moon', 'tokyonight-storm', 'gruvbox-dark', 'nord'] },
+-        { id: 'inputBorder', label: 'Рамка ввода', values: [undefined, '#7aa2f7', '#e06c75', 'rgb(125,161,222)'] },
+-        { id: 'background', label: 'Фон', values: [undefined, '#000000', '#1a1b26', '#222436'] },
+-        { id: 'animations', label: 'Анимации', values: ['full', 'custom', 'off'] },
+-        { id: 'cwdMode', label: 'Путь в статус-ряду', values: ['full', 'compact'] },
+-    ];
+-    const cur = currentAppearance();
+-    const live = { powerline: cur.powerline, theme: cur.theme, inputBorder: cur.inputBorder, background: cur.background, animations: animationsMode(), cwdMode: cur.cwdMode ?? 'full' };
+-    return (_jsxs(Box, { flexDirection: 'column', children: [rows.map((row, i) => (_jsx(HubRow, { focused: focus === i, label: row.label, value: live[row.id] ?? 'по умолчанию' }, row.id))), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter — переключить (живьём, персист в appearance.json); Esc — назад" }) })] }));
+-}
+-function EffectsSection({ focus }) {
+-    // dsh-overrides 44: width '100%' so the row boxes get the full column
+-    // and long effect names wrap-truncate instead of hard-clipping.
+-    return (_jsxs(Box, { flexDirection: 'column', width: '100%', children: [EFFECT_KEYS.map((key, i) => (_jsxs(Box, { key: key, width: '100%', children: [_jsx(HubRow, { focused: focus === i, label: key, value: effectEnabled(key) ? 'on' : 'off', color: effectEnabled(key) ? 'success' : 'inactive' }), focus === i ? _jsx(Box, { paddingLeft: 4, children: _jsx(Text, { dimColor: true, wrap: 'wrap', children: getEffectDescription(key) }) }) : null] }))), _jsxs(Box, { marginTop: 1, children: [_jsx(Text, { dimColor: true, children: `режим: ${animationsMode()} · enter — тумблер · Esc — назад` })] })] }));
+-}
+-function ThemeSection({ focus, onPreview }) {
+-    const themes = ['(по theme.json)', 'tokyonight-moon', 'tokyonight-storm', 'tokyonight-night', 'tokyonight-day', 'gruvbox-dark', 'gruvbox-material-dark', 'nord', 'dracula'];
+-    const cur = readAppearancePref().appearance.theme;
+-    return (_jsxs(Box, { flexDirection: 'column', children: [themes.map((name, i) => (_jsx(HubRow, { focused: focus === i, label: name, value: (cur ?? undefined) === (themes[i] === '(по theme.json)' ? undefined : themes[i]) ? 'выбрано' : undefined }, name))), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter — применить (живой превью как в /theme; выбранная тема закрепляется в appearance.json); Esc — назад" }) })] }));
+-}
+-function BorderSection({ focus }) {
+-    const rows = [
+-        { id: 'inputBorder', label: 'Рамка ввода (цвет)', values: [undefined, '#7aa2f7', '#e06c75', '#98c379', 'rgb(125,161,222)', 'ansi256(75)'] },
+-    ];
+-    const cur = readAppearancePref().appearance.inputBorder;
+-    return (_jsxs(Box, { flexDirection: 'column', children: [rows.map((row, i) => (_jsx(HubRow, { focused: focus === i, label: row.label, value: cur ?? 'ключ темы promptBorder' }, row.id))), _jsx(Box, { marginTop: 1, children: _jsxs(Text, { dimColor: true, children: ["подсказка: значение — hex/rgb()/ansi256() (валидация customTheme); пусто = тема решает. Карточки — отдельный ключ bashBorder темы (в темах). Esc — назад"] }) })] }));
+-}
+-function SpinnerSection({ focus, columns }) {
+-    const [, time] = useAnimationFrame(120);
+-    const names = SPINNER_NAMES.slice(0, 24);
+-    const cur = readAppearancePref().appearance.spinnerMain;
+-    return (_jsxs(Box, { flexDirection: 'column', children: [_jsx(Text, { bold: true, color: 'remember', children: 'Стиль главного спиннера (каталог — 58 стилей):' }), names.map((name, i) => {
+-            const style = getSpinnerStyle(name);
+-            const frame = style.frames[Math.floor(time / style.interval) % style.frames.length];
+-            return (_jsxs(Box, { key: name, children: [_jsx(HubRow, { focused: focus === i, label: name, value: `${frame}  (${style.frames.length} кадров)` }), _jsx(Text, { color: 'claude', children: '  ' + style.frames.slice(0, 3).join('') })] }, name));
+-        }), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: `enter — выбрать (живое демо слева; остальные места — dsh-tui.spinner {subagent, toolCard}); Esc — назад` }) })] }));
+-}
+-function StatusRowSection({ focus }) {
+-    const rows = [
+-        { id: 'ctxBarMode', label: 'Режим ctx-бара', values: ['full', 'narrow', 'percent-only'] },
+-        { id: 'cwdMode', label: 'Путь', values: ['full', 'compact'] },
+-        { id: 'sparkTps', label: 'Спарклайн t/s', values: [false, true] },
+-        { id: 'sparkCache', label: 'Спарклайн кеша', values: [false, true] },
+-    ];
+-    const pref = readAppearancePref();
+-    const cur = { ctxBarMode: pref.appearance.ctxBarMode ?? 'full', cwdMode: pref.appearance.cwdMode ?? 'full', sparkTps: pref.effects.sparkTps === true, sparkCache: pref.effects.sparkCache === true };
+-    return (_jsxs(Box, { flexDirection: 'column', children: [rows.map((row, i) => (_jsx(HubRow, { focused: focus === i, label: row.label, value: String(cur[row.id]), color: cur[row.id] === true || cur[row.id] === 'full' ? 'success' : 'inactive' }, row.id))), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter — цикл значений (сегменты модель/путь/ветка/ctx/таймер — в statusBar настроек; спарклайны — OPT-IN, вторая строка); Esc — назад" }) })] }));
+-}
+-function ProgressSection({ focus }) {
+-    const on = effectEnabled('toolProgressBars');
+-    return (_jsxs(Box, { flexDirection: 'column', children: [_jsx(HubRow, { focused: focus === 0, label: 'toolProgressBars', value: on ? 'on' : 'off', color: on ? 'success' : 'inactive' }), _jsx(Box, { paddingLeft: 4, children: _jsx(Text, { dimColor: true, wrap: 'wrap', children: getEffectDescription('toolProgressBars') }) }), _jsx(Box, { marginTop: 1, children: _jsxs(Text, { dimColor: true, children: ["важно: канал не стримит вывод работающего инструмента — бар появляется ПОСЛЕ завершения (итоговый прогресс curl/wget/tqdm). Esc — назад"] }) })] }));
+-}
+-const SECTION_COMPONENTS = {
+-    appearance: AppearanceSection,
+-    effects: EffectsSection,
+-    theme: ThemeSection,
+-    border: BorderSection,
+-    spinner: SpinnerSection,
+-    statusrow: StatusRowSection,
+-    progress: ProgressSection,
+-};
+-/**
+- * The hub: `openSection` = the active sub-section id (null = root list).
+- * Keyboard lives in Chat's overlay handler (up/down/enter/esc) exactly
+- * like the /effects dashboard of patch 38.
+- */
+-export function CustomizationHub({ openSection, focusIndex = 0, onToggle, onSectionChange }) {
+-    const section = openSection !== null && openSection !== undefined ? HUB_SECTIONS.find(s => s.id === openSection) : undefined;
+-    const Section = section !== undefined ? SECTION_COMPONENTS[section.id] : undefined;
+-    return (_jsx(Pane, { color: 'permission', children: _jsxs(Box, { flexDirection: 'column', children: [_jsxs(Box, { marginBottom: 1, children: [_jsx(Text, { color: 'remember', bold: true, children: 'Кастомизация dsh-tui — хаб' }), _jsxs(Text, { dimColor: true, children: ['  (', section !== undefined ? section.title : 'разделы', ')'] })] }), section === undefined
+-            ? (_jsxs(Box, { flexDirection: 'column', children: [HUB_SECTIONS.map((s, i) => (_jsx(HubRow, { focused: focusIndex === i, label: s.title }, s.id))), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: '↑/↓ — выбрать · enter — войти · esc — выход · новая секция = запись в HUB_SECTIONS' }) })] }))
+-            : Section !== undefined ? _jsx(Section, { focus: focusIndex, onToggle: onToggle }) : null] }) }));
+-}
+-/** Apply a hub action (Enter): returns the next open section (or null). */
+-export function hubEnterAction(openSection, focusIndex) {
+-    if (openSection === null || openSection === undefined) {
+-        const target = HUB_SECTIONS[focusIndex];
+-        return target !== undefined ? target.id : null;
+-    }
+-    const pref = readAppearancePref();
+-    switch (openSection) {
+-        case 'appearance': {
+-            const rows = [
+-                { id: 'powerline', values: ['full', 'plain', 'off'] },
+-                { id: 'theme', values: [undefined, 'tokyonight-moon', 'tokyonight-storm', 'gruvbox-dark', 'nord'] },
+-                { id: 'inputBorder', values: [undefined, '#7aa2f7', '#e06c75', 'rgb(125,161,222)'] },
+-                { id: 'background', values: [undefined, '#000000', '#1a1b26', '#222436'] },
+-                { id: 'animations', values: ['full', 'custom', 'off'] },
+-                { id: 'cwdMode', values: ['full', 'compact'] },
+-            ];
+-            const row = rows[focusIndex];
+-            if (row === undefined)
+-                break;
+-            const cur = pref.appearance[row.id];
+-            const next = cycle(cur, row.values);
+-            if (next === undefined)
+-                delete pref.appearance[row.id];
+-            else
+-                pref.appearance[row.id] = next;
+-            writeAppearancePref(pref);
+-            if (row.id === 'animations')
+-                setAnimationsMode(next ?? 'full');
+-            break;
+-        }
+-        case 'effects': {
+-            const key = EFFECT_KEYS[focusIndex];
+-            if (key !== undefined)
+-                persistEffect(key, !effectEnabled(key));
+-            break;
+-        }
+-        case 'theme': {
+-            const themes = ['(по theme.json)', 'tokyonight-moon', 'tokyonight-storm', 'tokyonight-night', 'tokyonight-day', 'gruvbox-dark', 'gruvbox-material-dark', 'nord', 'dracula'];
+-            const pick = themes[focusIndex];
+-            if (pick === undefined)
+-                break;
+-            if (pick === '(по theme.json)')
+-                delete pref.appearance.theme;
+-            else
+-                pref.appearance.theme = pick;
+-            writeAppearancePref(pref);
+-            break;
+-        }
+-        case 'border': {
+-            const values = [undefined, '#7aa2f7', '#e06c75', '#98c379', 'rgb(125,161,222)', 'ansi256(75)'];
+-            const next = cycle(pref.appearance.inputBorder, values);
+-            if (next === undefined)
+-                delete pref.appearance.inputBorder;
+-            else
+-                pref.appearance.inputBorder = next;
+-            writeAppearancePref(pref);
+-            break;
+-        }
+-        case 'spinner': {
+-            const names = SPINNER_NAMES.slice(0, 24);
+-            const name = names[focusIndex];
+-            if (name !== undefined) {
+-                pref.appearance.spinnerMain = name;
+-                writeAppearancePref(pref);
+-            }
+-            break;
+-        }
+-        case 'statusrow': {
+-            const rows = [
+-                { id: 'ctxBarMode', values: ['full', 'narrow', 'percent-only'] },
+-                { id: 'cwdMode', values: ['full', 'compact'] },
+-                { id: 'sparkTps', values: [false, true], effect: true },
+-                { id: 'sparkCache', values: [false, true], effect: true },
+-            ];
+-            const row = rows[focusIndex];
+-            if (row === undefined)
+-                break;
+-            if (row.effect) {
+-                persistEffect(row.id, !pref.effects[row.id]);
+-            }
+-            else {
+-                const next = cycle(pref.appearance[row.id] ?? 'full', row.values);
+-                pref.appearance[row.id] = next;
+-                writeAppearancePref(pref);
+-            }
+-            break;
+-        }
+-        case 'progress': {
+-            persistEffect('toolProgressBars', !effectEnabled('toolProgressBars'));
+-            break;
+-        }
+-    }
+-    return openSection;
+-}

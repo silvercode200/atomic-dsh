@@ -1,0 +1,15 @@
+[
+  "ask_user_question",
+  "create_goal",
+  "get_goal",
+  "update_goal",
+  "interrupt_agent",
+  "list_agents",
+  "ralph",
+  "read_image",
+  "send_message",
+  "subagent_fork",
+  "todo_write",
+  "web_search",
+  "workflow"
+]

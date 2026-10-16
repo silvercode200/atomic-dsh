@@ -1,0 +1,155 @@
+# Goal:      тодо субагентов: todo/write case + плоский хвост
+# Family:    TG.06
+# Status:    live
+# Files:     lib/types/components/GoalTodoPanel.js,
+#            lib/types/dsh-adapter/subagents.js, lib/types/i18n.js
+# Evidence:  TG-DSH-AGENTTODO-20260911 узел 1; facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-11, W3 (TG-DSH-AGENTTODO-20260911 узел 1)
+
+--- a/lib/types/components/GoalTodoPanel.js
++++ b/lib/types/components/GoalTodoPanel.js
+@@ -11,6 +11,13 @@
+  * cap is the only truncation left and gets more room.
+  */
+ const MAX_TODOS = 12;
++/**
++ * dsh-overrides 13: max mirrored rows of live-subagent todos appended to the
++ * expanded list before the "+N more" overflow line. Mirrored rows carry the
++ * toolDotTask tone (mist rose) against the main agent's suggestion/dim, so
++ * the tree alone tells whose work is whose — no agent names.
++ */
++const MAX_AGENT_TODOS = 4;
+ const PHASE_LABEL = {
+     active: '● active',
+     paused: '⏸ paused',
+@@ -58,23 +65,28 @@
+ // with fractional AtMost widths (e.g. 2.70 for the 3-wide "\u251C\u2500 "); with the
+ // default 'wrap' those probes return height 2 and the row renders an extra
+ // blank line under every expanded todo. Truncate keeps every probe 1 line.
+-function TodoGlyph({ status }) {
++function TodoGlyph({ status, tone }) {
+     switch (status) {
+         case 'in_progress':
+-            return _jsx(Text, { color: "suggestion", wrap: "truncate", children: "\u25CF " });
++            return _jsx(Text, { color: tone === 'agent' ? 'toolDotTask' : 'suggestion', wrap: "truncate", children: "\u25CF " });
+         case 'completed':
+             return _jsx(Text, { dimColor: true, wrap: "truncate", children: "\u2713 " });
+         default:
+-            return _jsx(Text, { dimColor: true, wrap: "truncate", children: "\u25CB " });
++            return _jsx(Text, { color: tone === 'agent' ? 'toolDotTask' : undefined, dimColor: tone !== 'agent', wrap: "truncate", children: "\u25CB " });
+     }
+ }
+ /**
+  * Mind-map style branch prefix: `├─` for every row but the last, which
+  * closes with `└─`. The whole panel reads as one tree — the goal is the
+  * root and each todo hangs off it.
++ * dsh-overrides 13: `tone: 'agent'` renders subagent rows in the
++ * toolDotTask token instead of dim — the row color (not a name) says whose
++ * todo it is. ThemedText resolves dimColor to theme.inactive and DROPS the
++ * color prop, so the agent tone must never set dimColor; the glyph alone
++ * carries the pending/in_progress distinction.
+  */
+-function BranchPrefix({ last }) {
+-    return _jsx(Text, { dimColor: true, wrap: "truncate", children: last ? '└─ ' : '├─ ' });
++function BranchPrefix({ last, tone }) {
++    return _jsx(Text, { color: tone === 'agent' ? 'toolDotTask' : undefined, dimColor: tone !== 'agent', wrap: "truncate", children: last ? '└─ ' : '├─ ' });
+ }
+ /**
+  * Live goal + todo panel above the prompt input. Data rides on the channel:
+@@ -138,6 +150,25 @@
+         return null;
+     const visible = todos.slice(0, MAX_TODOS);
+     const hidden = todos.length - visible.length;
++    // dsh-overrides 13: live subagents and their mirrored todos. The store
++    // keeps the last `todo/write` snapshot per child (subagents.js); only
++    // non-completed todos of LIVE agents mirror here, flattened in spawn
++    // order, capped by MAX_AGENT_TODOS with a "+N more" overflow line. The
++    // jobs counter mirrors the StatusLine chip minus kind==='subagent' —
++    // background subagents are already counted as agents.
++    const liveAgents = (channel.subagents ?? []).filter(agent => agent.status === 'running' || agent.status === 'starting');
++    const liveJobs = (channel.backgroundJobs ?? []).filter(job => (job.status === 'running' || job.status === 'stopping') && job.kind !== 'subagent');
++    const agentTodoRows = [];
++    for (const agent of liveAgents) {
++        for (const todo of agent.todos ?? [])
++            if (todo.status !== 'completed')
++                agentTodoRows.push(todo);
++    }
++    const visibleAgentTodos = agentTodoRows.slice(0, MAX_AGENT_TODOS);
++    const hiddenAgentTodos = agentTodoRows.length - visibleAgentTodos.length;
++    // Rows appended after the main list: the last main row keeps its closing
++    // `└─` only when nothing follows (no mirrored rows, no overflow line).
++    const agentTailCount = visibleAgentTodos.length + (hiddenAgentTodos > 0 ? 1 : 0);
+     // dsh-overrides 09: collapsed preview pair -- the live task (an
+     // in_progress row, else the first open one) on its own line, plus the
+     // next open row after it, so the folded panel stays a fixed 1-3 lines
+@@ -150,8 +181,15 @@
+     const next = currentIdx >= 0
+         ? allTodos.slice(currentIdx + 1).find(todo => todo.status !== 'completed')
+         : undefined;
+-    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "\uD83C\uDFAF " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "\u2502 " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["\u2713 ", doneCount, "/", allTodos.length] }), _jsxs(Text, { dimColor: true, children: [" \u00b7 ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["\u25CF ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["\u2192 \u25CB ", next.content] }) })), !collapsed && (_jsxs(Box, { flexDirection: "column", children: [visible.map((todo, index) => {
+-                                const last = index === visible.length - 1 && hidden === 0;
++    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "\uD83C\uDFAF " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "\u2502 " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["\u2713 ", doneCount, "/", allTodos.length] }), liveAgents.length > 0 && (_jsxs(Text, { dimColor: true, children: [" \u00b7 agents ", liveAgents.length] })), liveJobs.length > 0 && (_jsxs(Text, { dimColor: true, children: [" \u00b7 jobs ", liveJobs.length] })), _jsxs(Text, { dimColor: true, children: [" \u00b7 ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["\u25CF ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["\u2192 \u25CB ", next.content] }) })), !collapsed && (_jsxs(Box, { flexDirection: "column", children: [visible.map((todo, index) => {
++                                const last = index === visible.length - 1 && hidden === 0 && agentTailCount === 0;
+                                 return (_jsxs(Box, { flexDirection: "row", children: [_jsx(BranchPrefix, { last: last }), _jsx(TodoGlyph, { status: todo.status }), _jsx(Text, { wrap: "truncate", dimColor: todo.status === 'completed', children: todo.content })] }, index));
+-                            })] }))] }))] }));
++                            }), visibleAgentTodos.map((todo, index) => {
++                                // dsh-overrides 13: mirrored subagent todo rows —
++                                // toolDotTask tone, same tree/glyphs as the main
++                                // rows, `└─` only on the very last line of the
++                                // whole list (row or overflow).
++                                const last = index === visibleAgentTodos.length - 1 && hiddenAgentTodos === 0;
++                                return (_jsxs(Box, { flexDirection: "row", children: [_jsx(BranchPrefix, { last: last, tone: 'agent' }), _jsx(TodoGlyph, { status: todo.status, tone: 'agent' }), _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: todo.content })] }, `agent-${index}`));
++                            }), hiddenAgentTodos > 0 && (_jsxs(Box, { flexDirection: "row", children: [_jsx(BranchPrefix, { last: true, tone: 'agent' }), _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: t('goal-todo-agent-more', { n: hiddenAgentTodos }) })] }))] }))] }))] }));
+ }
+--- a/lib/types/dsh-adapter/subagents.js
++++ b/lib/types/dsh-adapter/subagents.js
+@@ -135,6 +135,28 @@
+                 }
+                 break;
+             }
++            // dsh-overrides 13: child `todo/write` whole-list snapshots. The
++            // channel routes child session events here before its own
++            // todoPanelItems handling (that one only feeds the MAIN agent's
++            // state.todos), so without this case a subagent's todo list was
++            // dropped on the floor. Validation mirrors channel.js
++            // todoPanelItems (content string + known status), inlined here to
++            // avoid a circular import on channel.js; an invalid payload is
++            // ignored, leaving the last valid snapshot intact.
++            case 'todo/write': {
++                const todos = data.todos;
++                const valid = Array.isArray(todos) && todos.every(item => typeof item === 'object' && item !== null &&
++                    typeof item.content === 'string' &&
++                    (item.status === 'pending' || item.status === 'in_progress' || item.status === 'completed'));
++                if (valid) {
++                    const state = this.states.get(agentId);
++                    if (state) {
++                        state.todos = todos;
++                        this.notify();
++                    }
++                }
++                break;
++            }
+             default:
+                 break;
+         }
+@@ -204,7 +226,7 @@
+         this.sessionToAgent.clear();
+         this.notify();
+     }
+-    snapshot() { return Array.from(this.states.values()).map(state => ({ ...state, output: [...state.output], outputEvents: [...state.outputEvents], toolCalls: state.toolCalls.map(tool => ({ ...tool })), tokens: state.tokens ? { ...state.tokens } : undefined })); }
++    snapshot() { return Array.from(this.states.values()).map(state => ({ ...state, output: [...state.output], outputEvents: [...state.outputEvents], toolCalls: state.toolCalls.map(tool => ({ ...tool })), tokens: state.tokens ? { ...state.tokens } : undefined, todos: state.todos ? state.todos.map(todo => ({ ...todo })) : undefined })); }
+     get(agentId) { return this.snapshot().find(state => state.agentId === agentId); }
+     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+     notify() { for (const listener of this.listeners)
+--- a/lib/types/i18n.js
++++ b/lib/types/i18n.js
+@@ -570,6 +570,8 @@
+     'help-open-editor': { zh: 'ctrl+g 打开编辑器', en: 'ctrl+g to open editor' },
+     'help-fold-todos': { zh: '{{mod}}m 折叠待办', en: '{{mod}}m to fold todos' },
+     'goal-todo-fold-hint': { zh: '{{mod}}m 折叠', en: '{{mod}}m to fold' },
++    // dsh-overrides 13: overflow line for mirrored subagent todos (GoalTodoPanel).
++    'goal-todo-agent-more': { zh: '+{{n}} 更多', en: '+{{n}} more' },
+     'help-commands-title': { zh: '命令：', en: 'commands:' },
+     'help-scroll-hint': {
+         zh: '↑/↓ 滚动 · PgUp/PgDn 翻页 · Home/End 首尾 · Esc 关闭',

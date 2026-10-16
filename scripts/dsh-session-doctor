@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+# dsh-session-doctor — здоровье и авто-ремонт сессий dsh.
+#
+# Сканирует все ~/.dsh/sessions/**/session.jsonl.zstd (или ${DSH_HOME}/sessions),
+# чинит повреждённые через scripts/auto-repair.mjs (node), ведёт инкрементальный
+# state-файл (путь mtime size), пропускает активные сессии (файл открыт
+# процессом или mtime < 300с), если не передан --force.
+#
+# Режимы:
+#   dsh-session-doctor scan                     — все (изменившиеся) сессии
+#   dsh-session-doctor scan --full              — все, игнорируя state
+#   dsh-session-doctor repair <id|path> [--force]
+#
+# Опции:
+#   --force   — не пропускать активные сессии
+#   --full    — игнорировать state-файл (scan)
+#   --quiet   — тихий (по умолчанию включён; --verbose включает детали)
+#   --verbose — печатать построчно
+#
+# Тихий по умолчанию: в stdout идёт только сводка. Детали — в
+# ~/.dsh/logs/session-doctor.log (пишет сам auto-repair.mjs).
+set -u
+# no set -e: мы сами разбираем коды node
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NODE="${DSH_DOCTOR_NODE:-$HOME/.nvm/versions/node/v22.23.2/bin/node}"
+REPAIR_JS="$SCRIPT_DIR/auto-repair.mjs"
+DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
+SESSIONS_ROOT="$DSH_HOME/sessions"
+LOG_DIR="$DSH_HOME/logs"
+STATE_FILE="$LOG_DIR/session-doctor.state"
+LOG_FILE="$LOG_DIR/session-doctor.log"
+ZSTD_BIN="${ZSTD_BIN:-zstd}"
+
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+FORCE=0
+FULL=0
+VERBOSE=0
+
+log_msg() {
+  echo "$(date -Iseconds) [doctor] $*" >>"$LOG_FILE"
+}
+
+usage() {
+  cat <<'EOF'
+usage: dsh-session-doctor {scan|repair <id|path>|heal-cwd} [--force] [--full] [--verbose]
+
+  scan                       проверить изменившиеся сессии (инкрементально), чинить битые
+  scan --full                проверить ВСЕ сессии (игнорируя state-файл)
+  repair <id|path> [--force] починить одну сессию (id = префикс/полный uuid сессии или путь)
+  heal-cwd                   найти процессы с мёртвым cwd (sshfs-флап), убить zellij-серверы,
+                             прочие — report only
+  --force                    не пропускать активные сессии (lsof/mtime)
+  --verbose                  построчный вывод (по умолчанию тихо, только сводка)
+
+exit: 0 ok, 1 error, 3 unrepairable (только repair)
+EOF
+}
+
+# ---- активность файла ----
+# Быстрее lsof (который на этом хосте виснет на sshfs): mtime-проверка + /proc fd walk.
+# OPEN_SESSIONS — глобальный список «путь файла сессии открыт процессом», заполняется once.
+declare -A OPEN_FDS=()
+OPEN_SESSIONS_LOADED=0
+
+load_open_sessions() {
+  [ "$OPEN_SESSIONS_LOADED" = 1 ] && return 0
+  OPEN_SESSIONS_LOADED=1
+  # /proc/<pid>/fd/* → readlink → путь. Фильтруем по корню сессий.
+  while IFS= read -r fdlink; do
+    tgt="$(readlink "$fdlink" 2>/dev/null)" || continue
+    case "$tgt" in
+      "$SESSIONS_ROOT"/*session.jsonl.zstd*) OPEN_FDS["$tgt"]=1 ;;
+    esac
+  done < <(find /proc/[0-9]*/fd -lname '*session.jsonl.zstd' 2>/dev/null)
+}
+
+file_active() {
+  local f="$1"
+  # 1) свежий mtime — пишется прямо сейчас
+  if [ -f "$f" ]; then
+    local age
+    age=$(( $(date +%s) - $(stat -c %Y "$f" 2>/dev/null || echo 0) ))
+    if [ "$age" -lt 300 ] 2>/dev/null; then return 0; fi
+  fi
+  # 2) открыт процессом (dsh-web.service и пр.)
+  load_open_sessions
+  [ "${OPEN_FDS["$f"]:-0}" = 1 ] && return 0
+  return 1
+}
+
+# ---- резолв id → путь ----
+resolve_session() {
+  local id="$1"
+  if [ -f "$id" ]; then
+    echo "$id"
+    return 0
+  fi
+  [ -d "$SESSIONS_ROOT" ] || { echo "" >&2; log_msg "resolve: sessions root missing: $SESSIONS_ROOT"; return 1; }
+  local matches=() dir
+  while IFS= read -r d; do
+    dir="$(basename "$d")"
+    if [ "$dir" = "$id" ] || [ "${dir#"$id"}" != "$dir" ]; then
+      matches+=("$d/session.jsonl.zstd")
+    fi
+  done < <(find "$SESSIONS_ROOT" -mindepth 2 -maxdepth 2 -type d 2>/dev/null)
+  if [ "${#matches[@]}" -eq 0 ]; then
+    log_msg "resolve: no session matching '$id' under $SESSIONS_ROOT"
+    echo ""
+    return 1
+  fi
+  # точное совпадение имени директории с id
+  for m in "${matches[@]}"; do
+    if [ "$(basename "$(dirname "$m")")" = "$id" ]; then echo "$m"; return 0; fi
+  done
+  echo "${matches[0]}"
+  return 0
+}
+
+# ---- запуск авто-ремонта одной сессии: печатает JSON, возвращает код ----
+run_repair() {
+  local f="$1"
+  DSH_HOME="$DSH_HOME" ZSTD_BIN="$ZSTD_BIN" "$NODE" "$REPAIR_JS" repair "$f" 2>>"$LOG_FILE"
+  return $?
+}
+
+# ---- heal-cwd: процессы с мёртвым cwd после sshfs-флапа ----
+# После ремоунта sshfs старый fuse-монт остаётся «живым» для ядра, пока есть
+# процессы с cwd в нём: их getcwd() навсегда ENOTCONN, спавн любых инструментов
+# из них падает. Признак мёртвого cwd: readlink /proc/<pid>/cwd возвращает путь
+# (от корня маунта, напр. /deepseek_harness), но readlink -e (канонизация) фейлится.
+# Суффикс « (deleted)» — другая ситуация (удалённая директория), не трогаем.
+# zellij-серверы с мёртвым cwd убиваем (сессия всё равно неработоспособна),
+# остальные процессы — только report (чужие сервисы решает юзер).
+do_heal_cwd() {
+  local dead=0 killed=0 others=0 d p link comm
+  local -a other_list=()
+  for d in /proc/[0-9]*; do
+    p="${d#/proc/}"
+    [ "$p" = "$$" ] && continue
+    link="$(readlink "$d/cwd" 2>/dev/null)" || continue
+    [ -n "$link" ] || continue
+    case "$link" in
+      *" (deleted)") continue ;; # удалённая директория — не наш кейс
+    esac
+    readlink -e "$d/cwd" >/dev/null 2>&1 && continue # живой cwd
+    dead=$((dead + 1))
+    comm="$(ps -o comm= -p "$p" 2>/dev/null)"
+    case "$comm" in
+      zellij)
+        if kill "$p" 2>/dev/null; then
+          killed=$((killed + 1))
+          log_msg "heal-cwd: killed dead-cwd zellij server pid=$p cwd=$link"
+        fi
+        ;;
+      *)
+        others=$((others + 1))
+        other_list+=("$p $comm $link")
+        ;;
+    esac
+  done
+  echo "cwd: dead=$dead killed_zellij=$killed other=$others"
+  if [ "${#other_list[@]}" -gt 0 ]; then
+    echo "dead-cwd (report only):"
+    printf '  %s\n' "${other_list[@]}"
+  fi
+  log_msg "heal-cwd done: dead=$dead killed_zellij=$killed other=$others"
+  return 0
+}
+
+# ---- сканирование ----
+do_scan() {
+  local all_files=() f
+  [ -d "$SESSIONS_ROOT" ] || { echo "scan: no sessions root at $SESSIONS_ROOT"; return 0; }
+  while IFS= read -r f; do all_files+=("$f"); done < <(find "$SESSIONS_ROOT" -name session.jsonl.zstd 2>/dev/null)
+  local total=${#all_files[@]}
+
+  # state: прошлый проход «путь mtime size»
+  declare -A prev_state=()
+  if [ "$FULL" = 0 ] && [ -f "$STATE_FILE" ]; then
+    while read -r p m s; do prev_state["$p"]="$m $s"; done < "$STATE_FILE"
+  fi
+
+  local new_state="$STATE_FILE.tmp.$$"
+  : > "$new_state"
+
+  local healthy=0 repaired=0 skipped=0 unrepairable=0 errors=0 active_skip=0
+  local -a unhealthy_list=()
+  local mtime size line out status
+
+  load_open_sessions
+
+  for f in "${all_files[@]}"; do
+    mtime="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+    echo "$f $mtime $size" >> "$new_state"
+
+    # активная сессия (без --force) → skip active
+    if [ "$FORCE" = 0 ] && file_active "$f"; then
+      active_skip=$((active_skip + 1))
+      [ "$VERBOSE" = 1 ] && echo "skip-active $f"
+      continue
+    fi
+
+    # инкрементальность: не менялся с прошлого раза
+    if [ "$FULL" = 0 ] && [ "${prev_state["$f"]+x}" = x ] && [ "${prev_state["$f"]}" = "$mtime $size" ]; then
+      skipped=$((skipped + 1))
+      [ "$VERBOSE" = 1 ] && echo "skip-unchanged $f"
+      continue
+    fi
+
+    out="$(run_repair "$f")"
+    status="$(printf '%s' "$out" | sed -n 's/.*"status":"\([a-z]*\)".*/\1/p' | head -1)"
+    case "$status" in
+      healthy)   healthy=$((healthy + 1)) ;;
+      repaired)  repaired=$((repaired + 1)); unhealthy_list+=("$f") ;;
+      unrepairable) unrepairable=$((unrepairable + 1)); unhealthy_list+=("$f") ;;
+      error)     errors=$((errors + 1)); unhealthy_list+=("$f") ;;
+      *)         errors=$((errors + 1)); unhealthy_list+=("$f") ;;
+    esac
+    [ "$VERBOSE" = 1 ] && echo "$status $f"
+  done
+
+  # атомарно публикуем state
+  mv -f "$new_state" "$STATE_FILE" 2>/dev/null || rm -f "$new_state"
+
+  # сводка
+  echo "scan: total=$total healthy=$healthy repaired=$repaired unrepairable=$unrepairable error=$errors skipped=$skipped active=$active_skip"
+  if [ "${#unhealthy_list[@]}" -gt 0 ] && [ "$VERBOSE" = 1 ]; then
+    printf 'unhealthy:\n'
+    printf '  %s\n' "${unhealthy_list[@]}"
+  fi
+  log_msg "scan done: total=$total healthy=$healthy repaired=$repaired unrepairable=$unrepairable error=$errors skipped=$skipped active=$active_skip"
+  return 0
+}
+
+# ---- ремонт одной сессии ----
+do_repair() {
+  local id="$1"
+  local f
+  f="$(resolve_session "$id")" || { echo "repair: cannot resolve '$id'" >&2; return 1; }
+  if [ -z "$f" ]; then
+    echo "repair: cannot resolve '$id'" >&2
+    return 1
+  fi
+  if [ ! -f "$f" ]; then
+    echo "repair: no session file: $f" >&2
+    return 1
+  fi
+
+  if [ "$FORCE" = 0 ] && file_active "$f"; then
+    echo "repair: session is active (file in use / recently written); use --force to override" >&2
+    log_msg "repair: skip-active $f (caller may retry with --force)"
+    return 2
+  fi
+
+  local out status code
+  out="$(run_repair "$f")"
+  code=$?
+  printf '%s\n' "$out"
+  return "$code"
+}
+
+# ---- аргументы ----
+cmd=""
+cmd_arg=""
+for a in "$@"; do
+  case "$a" in
+    --force) FORCE=1 ;;
+    --full)  FULL=1 ;;
+    --verbose) VERBOSE=1 ;;
+    --help|-h) usage; exit 0 ;;
+    scan|repair|heal-cwd) cmd="$a" ;;
+    *) if [ -z "$cmd_arg" ]; then cmd_arg="$a"; else usage >&2; exit 2; fi ;;
+  esac
+done
+
+case "$cmd" in
+  scan) do_scan ;;
+  heal-cwd) do_heal_cwd ;;
+  repair)
+    [ -n "$cmd_arg" ] || { usage >&2; exit 2; }
+    do_repair "$cmd_arg"
+    exit $?
+    ;;
+  *) usage >&2; exit 2 ;;
+esac

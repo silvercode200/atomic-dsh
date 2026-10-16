@@ -1,0 +1,32 @@
+{
+  "name": "usage",
+  "description": "Отчётливые usage-числа для статус-бара/ctx-метрики: input 42000 + cache_read 48000 + cache_creation 2200 = 92200 (~35% окна 262144 — ниже порога авто-компакции), output 3800; текст несёт числа и tps",
+  "usage": {
+    "input_tokens": 42000,
+    "output_tokens": 3800,
+    "cache_read_input_tokens": 48000,
+    "cache_creation_input_tokens": 2200
+  },
+  "segments": [
+    {
+      "thinking": [
+        "Сценарий usage: эмуляция отчётливого consumption. ",
+        "Числа подобраны так, чтобы ctx-бар встал на ~35% — заметно, но ниже порога авто-компакции (compactThresholdRatio ~0.48)."
+      ]
+    },
+    {
+      "text": [
+        "Usage-отчёт (эмуляция consumption):\n\n",
+        "  input_tokens:                42000\n",
+        "  output_tokens:                3800\n",
+        "  cache_read_input_tokens:     48000\n",
+        "  cache_creation_input_tokens:  2200\n",
+        "  --------------------------------\n",
+        "  вход итого:                  92200  (~35.2% окна 262144)\n",
+        "  tps:                         47.2\n\n",
+        "Статус-бар должен показать подросший контекст и tps, числа в ленте совпадают с usage ответа. ",
+        "Множитель FAKE_USAGE_SCALE масштабирует эти значения."
+      ]
+    }
+  ]
+}

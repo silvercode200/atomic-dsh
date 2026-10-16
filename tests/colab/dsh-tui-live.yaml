@@ -1,0 +1,907 @@
+program: dsh-tui-live
+# suite_version: 4 (2026-09-24, TG-DSH-DEMO-20260924): effects_panel-ассерт двуязычный (Effects|Эффекты) — патч 63 перевёл заголовок группы, моноязычный RU-ассерт ложно падал на стеке 63+
+# suite_version: 2 (2026-09-18, TG-DSH-BLANK-FLICKER-20260918): к v1-матрице
+# добавлены blank/descent/flicker-сэмплеры (длинная генерация, история 20+,
+# ширины 80/120, сэмплы ~250мс, DSH_TUI_PIN_TRACE=1) и theme_picker-сценарии
+# R1-R6 по root-cause reports/theme-picker-20260918/root-cause.md (§6).
+# suite_version: 3 (2026-09-19, TG-DSH-AUTOCOMPACT-20260918): к v2-матрице
+# добавлены compaction-детекторы A1-A6 из
+# reports/autocompact-20260918/compaction-indication.md §d (индикация
+# авто-компакции). Новые шаги и назначение:
+#   compaction_bg_noscale (A3) — поле `comp N left N%` скрыто на
+#     bg-провайдере: inputTokens:0 → contextUsed=0 → pct=0 → гейт pct>0
+#     (StatusLine.js:405) прячет поле; 10 кадров живой bg-сессии + инфо-проба
+#     zstdcat `'inputTokens":0'` (причина H2). RED на current-стеке.
+#   compaction_window (A5+A1+A2) — вставка ~590KB уникальных чисел
+#     (seq 1 100000 ≈ 230k токенов) давит контекст ЗА порог движка →
+#     A5 (GREEN-проба): `compaction/start` в session.jsonl.zstd ≥1 — движок
+#     сработал; A1 (RED): в кадрах окна compaction start→end (каждые 2с,
+#     до 120с; эмпирическое окно ~52с) нет НИ ОДНОГО compact-маркера
+#     (`compacting|compacted`, grep -i) — юзер-факт «нет индикации
+#     срабатывания»; A2 (инфо, флаки-фактор): notice `Conversation
+#     compacted` в пост-кадре — ассерт не блокирующий (скроллится потоком).
+#   compaction_usage_probe (A4+A6) — headless-контраст через dynamic
+#     import() живого TUI-модуля tuiDisplayPrefs.js на VM (ESM-пакет, Node
+#     22): A4 `compactProgressReading(100000, 262144, 0.4768)` →
+#     `comp 25k left 80%` — рендер поля не сломан, A3 = следствие bg-провайдера;
+#     A6 pct=80 (от порога 124990) ≠ 38 (от окна 262144) — шкала считает от
+#     порога компакции, как ⚡-сегмент (StatusLine.js:203-205). GREEN-проба
+#     на current-стеке; на pristine падает (патч 17 создал функцию — там её нет).
+# Порядок важен: compaction_bg_noscale (A3) идёт ДО compaction_window —
+# compact-checkpoint сбрасывает state.lastUsage на {input: system+summary,
+# output: 0} (channel.js:6338) → поле comp может появиться ПОСЛЕ компакции.
+# Дивергенция VM: agent-presets на VM НЕ деплоятся (colab-dsh-up.sh) →
+# движок dsh-compaction-basic на дефолтном thresholdRatio 0.8 (порог
+# floor(262144×0.8)=209715), а TUI statusBar.compactThresholdRatio=0.4768
+# (порог 124990) — вставка 230k токенов покрывает ОБА порога. Подстановки
+# против исходных формулировок §d (A4 «живой usage cli-провайдера» →
+# headless-проба: на VM нет cli-ключа; A3 «отдельная bg-сессия» → живая
+# сессия сьюта уже bg/glm-5.3) — обоснование в
+# reports/autocompact-20260918/red-suite-notes.md.
+# RED-детекторы для verdict (колаб-драйвер --detectors):
+# compaction_bg_noscale, compaction_window. compaction_usage_probe —
+# контраст-проба, в reproduced НЕ включать.
+lane: colab
+# Живой TUI-прогон dsh на Colab VM: boot, детекторы layout-багов юзера
+# (red/green-сценарии), slash-меню (effects), /effects-панель, /theme-пикер,
+# чистый выход.
+#
+# Терминал водим ЧЕРЕЗ tmux на VM (send-keys + capture-pane): шаги
+# send_line/wait_for/read_screen — TermSeer-only, на colab-lane их НЕТ.
+# Каждый run-шаг = colabctl sh -c (bash на VM), локальный sleep-шаг — pacing.
+#
+# Активный профиль читается из /root/.dsh-live-target — его пишет
+# scripts/colab-dsh-up.sh --target pristine|current|patches:<git-ref>.
+# Одна и та же программа работает на любом target: red-матрица отличается
+# только профилем на VM (pristine = npm-пакет без патчей; current = HEAD).
+#
+# СРАВНЕНИЯ НА ГОСТЕ (bash), НЕ в assert-шагах: ColabResult.output =
+# stdout+stderr colabctl слитые, а stderr несёт стабильный IPython-шум
+# ("An exception has occurred... SystemExit... warn(...)") — захват
+# переменной берёт ПОСЛЕДНИЕ N строк (=шум), и условный парсер SOC падает
+# на скобках. Поэтому каждый детектор = run-шаг с bash-сравнением и честным
+# rc (fail → тест fail → reproduced в verdict драйвера). Пороги ассертов
+# сохранены 1:1, ослабления нет. Печать "DETECTOR <name>: ..." — в stdout
+# шага для диагностики.
+#
+# Сценарии-детекторы багов юзера (red на current-стеке, green после фиксов):
+#   footer_bottom_gap — щель 1 строка под статус-баром (последний ряд пуст)
+#   status_single_line — статус-бар занимает ровно 1 строку (2 строки = баг)
+#   ctx_value_no_dup — значение ctx (Nk/Mk) на экране ровно 1 раз (дубль = баг)
+#   input_at_bottom — рамка ввода в нижних рядах (уехала в середину = баг)
+#   no_layout_jitter — 5 кадров ~0.7с: статичный контент на одних рядах
+#   slash_menu_effects — 'effects' в slash-меню (нет команды = баг)
+vars:
+  sess: dsh-live
+  frames: /root/dsh-live-frames
+  metrics: /root/dsh-live/metrics.sh
+
+setup:
+  - run: 'mkdir -p $frames /root/dsh-live && rm -f $frames/*.txt $frames/*.ansi'
+    timeout: 60
+  - run: 'tmux kill-session -t $sess 2>/dev/null || true'
+    timeout: 60
+    ignore_error: true
+  # Пустая tmux-сессия ДО metrics_lib: selftest метрик дергает capture-pane —
+  # без живого tmux-сервера он падает (no server running). Панель = SHELL
+  # (без команды!): с "sleep 3600" send-keys dsh уходил в stdin процесса
+  # sleep, который ввод не читает — команда не выполнялась, boot NOT_READY.
+  # После /exit панель жива: pane_cmd = bash (exit_clean ждёт != node).
+  - run: 'tmux new-session -d -s $sess -x 180 -y 50'
+    timeout: 60
+  - run: 'tmux set -as terminal-overrides ",xterm-256color:Tc"'
+    timeout: 60
+  # Метрики кадра (awk/grep над tmux capture-pane). Внутренние переменные
+  # скрипта названы иначе, чем переменные программы ($sess/$frames):
+  # executor раскрывает $имена в тексте команды ДО отправки на VM.
+  - id: metrics_lib
+    run: |
+      cat > /root/dsh-live/metrics.sh <<'MEOF'
+      #!/usr/bin/env bash
+      # metrics.sh — метрики кадра TUI для SOC-программы dsh-tui-live.
+      set -euo pipefail
+      Metric="${1:?metric}"
+      Session="${2:?session}"
+      Frame() { tmux capture-pane -p -t "$Session"; }
+      case "$Metric" in
+        selftest) Frame | wc -l ;;
+        last_row_nonempty)
+          Frame | tail -n1 | grep -q "[^[:space:]]" && echo 1 || echo 0 ;;
+        last_nonempty_row)
+          Frame | awk "NF {R=NR} END {print R+0}" ;;
+        pane_height)
+          tmux display-message -p -t "$Session" "#{pane_height}" ;;
+        input_top)
+          Frame | awk "/╭/ {print NR; exit}" | grep . || echo 0 ;;
+        input_bottom)
+          Frame | awk "/╰/ {R=NR} END {print R+0}" ;;
+        nonempty_below_input)
+          Frame | awk "/╰/ {B=NR} B && NR>B && NF {C++} END {print C+0}" ;;
+        empty_between)
+          Frame | awk "/╰/ {B=NR} NF {Last=NR} B && NR>B && !NF {Rows[NR]=1} END {C=0; for (R in Rows) if (R<Last) C++; print C+0}" ;;
+        ctx_tokens_count)
+          (Frame | grep -oE "[0-9]+[.,]?[0-9]*k?/[0-9]+k" || true) | wc -l ;;
+        ctx_pct_count)
+          (Frame | grep -oE "[0-9]+%" || true) | wc -l ;;
+        count_sub)
+          Sub="${3:?substring}"
+          (Frame | grep -oF -- "$Sub" || true) | wc -l ;;
+        pane_cmd)
+          tmux display-message -p -t "$Session" "#{pane_current_command}" ;;
+        jitter)
+          Dir="${3:?dir}"; Fps=""
+          for ((Idx=1; Idx<=5; Idx++)); do
+            tmux capture-pane -p -t "$Session" > "$Dir/jitter-$Idx.txt"
+            Fp="$(awk "/╭|╰|❯/ {Line=\$0; gsub(/[[:space:]]/, \"\", Line); print NR \":\" substr(Line,1,10)}" "$Dir/jitter-$Idx.txt" | md5sum | cut -d" " -f1)"
+            Fps="$Fps$Fp "
+            [ "$Idx" -lt 5 ] && sleep 0.7 || true
+          done
+          printf "%s" "$Fps" | tr " " "\n" | sed "/^$/d" | sort -u | wc -l ;;
+        *) echo "unknown metric: $Metric" >&2; exit 2 ;;
+      esac
+      MEOF
+      chmod +x /root/dsh-live/metrics.sh
+      v="$(bash /root/dsh-live/metrics.sh selftest "$sess")"
+      echo "DETECTOR metrics_selftest: lines=$v expected>=1"
+      [ "$v" -ge 1 ]
+    timeout: 120
+  # Метрики v2 (TG-DSH-BLANK-FLICKER-20260918): покадровый сэмплер серий
+  # (blank/descent/flicker), анализатор серий, theme_reset-хелпер. Пишется
+  # отдельным скриптом metrics2.sh — v1-метрики не трогаем.
+  - id: metrics2_lib
+    run: |
+      mkdir -p /root/dsh-live-v2
+      cat > /root/dsh-live/metrics2.sh <<'M2EOF'
+      #!/usr/bin/env bash
+      # metrics2.sh — v2: серии кадров + детекторы blank_spike/descent/flicker
+      # + theme_reset-хелпер. Внутренние переменные ≠ переменным программы.
+      set -euo pipefail
+      Cmd="${1:?cmd}"
+      case "$Cmd" in
+        # Серия: N кадров с интервалом мс; каждый кадр → файл, метрики → TSV.
+        # Формат TSV: idx empty_ratio content_rows first_nonempty last_nonempty
+        snap_series)
+          Session="${2:?}"; OutDir="${3:?}"; Count="${4:?}"; Ms="${5:?}"; Prefix="${6:?}"
+          mkdir -p "$OutDir"; : > "$OutDir/$Prefix-series.tsv"
+          for ((I=1; I<=Count; I++)); do
+            F="$OutDir/$Prefix-$I.txt"
+            tmux capture-pane -p -t "$Session" > "$F"
+            awk -v idx="$I" '
+              { Rows[NR] = ($0 ~ /[^[:space:]]/) ? 1 : 0; Total = NR }
+              END {
+                Empty = 0; Content = 0; First = 0; Last = 0
+                for (r = 1; r <= Total; r++) {
+                  if (Rows[r]) { Content++; if (!First) First = r; Last = r }
+                  else Empty++
+                }
+                ratio = (Total > 0) ? Empty / Total : 1
+                printf "%d %.3f %d %d %d\n", idx, ratio, Content, First, Last
+              }' "$F" >> "$OutDir/$Prefix-series.tsv"
+            sleep 0.25; [ "$I" -lt "$Count" ] || break
+          done
+          echo "series_done: $Prefix count=$Count" ;;
+        # Анализ серии: три детектора v2 (определения из ТЗ узла 1).
+        #   blank_spike: пустых строк >50% при живом контенте (серия рядом
+        #     имеет непустой кадр) ≥2 сэмплов ПОДРЯД;
+        #   descent: последняя непустая строка прыгает ≥5 строк при стабильном
+        #     числе строк контента (без нового вывода);
+        #   flicker: строка чередует значение/пусто при стабильном контенте
+        #     (row toggling между соседними сэмплами, ≥3 тогглов).
+        analyze_series)
+          OutDir="${2:?}"; Prefix="${3:?}"
+          python3 - "$OutDir" "$Prefix" <<'PYA'
+      import sys, os
+      outdir, prefix = sys.argv[1], sys.argv[2]
+      tsv = os.path.join(outdir, f"{prefix}-series.tsv")
+      rows = []
+      with open(tsv) as f:
+          for line in f:
+              parts = line.split()
+              if len(parts) == 5:
+                  rows.append((int(parts[0]), float(parts[1]), int(parts[2]),
+                               int(parts[3]), int(parts[4])))
+      def frames():
+          # список кадров серии (для flicker по рядам)
+          fs = sorted([p for p in os.listdir(outdir)
+                       if p.startswith(f"{prefix}-") and p.endswith(".txt")],
+                      key=lambda p: int(p[len(prefix)+1:-4]))
+          return [os.path.join(outdir, p) for p in fs]
+      verdict = {"blank_spike": False, "descent": False, "flicker": False,
+                 "samples": len(rows)}
+      has_content = any(r[1] <= 0.5 for r in rows)
+      run_blank = 0
+      for r in rows:
+          if r[1] > 0.5:
+              run_blank += 1
+              if run_blank >= 2 and has_content:
+                  verdict["blank_spike"] = True
+          else:
+              run_blank = 0
+      for a, b in zip(rows, rows[1:]):
+          if abs(a[2] - b[2]) <= 1 and abs(b[4] - a[4]) >= 5:
+              verdict["descent"] = True
+      fl = frames()
+      toggles = 0
+      if len(fl) >= 3:
+          grids = []
+          for p in fl:
+              with open(p, errors="replace") as fh:
+                  grids.append([bool(l.strip()) for l in fh.read().splitlines()])
+          h = min(len(g) for g in grids)
+          for ri in range(h):
+              for k in range(len(grids) - 2):
+                  if grids[k][ri] and not grids[k+1][ri] and grids[k+2][ri]:
+                      toggles += 1
+                      break
+      verdict["flicker"] = toggles >= 3
+      verdict["flicker_toggle_rows"] = toggles
+      import json
+      print(json.dumps(verdict, ensure_ascii=False))
+      ok = not (verdict["blank_spike"] or verdict["descent"] or verdict["flicker"])
+      sys.exit(0 if ok else 1)
+      PYA
+          ;;
+        # Робастный сброс перед сценариями с вводом: если /theme-пикер
+        # застрял (стек 37-45: Esc бросает до close-dispatch — H1 из
+        # root-cause), Enter выбирает тему и ЗАКРЫВАЕТ пикер; затем чистим
+        # инпут от утечки двойной обработки (PromptInput-слушатель №1).
+        theme_reset)
+          Session="${2:?}"
+          if tmux capture-pane -p -t "$Session" | grep -q "Color theme"; then
+            tmux send-keys -t "$Session" Enter; sleep 0.6
+          fi
+          tmux send-keys -t "$Session" C-c; sleep 0.2
+          tmux send-keys -t "$Session" C-u; sleep 0.3
+          echo RESET_OK ;;
+        *) echo "unknown cmd: $Cmd" >&2; exit 2 ;;
+      esac
+      M2EOF
+      chmod +x /root/dsh-live/metrics2.sh
+      echo METRICS2_READY
+    timeout: 120
+  # Профиль читается НА ГОСТЕ из /root/.dsh-live-target (никаких capture-
+  # переменных: colab-stderr шум ломает host-сайд подстановку).
+  # v2: env DSH_TUI_WD_TRACE/DSH_TUI_PIN_TRACE — трассы watchdog/pin для
+  # root-cause анализа (узлы 2-3 TG-DSH-BLANK-FLICKER-20260918).
+  - id: launch_dsh
+    # stderr dsh → файл на VM (диагностика boot-падений + R5-детектор H1:
+    # 'TypeError: previewTheme is not a function' со стека 37-45)
+    run: 'tmux send-keys -t $sess "DSH_TUI_WD_TRACE=1 DSH_TUI_PIN_TRACE=1 dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-boot.err" Enter'
+    timeout: 60
+  # Опрос готовности: до 60×1с НА VM (один run-шаг, без локального loop —
+  # каждый colabctl sh стоит секунды транспорта). Готовность = рамка ввода
+  # (❯) или hint статус-бара. Кадр сохраняется в boot.txt на каждой итерации.
+  - id: boot_poll
+    run: |
+      for i in $(seq 1 60); do
+        tmux capture-pane -p -t dsh-live > /root/dsh-live-frames/boot.txt
+        if grep -qE "❯|for shortcuts" /root/dsh-live-frames/boot.txt; then echo READY; exit 0; fi
+        sleep 1
+      done
+      echo NOT_READY
+      exit 1
+    timeout: 150
+  - run: 'tmux capture-pane -pe -t $sess > $frames/boot.ansi'
+    timeout: 60
+
+tests:
+  # --- Сценарий 0: boot (санити + канонический артефакт-кадр) ----------------
+  - name: boot_ready
+    steps:
+      - run: 'cp $frames/boot.txt $frames/boot_copy.txt; v="$(bash $metrics count_sub $sess "❯")"; echo "DETECTOR boot_ready: input_frames=$v expected>=1"; [ "$v" -ge 1 ]'
+        timeout: 90
+
+  # --- Сценарий 0b: живой контент (НЕ детектор бага) ---------------------------
+  # Layout-баги юзера (щель футера, 2-строчный статус, инпут в середине)
+  # НЕ проявляются на пустом экране: на RED-стеке (без фикса) пустой boot
+  # рендерится корректно прижатым. Готовим экран с контентом: реальный turn
+  # с многострочным ответом (~25 строк), затем layout-детекторы ниже
+  # снимают кадры именно с ним (сессия юзера была заполненной).
+  - name: content_turn
+    steps:
+      - run: 'tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; echo RESET'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "reply with a numbered list from 1 to 25, one number per line" Enter; echo SENT'
+        timeout: 150
+      # ждём завершения turn: до 90×2с; маркер — «●» (завершённый ответ
+      # рендерится с bullet); иначе честный fail с диагностикой провайдера.
+      - id: content_turn_poll
+        run: |
+          for i in $(seq 1 90); do
+            tmux capture-pane -p -t dsh-live > /root/dsh-live-frames/content-turn.txt
+            if grep -q "●" /root/dsh-live-frames/content-turn.txt; then echo TURN_DONE; exit 0; fi
+            sleep 2
+          done
+          echo "NO_ANSWER: turn не завершился за 180с (провайдер/ключ?)"
+          exit 1
+        timeout: 220
+      - run: 'sleep 2; tmux capture-pane -p -t $sess > $frames/content.txt; v="$(bash $metrics count_sub $sess "❯")"; echo "content_turn: контент на экране, рамка ввода=$v"; [ "$v" -ge 1 ]'
+        timeout: 120
+
+  # --- Баг 1: щель 1 строка под статус-баром ---------------------------------
+  # last_row_nonempty: последний ряд кадра НЕ пустой (статус-бар прижат вниз).
+  - name: footer_bottom_gap
+    steps:
+      - run: 'tmux capture-pane -p -t $sess > $frames/footer.txt; v="$(bash $metrics last_row_nonempty $sess)"; echo "DETECTOR footer_bottom_gap: last_row_nonempty=$v expected=1 (0 = щель под статус-баром)"; [ "$v" = "1" ]'
+        timeout: 90
+
+  # --- Баг 2: статус-бар 2 строки --------------------------------------------
+  # nonempty_below_input: под нижней рамкой ввода ровно 1 непустая строка.
+  - name: status_single_line
+    steps:
+      - run: 'v="$(bash $metrics nonempty_below_input $sess)"; b="$(bash $metrics empty_between $sess)"; l="$(bash $metrics last_nonempty_row $sess)"; h="$(bash $metrics pane_height $sess)"; ib="$(bash $metrics input_bottom $sess)"; echo "DETECTOR status_single_line: nonempty_below_input=$v expected=1 | metrics: empty_between=$b last_nonempty=$l/$h input_bottom=$ib"'
+        timeout: 90
+      - run: 'v="$(bash $metrics nonempty_below_input $sess)"; echo "DETECTOR status_single_line: nonempty_below_input=$v expected=1 (2+ = статус-бар раздулся)"; [ "$v" = "1" ]'
+        timeout: 90
+
+  # --- Баг 5: инпут уехал в середину ------------------------------------------
+  # input_bottom: нижняя рамка ввода в нижних рядах (высота 50 → ≥46).
+  - name: input_at_bottom
+    steps:
+      - run: 'v="$(bash $metrics input_bottom $sess)"; echo "DETECTOR input_at_bottom: input_bottom_row=$v expected>=46 (ниже = инпут уехал в середину)"; [ "$v" -ge 46 ]'
+        timeout: 90
+
+  # --- Баг 4: дрожание экрана ---------------------------------------------------
+  # 5 кадров ~0.7с: отпечаток статичного контента (рамка ввода по рядам)
+  # должен быть ОДИН И ТОТ ЖЕ во всех кадрах (дрожание = разные отпечатки).
+  - name: no_layout_jitter
+    steps:
+      - run: 'v="$(bash $metrics jitter $sess $frames)"; echo "DETECTOR no_layout_jitter: unique_fingerprints=$v expected=1 (2+ = дрожание рамки/заголовков)"; [ "$v" = "1" ]'
+        timeout: 120
+
+  # --- Баг 3: дубль значения ctx ----------------------------------------------
+  # Дубль юзера = ДВА ctx-поля в статус-баре (powerline-сегмент + правый
+  # хвост: «ctx N … ctx N»); фикс патча 45 = ровно одно. Детектор = число
+  # вхождений «ctx » на кадре с контентом (после content_turn).
+  - name: ctx_value_no_dup
+    steps:
+      - run: 'tmux capture-pane -p -t $sess > $frames/ctx.txt; v="$(bash $metrics count_sub $sess "ctx ")"; echo "DETECTOR ctx_value_no_dup: ctx_fields=$v expected=1 (2+ = дубль значения в статус-баре)"; [ "$v" = "1" ]'
+        timeout: 120
+
+  # --- Баг 6: нет команды effects (ни в настройках, ни отдельно) ----------------
+  # '/' открывает slash-меню; в нём должна быть команда effects. Меню листается
+  # фильтром: '/ef' сужает список — effects-строка обязана быть видимой.
+  # Изоляция: одиночный Esc + C-u. НЕ Escape×2: двойной Esc на пустом вводе
+  # открывает Rewind-пикер (PromptInput double-tap → Chat.js openRewind,
+  # «Double-Esc rewind»), после чего '/' больше не открывает slash-меню →
+  # ложный RED. Одиночный Esc закрывает один слой оверлея; на пустом вводе
+  # лишь армит 3с-окно double-tap — безвредно: следующего Esc в блоке нет
+  # (закрытие через C-c + C-u).
+  - name: slash_menu_effects
+    steps:
+      - run: 'tmux send-keys -t $sess Escape; sleep 0.2; tmux send-keys -t $sess C-u; sleep 0.2; echo RESET'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "/"; sleep 0.4; tmux send-keys -t $sess "ef"; sleep 0.5; tmux capture-pane -p -t $sess > $frames/slash_menu.txt; tmux capture-pane -pe -t $sess > $frames/slash_menu.ansi; v="$(bash $metrics count_sub $sess "effects")"; echo "DETECTOR slash_menu_effects: menu_effects=$v expected>=1 (0 = команды effects нет в меню)"; [ "$v" -ge 1 ]'
+        timeout: 90
+      - run: 'v="$(bash $metrics count_sub $sess "theme")"; echo "DETECTOR slash_menu_effects sanity: menu_theme=$v expected>=1"; [ "$v" -ge 1 ]'
+        timeout: 90
+      # закрыть меню (в т.ч. после фильтра)
+      - run: 'tmux send-keys -t $sess C-c; sleep 0.2; tmux send-keys -t $sess C-u; sleep 0.3; echo CLOSED'
+        timeout: 150
+
+  # --- Патч 38/39 → 46: /effects = алиас /settings на группе Эффекты ----------
+  # Патч 46 вывел EffectsPanel из употребления: '/effects' без аргумента
+  # открывает /settings на группе hub-effects (Chat.js 'effects'-case:
+  # setSettingsEntryGroup('hub-effects') + setSettingsOpen(true)). Маркеры
+  # кадра: заголовок группы «Эффекты» (хлебные крошки Settings.js:
+  # settings-title › секция › группа), строки-тумблеры с field.label =
+  # ключ эффекта, индикаторы [✓] on / [  ] off. Подтверждено живьём
+  # headless-пробой: reports/statusbar-fix-20260919/effects-alias-probe-result.txt
+  # (PASS по всем 5 маркерам, кадр 180×50 как в сьюте). Заголовок старой
+  # панели — маркер мёртвого оверлея (остался только в components/EffectsPanel.js),
+  # в кадре его нет.
+  - name: effects_panel
+    steps:
+      - run: 'tmux send-keys -t $sess Escape; sleep 0.2; tmux send-keys -t $sess C-u; sleep 0.2; echo RESET'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "/effects" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; echo SENT'
+        timeout: 150
+      - run: 'tmux capture-pane -p -t $sess > $frames/effects_panel.txt; tmux capture-pane -pe -t $sess > $frames/effects_panel.ansi; v="$(bash $metrics count_sub $sess "inputBorderBreath")"; echo "DETECTOR effects_panel: inputBorderBreath=$v expected>=1"; [ "$v" -ge 1 ]'
+        timeout: 90
+      - run: 'v="$(bash $metrics count_sub $sess "spinnerRainbow")"; echo "DETECTOR effects_panel: spinnerRainbow=$v expected>=1"; [ "$v" -ge 1 ]'
+        timeout: 90
+      - run: 'v="$(bash $metrics count_sub $sess "Effects")"; v2="$(bash $metrics count_sub $sess "Эффекты")"; echo "DETECTOR effects_panel: group_title=$v+$v2 expected>=1 (0 = /effects не открыл настройки на группе Effects; двуязычно: патч 63=Effects, pristine=Эффекты)"; [ $((v + v2)) -ge 1 ]'
+        timeout: 90
+      # закрыть панель (что бы ни было на экране)
+      - run: 'tmux send-keys -t $sess Escape; sleep 0.3; tmux send-keys -t $sess Escape; sleep 0.3; tmux send-keys -t $sess C-c; sleep 0.2; tmux send-keys -t $sess C-u; echo CLOSED'
+        timeout: 150
+
+  # --- /theme открывает пикер тем -------------------------------------------------
+  # 54 темы на VM (деплой переносит ~/.dsh-tui/themes) — список листается
+  # фильтром: 'tokyo' сужает до TokyoNight-семейства. Закрытие: Esc очищает
+  # фильтр, второй Esc закрывает пикер (третий — на всякий случай).
+  - name: themes_picker
+    steps:
+      - run: 'tmux send-keys -t $sess Escape; sleep 0.5; tmux send-keys -t $sess C-u; sleep 0.3; echo RESET'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "/theme" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; tmux send-keys -t $sess "tokyo"; sleep 0.8; echo SENT'
+        timeout: 150
+      - run: 'tmux capture-pane -p -t $sess > $frames/themes_picker.txt; tmux capture-pane -pe -t $sess > $frames/themes_picker.ansi; v="$(bash $metrics count_sub $sess "tokyonight")"; echo "DETECTOR themes_picker: tokyonight=$v expected>=1 (0 = темы юзера не на VM?)"; [ "$v" -ge 1 ]'
+        timeout: 90
+      # закрыть пикер: Esc очищает фильтр → Esc закрывает → Esc страховка
+      - run: 'tmux send-keys -t $sess Escape; sleep 0.5; tmux send-keys -t $sess Escape; sleep 0.5; tmux send-keys -t $sess Escape; sleep 0.5; echo CLOSED'
+        timeout: 150
+
+  # ==========================================================================
+  # v2 (TG-DSH-BLANK-FLICKER-20260918): blank/descent/flicker + theme_picker
+  # ==========================================================================
+
+  # --- v2: история 20+ сообщений (условие юзерского триггера) ------------------
+  - name: history20
+    steps:
+      # theme_reset: на стеке 37-45 пикер от themes_picker-теста ЗАСТРЯЛ
+      # (Esc бросает до close-dispatch — H1) — Enter закрывает выбором.
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess'
+        timeout: 150
+      # 20 коротких turn'ов одним гост-циклом (каждый: послать → дождаться ●)
+      - id: history20_loop
+        run: |
+          ok=0
+          for i in $(seq 1 20); do
+            tmux send-keys -t dsh-live "reply with the word ok$i" Enter
+            for w in $(seq 1 40); do
+              tmux capture-pane -p -t dsh-live > /root/dsh-live-v2/hist-w.txt
+              if grep -q "ok$i" /root/dsh-live-v2/hist-w.txt && [ "$(grep -c "●" /root/dsh-live-v2/hist-w.txt)" -ge "$i" ]; then ok=$((ok+1)); break; fi
+              sleep 1
+            done
+          done
+          echo "HISTORY_TURNS=$ok/20"
+          [ "$ok" -ge 20 ]
+        timeout: 700
+
+  # --- v2: длинная генерация на 80 колонках + сэмплер 250мс ---------------------
+  - name: gen_w80
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; tmux resize-window -t $sess -x 80 -y 50; sleep 1; echo RESIZED_80'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "reply with a 400-word essay about the sea" Enter; echo SENT'
+        timeout: 150
+      # сэмплер: 60 кадров ~250мс (~15с полёта) — серия в gen80-*.txt
+      - run: 'bash /root/dsh-live/metrics2.sh snap_series $sess /root/dsh-live-v2 60 250 gen80; tmux capture-pane -p -t $sess > /root/dsh-live-v2/gen80-final.txt; echo SAMPLED'
+        timeout: 300
+      # дождаться завершения генерации (● появился свыше 20 из истории)
+      - run: |
+          # 55 итераций × (~1.3s capture + 2s sleep) ≈ 180s — укладывается в
+          # transport-timeout 250s colabctl (90 итераций раньше веджили транспорт,
+          # после чего каскадно фейлились file300/blank/descent).
+          base=$(grep -c "●" /root/dsh-live-v2/hist-w.txt 2>/dev/null || echo 20)
+          for w in $(seq 1 55); do
+            tmux capture-pane -p -t dsh-live > /root/dsh-live-v2/gen80-done.txt
+            n=$(grep -c "●" /root/dsh-live-v2/gen80-done.txt)
+            [ "$n" -gt "$base" ] && { echo GEN_DONE; exit 0; }
+            sleep 2
+          done
+          echo GEN_TIMEOUT
+          exit 1
+        timeout: 250
+
+  # --- v2: длинная генерация на 120 колонках + сэмплер ---------------------------
+  - name: gen_w120
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; tmux resize-window -t $sess -x 120 -y 50; sleep 1; echo RESIZED_120'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "reply with a 400-word essay about mountains" Enter; echo SENT'
+        timeout: 150
+      - run: 'bash /root/dsh-live/metrics2.sh snap_series $sess /root/dsh-live-v2 60 250 gen120; tmux capture-pane -p -t $sess > /root/dsh-live-v2/gen120-final.txt; echo SAMPLED'
+        timeout: 300
+      - run: |
+          # 55 итераций (см. gen_w80) — в транспортный таймаут 250s.
+          base=$(grep -c "●" /root/dsh-live-v2/gen80-done.txt 2>/dev/null || echo 21)
+          for w in $(seq 1 55); do
+            tmux capture-pane -p -t dsh-live > /root/dsh-live-v2/gen120-done.txt
+            n=$(grep -c "●" /root/dsh-live-v2/gen120-done.txt)
+            [ "$n" -gt "$base" ] && { echo GEN_DONE; exit 0; }
+            sleep 2
+          done
+          echo GEN_TIMEOUT
+          exit 1
+        timeout: 250
+
+  # --- v2: подача файла 300 строк + сэмплер (file.frame) -------------------------
+  - name: file300_paste
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; seq 1 300 > /root/dsh-live-v2/big300.txt; wc -l /root/dsh-live-v2/big300.txt'
+        timeout: 150
+      - run: 'tmux load-buffer /root/dsh-live-v2/big300.txt && tmux paste-buffer -t $sess; sleep 1; tmux send-keys -t $sess Enter; echo PASTED'
+        timeout: 150
+      - run: 'bash /root/dsh-live/metrics2.sh snap_series $sess /root/dsh-live-v2 40 250 file300; tmux capture-pane -p -t $sess > /root/dsh-live-v2/file300-final.txt; echo SAMPLED'
+        timeout: 200
+
+  # --- v2: детекторы blank_spike / descent / flicker -----------------------------
+  # Каждый детектор анализирует ВСЕ серии (gen80, gen120, file300): сработал
+  # хоть на одной → тест fail → reproduced в verdict.
+  - name: blank_spike
+    steps:
+      - run: |
+          out=0; detail=""
+          for p in gen80 gen120 file300; do
+            v="$(bash /root/dsh-live/metrics2.sh analyze_series /root/dsh-live-v2 $p 2>/dev/null || true)"
+            if [ -n "$v" ]; then
+              fired=$(printf '%s' "$v" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d["blank_spike"] else "no")' 2>/dev/null || echo no)
+              detail="$detail $p:blank=$fired"
+              [ "$fired" = "yes" ] && out=1
+            fi
+          done
+          echo "DETECTOR blank_spike: пустых строк >50% ≥2 сэмплов подряд при живом контенте →$detail"
+          [ "$out" -eq 0 ]
+        timeout: 150
+  - name: descent
+    steps:
+      - run: |
+          out=0; detail=""
+          for p in gen80 gen120 file300; do
+            v="$(bash /root/dsh-live/metrics2.sh analyze_series /root/dsh-live-v2 $p 2>/dev/null || true)"
+            if [ -n "$v" ]; then
+              fired=$(printf '%s' "$v" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d["descent"] else "no")' 2>/dev/null || echo no)
+              detail="$detail $p:descent=$fired"
+              [ "$fired" = "yes" ] && out=1
+            fi
+          done
+          echo "DETECTOR descent: последняя непустая строка прыгает ≥5 строк без нового вывода →$detail"
+          [ "$out" -eq 0 ]
+        timeout: 150
+  - name: flicker
+    steps:
+      - run: |
+          out=0; detail=""
+          for p in gen80 gen120 file300; do
+            v="$(bash /root/dsh-live/metrics2.sh analyze_series /root/dsh-live-v2 $p 2>/dev/null || true)"
+            if [ -n "$v" ]; then
+              fired=$(printf '%s' "$v" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["flicker_toggle_rows"])' 2>/dev/null || echo 0)
+              n=$(printf '%s' "$v" | python3 -c 'import json,sys; print("yes" if json.load(sys.stdin)["flicker"] else "no")' 2>/dev/null || echo no)
+              detail="$detail $p:toggles=$fired($n)"
+              [ "$n" = "yes" ] && out=1
+            fi
+          done
+          echo "DETECTOR flicker: строка чередует значение/пусто ≥3 тогглов →$detail"
+          [ "$out" -eq 0 ]
+        timeout: 150
+
+  # --- v2: theme_picker R1-R5 (сценарий A root-cause §6) -------------------------
+  # R1: пикер в кадре: заголовок + ≥11 строк тем + счётчик фильтра. Позиция
+  # над футером = ДИЗАЙН (OverlayAbove) — проверяем только «в кадре и виден».
+  - name: theme_r1_geometry
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "/theme" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; echo OPENED'
+        timeout: 150
+      - run: 'tmux capture-pane -p -t $sess > $frames/theme_r1.txt; tmux capture-pane -pe -t $sess > $frames/theme_r1.ansi; h="$(grep -c "Color theme" $frames/theme_r1.txt)"; c="$(grep -c "filter:" $frames/theme_r1.txt)"; n="$(grep -c "██" $frames/theme_r1.txt)"; echo "DETECTOR theme_r1_geometry: header=$h filter=$c theme_lines=$n expected: 1/1/>=11"; [ "$h" -ge 1 ] && [ "$c" -ge 1 ] && [ "$n" -ge 11 ]'
+        timeout: 90
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess'
+        timeout: 150
+  # R2: 'j' — ФИЛЬТР (дизайн патча 12): счётчик N/M сужается. «j не двигает ❯»
+  # само по себе НЕ фейл (навигация = стрелки).
+  - name: theme_r2_filter
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; tmux send-keys -t $sess "/theme" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; tmux capture-pane -p -t $sess > /root/dsh-live-v2/r2-before.txt; echo OPENED'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "j"; sleep 1; tmux capture-pane -p -t $sess > $frames/theme_r2.txt; b="$(grep -oE "[0-9]+/[0-9]+ themes" /root/dsh-live-v2/r2-before.txt | head -1)"; a="$(grep -oE "[0-9]+/[0-9]+ themes" $frames/theme_r2.txt | head -1)"; nb="${b%%/*}"; na="${a%%/*}"; echo "DETECTOR theme_r2_filter: counter $b → $a (ожидается сужение N)"; [ -n "$na" ] && [ "$na" -lt "$nb" ]'
+        timeout: 90
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess'
+        timeout: 150
+  # R3: ↓×3 двигает ❯ на 3 строки вниз (или wrap). Тип RED по матрице ожиданий
+  # на старом стеке — двигает ли, дискриминирует H1 (move коммитится) от H2/H3.
+  - name: theme_r3_cursor
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; tmux send-keys -t $sess "/theme" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; tmux capture-pane -p -t $sess > /root/dsh-live-v2/r3-before.txt; echo OPENED'
+        timeout: 150
+      # 0.8s между нажатиями: при 0.4s часть Down проглатывалась рендером
+      # (сдвиг=1 вместо +3). Дискриминатор H1 — ДВИЖЕНИЕ курсора вообще
+      # (на фриз-стеке d=0): любое a≠b (включая wrap вниз-вверх) = pass.
+      - run: 'tmux send-keys -t $sess Down; sleep 0.8; tmux send-keys -t $sess Down; sleep 0.8; tmux send-keys -t $sess Down; sleep 1.2; tmux capture-pane -p -t $sess > $frames/theme_r3.txt; b="$(grep -nE "❯.*██" /root/dsh-live-v2/r3-before.txt | head -1 | cut -d: -f1)"; a="$(grep -nE "❯.*██" $frames/theme_r3.txt | head -1 | cut -d: -f1)"; d=$((a - b)); echo "DETECTOR theme_r3_cursor: ❯ row $b → $a (сдвиг=$d; fail только если курсор замер)"; [ "$a" -ne "$b" ]'
+        timeout: 120
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess'
+        timeout: 150
+  # R4: Esc закрывает пикер. На стеке 37-45 revertTheme-throw ДО close-dispatch
+  # → пикер НЕ закрывается (H1). Перезапишем историю после, кадр диагностики.
+  - name: theme_r4_esc
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; tmux send-keys -t $sess "/theme" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; echo OPENED'
+        timeout: 150
+      # фильтр пуст → первый Esc сразу закрывает; второй — страховка.
+      # «rewind»-греп был ложняком: 'Press Esc again to rewind' — родной хинт
+      # инпута dsh, он на экране всегда. Ищем реальный след H1-ошибки.
+      - run: 'tmux send-keys -t $sess Escape; sleep 1; tmux send-keys -t $sess Escape; sleep 1; tmux capture-pane -p -t $sess > $frames/theme_r4.txt; v="$(grep -c "Color theme" $frames/theme_r4.txt)"; rw="$(grep -ciE "rewindTheme|TypeError" $frames/theme_r4.txt || true)"; rw="${rw:-0}"; echo "DETECTOR theme_r4_esc: theme_header_after_esc=$v theme_error_after_esc=$rw (ожидается 0/0)"; [ "$v" -eq 0 ] && [ "$rw" -eq 0 ]'
+        timeout: 120
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess'
+        timeout: 150
+  # R5: stderr-детектор H1 — 'TypeError: previewTheme is not a function'.
+  # На стеке 37-45 присутствует (reproduced=true = H1 подтверждён), на 46+ нет.
+  - name: theme_r5_stderr
+    steps:
+      # grep -c печатает 0 сам (exit 1); '|| echo 0' давал «0\n0» →
+      # «integer expression expected». Нормализуем пустоту (файла нет).
+      - run: 'v="$(grep -c "previewTheme is not a function" /root/dsh-boot.err 2>/dev/null || true)"; v="${v:-0}"; echo "DETECTOR theme_r5_stderr: previewTheme_TypeErrors=$v (ожидается 0; >0 = стек 37-45, H1)"; [ "$v" -eq 0 ]'
+        timeout: 90
+
+  # --- v2: theme_picker R6 — дифференциальный сценарий B (в полёте LLM) ----------
+  # RED-критерий: R2/R3/R4 фейлят ТОЛЬКО пока генерация в полёте и проходят
+  # после её завершения (фриз привязан к полёту = H2/H3). Если фейлят всегда
+  # или всегда проходят — фиксируем вердикт с деталями в кадры.
+  - name: theme_r6_flight
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; tmux resize-window -t $sess -x 120 -y 50; sleep 1; echo RESET'
+        timeout: 150
+      - run: 'base="$(tmux capture-pane -p -t $sess | grep -c "●")"; echo "$base" > /root/dsh-live-v2/r6-base.txt; tmux send-keys -t $sess "reply with a 500-word essay about rivers" Enter; echo SENT'
+        timeout: 150
+      # дождаться старта полёта: эхо промпта видно, ответа (новый ●) ещё нет
+      - run: |
+          base=$(cat /root/dsh-live-v2/r6-base.txt)
+          for w in $(seq 1 40); do
+            tmux capture-pane -p -t dsh-live > /root/dsh-live-v2/r6-flight.txt
+            n=$(grep -c "●" /root/dsh-live-v2/r6-flight.txt)
+            if grep -q "essay about rivers" /root/dsh-live-v2/r6-flight.txt && [ "$n" -le "$base" ]; then echo IN_FLIGHT; exit 0; fi
+            sleep 1
+          done
+          echo NO_FLIGHT_WINDOW
+          exit 1
+        timeout: 120
+      # в полёте: открыть пикер и прогнать R2/R3/R4-подобные пробы
+      - run: 'tmux send-keys -t $sess "/theme" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; tmux capture-pane -p -t $sess > $frames/theme_r6_inflight_open.txt; v="$(grep -c "Color theme" $frames/theme_r6_inflight_open.txt)"; echo "R6a picker_drawn_in_flight=$v (ожидается 1)"; [ "$v" -ge 1 ]'
+        timeout: 120
+      - run: 'b="$(grep -nE "❯.*██" $frames/theme_r6_inflight_open.txt | head -1 | cut -d: -f1)"; tmux send-keys -t $sess Down; sleep 0.4; tmux send-keys -t $sess Down; sleep 0.4; tmux send-keys -t $sess Down; sleep 0.8; tmux capture-pane -p -t $sess > $frames/theme_r6_inflight_down.txt; a="$(grep -nE "❯.*██" $frames/theme_r6_inflight_down.txt | head -1 | cut -d: -f1)"; echo "R6b cursor $b → $a"; { [ -n "$a" ] && [ "$a" -ne "$b" ]; } && echo MOVED_INFLIGHT || echo FROZEN_INFLIGHT'
+        timeout: 120
+      - run: 'tmux send-keys -t $sess Escape; sleep 1; tmux send-keys -t $sess Escape; sleep 1; tmux capture-pane -p -t $sess > $frames/theme_r6_inflight_esc.txt; v="$(grep -c "Color theme" $frames/theme_r6_inflight_esc.txt)"; echo "R6c esc_closed_in_flight: theme_header=$v (0 = закрылся)"; { [ "$v" -eq 0 ]; } && echo CLOSED_INFLIGHT || echo STUCK_INFLIGHT'
+        timeout: 120
+      # дождаться завершения генерации
+      - run: |
+          base=$(cat /root/dsh-live-v2/r6-base.txt)
+          # 60 итераций ≈ 200s — в транспортный таймаут 250s (120 раньше веджили).
+          for w in $(seq 1 60); do
+            tmux capture-pane -p -t dsh-live > /root/dsh-live-v2/r6-done.txt
+            n=$(grep -c "●" /root/dsh-live-v2/r6-done.txt)
+            [ "$n" -gt "$base" ] && { echo FLIGHT_DONE; exit 0; }
+            sleep 2
+          done
+          echo FLIGHT_TIMEOUT
+          exit 1
+        timeout: 300
+      # после полёта: контрольные пробы (должны работать)
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; tmux send-keys -t $sess "/theme" && sleep 1 && tmux send-keys -t $sess Enter; sleep 1; tmux capture-pane -p -t $sess > /root/dsh-live-v2/r6-post-open.txt; b="$(grep -nE "❯.*██" /root/dsh-live-v2/r6-post-open.txt | head -1 | cut -d: -f1)"; tmux send-keys -t $sess Down; sleep 0.4; tmux send-keys -t $sess Down; sleep 0.4; tmux send-keys -t $sess Down; sleep 0.8; tmux capture-pane -p -t $sess > $frames/theme_r6_post_down.txt; a="$(grep -nE "❯.*██" $frames/theme_r6_post_down.txt | head -1 | cut -d: -f1)"; echo "R6d cursor_after_flight $b → $a"; { [ -n "$a" ] && [ "$a" -ne "$b" ]; } && echo MOVED_AFTER || echo FROZEN_AFTER'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess Escape; sleep 1; tmux send-keys -t $sess Escape; sleep 1; tmux capture-pane -p -t $sess > $frames/theme_r6_post_esc.txt; v="$(grep -c "Color theme" $frames/theme_r6_post_esc.txt)"; echo "R6e esc_after_flight: theme_header=$v"; { [ "$v" -eq 0 ]; } && echo CLOSED_AFTER || echo STUCK_AFTER'
+        timeout: 120
+      # дифференциальный вердикт: фриз ТОЛЬКО в полёте = reproduced (H2/H3);
+      # фриз всегда = тоже reproduced (но класс другой); чисто = GREEN
+      - run: |
+          inflight_frozen=false; post_frozen=false
+          grep -q "FROZEN_INFLIGHT\|STUCK_INFLIGHT" /root/dsh-live-v2/*.txt 2>/dev/null && inflight_frozen=true || true
+          # echo-маркеры шагов не пишутся в файлы — читаем их из вывода шагов
+          # выше невозможно; используем кадры: ❯ не двинулся / пикер не закрылся
+          ib="$(grep -nE "❯.*██" $frames/theme_r6_inflight_open.txt | head -1 | cut -d: -f1)"
+          ia="$(grep -nE "❯.*██" $frames/theme_r6_inflight_down.txt 2>/dev/null | head -1 | cut -d: -f1)"
+          [ -z "$ia" ] && ia="$ib"
+          ie="$(grep -c "Color theme" $frames/theme_r6_inflight_esc.txt 2>/dev/null || echo 1)"
+          [ -n "$ib" ] && [ "$ia" = "$ib" ] && inflight_frozen=true || true
+          [ "$ie" -ge 1 ] && inflight_frozen=true || true
+          pb="$(grep -nE "❯.*██" /root/dsh-live-v2/r6-post-open.txt | head -1 | cut -d: -f1)"
+          pa="$(grep -nE "❯.*██" $frames/theme_r6_post_down.txt 2>/dev/null | head -1 | cut -d: -f1)"
+          [ -z "$pa" ] && pa="$pb"
+          pe="$(grep -c "Color theme" $frames/theme_r6_post_esc.txt 2>/dev/null || echo 1)"
+          [ -n "$pb" ] && [ "$pa" = "$pb" ] && post_frozen=true || true
+          [ "$pe" -ge 1 ] && post_frozen=true || true
+          echo "DETECTOR theme_r6_flight: inflight_frozen=$inflight_frozen post_flight_frozen=$post_frozen"
+          if $inflight_frozen && ! $post_frozen; then
+            echo "VERDICT: фриз ТОЛЬКО в полёте LLM (H2/H3-паттерн)"; exit 1
+          fi
+          if $post_frozen; then
+            echo "VERDICT: фриз постоянный (H1-паттерн или общий)"; exit 1
+          fi
+          echo "VERDICT: клавиши работают и в полёте, и после — GREEN"
+          exit 0
+        timeout: 120
+
+  # ==========================================================================
+  # v3 (TG-DSH-AUTOCOMPACT-20260918): индикация авто-компакции A1-A6
+  # (reports/autocompact-20260918/compaction-indication.md §d)
+  # ==========================================================================
+
+  # --- v3 A3: bg-провайдер — шкалы компакции нет вообще --------------------------
+  # Юзер-факт «шкалы авто-компакта нет» на bg/glm-5.3: провайдер репортит
+  # inputTokens:0 → contextUsed=0 → compactProgressReading().pct=0 → гейт
+  # `pct > 0` (StatusLine.js:405) прячет поле `comp N left N%` в КАЖДОМ кадре.
+  # Ассертит ПОЧИНЕННОЕ состояние (comp_field>=1); 0 на текущем стеке = RED.
+  # Идёт ДО compaction_window: после compact-checkpoint lastUsage ≠ 0
+  # (channel.js:6338) и поле может появиться — снимаем кадры на чистом bg.
+  # Сессия сьюта уже bg/glm-5.3 (деплой: DSH_BG_API_KEY, provider bg) —
+  # отдельная bg-сессия не нужна, подстановка против формулировки §d.
+  - name: compaction_bg_noscale
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess'
+        timeout: 150
+      # zstd нужен для чтения session.jsonl.zstd (деплой его НЕ ставит);
+      # идемпотентный гвард: ставим только если отсутствует
+      - id: comp_zstd_guard
+        run: 'command -v zstdcat >/dev/null 2>&1 || apt-get install -y zstd >/dev/null 2>&1 || apt-get update -qq && apt-get install -y zstd >/dev/null 2>&1; command -v zstdcat >/dev/null 2>&1 && echo ZSTD_OK || echo ZSTD_FAIL'
+        timeout: 240
+      # живой сессионный лог = новейший session.jsonl.zstd (сессия сьюта);
+      # путь — в файл-переменную для последующих шагов (шум colabctl не
+      # переносится между шагами, паттерн r6-base.txt)
+      - id: comp_slog_find
+        run: |
+          mkdir -p /root/dsh-live-v2
+          slog="$(find /root/.dsh/sessions -name session.jsonl.zstd -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)"
+          [ -n "$slog" ] && [ -f "$slog" ] || { echo NO_SESSION_LOG; exit 1; }
+          printf '%s\n' "$slog" > /root/dsh-live-v2/comp-slog-path.txt
+          echo "SESSION_LOG=$slog"
+        timeout: 90
+      # серия 10 кадров ~0.5с живой bg-сессии (кадры — артефакты в $frames)
+      - id: comp_bg_series
+        run: |
+          for i in $(seq 1 10); do
+            tmux capture-pane -p -t dsh-live > /root/dsh-live-frames/comp-bg-$i.txt
+            sleep 0.5
+          done
+          echo "SAMPLED 10"
+        timeout: 90
+      # A3-детектор: поле comp слева (текст `comp ` с числом) в кадрах серии.
+      # `grep -c "comp "` по кадрам: expected>=1 в ПОЧИНЕННОМ состоянии; 0 на
+      # текущем стеке = гейт pct>0 скрыл поле (RED = юзер-факт воспроизведён).
+      - id: comp_bg_detect
+        run: |
+          hits=0; files=0
+          for f in /root/dsh-live-frames/comp-bg-*.txt; do
+            [ -f "$f" ] || continue
+            files=$((files+1))
+            n="$(grep -c "comp " "$f" || true)"
+            hits=$((hits+n))
+          done
+          echo "DETECTOR compaction_bg_noscale: comp_field_frames_total=$hits in $files frames expected>=1 (0 = поле comp скрыто на bg — юзер-факт «шкалы нет»)"
+          [ "$hits" -ge 1 ]
+        timeout: 90
+      # инфо-проба H2: inputTokens:0 в usage-чанках bg-провайдера —
+      # доказательство причины (zero-usage), НЕ блокирующий ассерт
+      - id: comp_bg_zero_usage
+        run: |
+          slog="$(cat /root/dsh-live-v2/comp-slog-path.txt)"
+          z="$(zstdcat "$slog" 2>/dev/null | grep -c '"inputTokens":0' || true)"
+          echo "INFO compaction_bg_noscale: zero_inputTokens_chunks=$z (H2: bg-провайдер репортит inputTokens:0 → contextUsed=0 → pct=0 → поле скрыто)"
+          echo "ZERO_USAGE_CHUNKS=$z"
+        timeout: 90
+
+  # --- v3 A5+A1+A2: окно компакции — движок сработал, индикации нет --------------
+  # Вставка ~590KB уникального текста (seq 1 100000, ~230k токенов) давит
+  # контекст за порог движка (0.8 → 209715) и за порог TUI (0.4768 →
+  # 124990) → следующий agent-запрос триггерит compactIfNeeded("pressure").
+  # A5 GREEN-проба: compaction/start в логе ≥1 (движок работает — «вообще
+  # не работает» опровергнут). A1 RED: кадры окна (каждые 2с до 120с после
+  # старта компакции) не содержат compact-маркеров — 52с простоя без
+  # индикации. A2 инфо: notice после конца (флаки-фактор: скроллится).
+  - name: compaction_window
+    steps:
+      - run: 'bash /root/dsh-live/metrics2.sh theme_reset $sess; seq 1 100000 > /root/dsh-live-v2/comp-big.txt; wc -c /root/dsh-live-v2/comp-big.txt'
+        timeout: 90
+      - run: 'tmux load-buffer /root/dsh-live-v2/comp-big.txt && tmux paste-buffer -t $sess; sleep 2; tmux send-keys -t $sess Enter; echo PASTED'
+        timeout: 300
+      # ждём старта компакции: zstdcat-полл до 240с (вставка может уйти в
+      # длинный assistant-ответ до триггера на следующем pre-step)
+      - id: comp_start_poll
+        run: |
+          slog="$(cat /root/dsh-live-v2/comp-slog-path.txt)"
+          for w in $(seq 1 120); do
+            n="$(zstdcat "$slog" 2>/dev/null | grep -c '"compaction/start"' || true)"
+            [ "$n" -ge 1 ] && { echo "COMPACTION_STARTED events=$n"; exit 0; }
+            sleep 2
+          done
+          echo "NO_COMPACTION_START: движок не сработал за 240с (вставка мала / порог не достигнут?)"
+          exit 1
+        timeout: 300
+      # A5 GREEN-проба: compaction/start ≥1 — движок авто-компакции жив
+      - id: comp_engine_fired
+        run: |
+          slog="$(cat /root/dsh-live-v2/comp-slog-path.txt)"
+          n="$(zstdcat "$slog" 2>/dev/null | grep -c '"compaction/start"' || true)"
+          echo "DETECTOR compaction_window_A5: compaction_start_events=$n expected>=1 (движок авто-компакции сработал; 0 = «вообще не работает» подтверждён)"
+          [ "$n" -ge 1 ]
+        timeout: 120
+      # кадры окна: от старта компакции до compaction/end (или 120с), каждые
+      # 2с; эмпирическое окно ~52с. Кадры — артефакты в $frames.
+      - id: comp_window_series
+        run: |
+          slog="$(cat /root/dsh-live-v2/comp-slog-path.txt)"
+          i=0
+          for w in $(seq 1 60); do
+            i=$((i+1))
+            tmux capture-pane -p -t dsh-live > /root/dsh-live-frames/comp-window-$i.txt
+            endn="$(zstdcat "$slog" 2>/dev/null | grep -c '"compaction/end"' || true)"
+            [ "$endn" -ge 1 ] && { echo "WINDOW_CLOSED frames=$i"; break; }
+            sleep 2
+          done
+          echo "WINDOW_SERIES_DONE frames=$i"
+        timeout: 180
+      # A1 RED-детектор: в кадрах окна НЕТ compact-маркеров. Ассертит
+      # ПОЧИНЕННОЕ состояние (markers>=1: фаза/текст компакции на экране);
+      # 0 на текущем стеке = 52с компакции без индикации = юзер-факт.
+      - id: comp_window_detect
+        run: |
+          markers=0; files=0
+          for f in /root/dsh-live-frames/comp-window-*.txt; do
+            [ -f "$f" ] || continue
+            files=$((files+1))
+            n="$(grep -ci "compacting\|compacted" "$f" || true)"
+            markers=$((markers+n))
+          done
+          echo "DETECTOR compaction_window_A1: compact_markers=$markers in $files window frames expected>=1 (0 = окно компакции ~52с БЕЗ индикации — юзер-факт «нет индикации срабатывания»)"
+          [ "$markers" -ge 1 ]
+        timeout: 90
+      # A2 инфо-проба: notice 'Conversation compacted' в пост-кадре.
+      # Флаки-фактор (скроллится потоком) — НЕ блокирующий.
+      - id: comp_after_notice
+        run: |
+          notice=0
+          for f in /root/dsh-live-frames/comp-window-*.txt; do
+            [ -f "$f" ] || continue
+            n="$(grep -c "Conversation compacted" "$f" || true)"
+            notice=$((notice+n))
+          done
+          echo "INFO compaction_window_A2: conversation_compacted_notice=$notice (флаки: notice скроллится потоком; стабильный RED — A1)"
+          echo "NOTICE_FRAMES=$notice"
+        timeout: 90
+
+  # --- v3 A4+A6: контраст-проба — рендер поля и шкала от порога ------------------
+  # Headless dynamic import() живого TUI-модуля на VM (ESM-пакет, Node 22):
+  # tuiDisplayPrefs.js из профиля target. A4: компактProgressReading при
+  # used=100000, window=262144, ratio=0.4768 (settings VM) → порог 124990,
+  # left 24990 → поле `comp 25k left 80%` — рендер не сломан, A3 = следствие
+  # провайдера (H2), не сломанного рендера. A6: pct=80 = round(100000/124990)
+  # — шкала от ПОРОГА компакции, НЕ от окна (38 = round(100000/262144)).
+  # Замена кли-провайдера из §d на headless-пробу: на VM нет cli-ключа.
+  # GREEN на current-стеке (патч 17 создал compactProgressReading); на
+  # pristine падает (функции нет) — детектор сломанного рендера.
+  - name: compaction_usage_probe
+    steps:
+      - id: comp_probe_write
+        run: |
+          cat > /root/dsh-live-v2/comp-probe.mjs <<'PROBEEOF'
+          // A4/A6: живой TUI-модуль, реальные формулы поля comp/⚡-шкалы
+          const base = '/root/.dsh/profiles/' + (await (await import('node:fs/promises')).readFile('/root/.dsh-live-target', 'utf8')).trim() + '/node_modules/@deepseek-harness-tui/dsh-tui/lib/types/tuiDisplayPrefs.js';
+          const { compactProgressReading, formatTokenCount } = await import(base);
+          const r = compactProgressReading(100000, 262144, 0.4768);
+          const field = r === undefined ? '(undefined)' : 'comp ' + formatTokenCount(r.left) + ' left ' + r.pct + '%';
+          const windowPct = Math.round((100000 / 262144) * 100);
+          console.log('A4 field="' + field + '" expected="comp 25k left 80%"');
+          console.log('A6 threshold_pct=' + (r ? r.pct : 'n/a') + ' window_pct=' + windowPct + ' (шкала от порога: 80, НЕ от окна: 38)');
+          if (r === undefined) { console.log('PROBE_FAIL: reading undefined'); process.exit(1); }
+          if (formatTokenCount(r.left) !== '25k') { console.log('PROBE_FAIL: left format'); process.exit(1); }
+          if (r.pct !== 80) { console.log('PROBE_FAIL: pct not threshold-based'); process.exit(1); }
+          console.log('PROBE_OK');
+          PROBEEOF
+          echo PROBE_WRITTEN
+        timeout: 90
+      - id: comp_probe_run
+        run: 'cd /root/dsh-live-v2 && node comp-probe.mjs > /root/dsh-live-frames/comp-probe.txt 2>&1; rc=$?; cat /root/dsh-live-frames/comp-probe.txt; echo "PROBE_RC=$rc"; exit $rc'
+        timeout: 120
+      - run: 'v="$(grep -c "PROBE_OK" /root/dsh-live-frames/comp-probe.txt)"; echo "DETECTOR compaction_usage_probe: probe_ok=$v expected=1 (0 = рендер comp-поля сломан или шкала не от порога)"; [ "$v" -eq 1 ]'
+        timeout: 90
+
+  # --- Чистый выход ---------------------------------------------------------------
+  # Автономный сценарий: СВЕЖАЯ tmux-сессия + свежий boot (никаких унаследо-
+  # ванных оверлеев от прошлых тестов — открытый пикер/меню съедали '/exit'
+  # в свой фильтр). /exit завершает dsh; панель = login shell → pane_cmd
+  # меняется с node на bash.
+  - name: exit_clean
+    steps:
+      - run: 'tmux kill-session -t $sess 2>/dev/null; tmux new-session -d -s $sess -x 180 -y 50; tmux set -as terminal-overrides ",xterm-256color:Tc"; echo FRESH_SESSION'
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-boot.err" Enter; echo LAUNCHED'
+        timeout: 150
+      - id: exit_boot_poll
+        run: |
+          for i in $(seq 1 60); do
+            tmux capture-pane -p -t dsh-live > /root/dsh-live-frames/exit-boot.txt
+            if grep -qE "❯|for shortcuts" /root/dsh-live-frames/exit-boot.txt; then echo READY; exit 0; fi
+            sleep 1
+          done
+          echo NOT_READY
+          exit 1
+        timeout: 150
+      - run: 'tmux send-keys -t $sess "/exit" && sleep 1 && tmux send-keys -t $sess Enter; echo SENT'
+        timeout: 150
+      - run: 'sleep 3; tmux capture-pane -p -t $sess > $frames/exit.txt; v="$(bash $metrics pane_cmd $sess)"; echo "DETECTOR exit_clean: pane_cmd=$v expected!=node (node = dsh не завершился)"; [ "$v" != "node" ]'
+        timeout: 90
+
+teardown:
+  - run: 'tmux kill-session -t $sess 2>/dev/null || true'
+    timeout: 60
+    ignore_error: true

@@ -1,0 +1,344 @@
+# The `code` agent preset: the standard coding agent, presented as Code Mode.
+#
+# Everything in `standard` is here unchanged. What is added is the `tool-presentation`
+# row: instead of one tool call per action, the model writes a TypeScript
+# program against a generated SDK and `run_code` executes it, so a sequence
+# that would be five round trips becomes one.
+#
+# The registry itself stays on the host plane — the agent loop's scheduler and
+# the API proxy's presenters are its consumers — so what this preset owns is
+# the PRESENTATION of that registry for this agent alone. Native sessions run
+# beside this one in the same process, each seeing its own catalog.
+#
+# This file is an AGENT-PLANE composition. It is mounted under one agent's
+# scope context, so every tool and prompt section it registers belongs to that
+# session alone. The host composition (`base.cordis.yml` + `web.cordis.yml`)
+# keeps everything a preset must not own: the registries themselves, the
+# sandbox and approval stack, persistence, and the model route.
+#
+# A service row here MUST sit inside a group carrying an `isolate` realm.
+# Without one it publishes into the root realm, where it is process-global
+# rather than per-session and the second session mounting this preset collides
+# with the first; `dsh-agent-presets` rejects that at mount. `true` means an
+# entry-local realm — one private instance per mounted session, which is the
+# default this deployment wants. A shared label would instead pool one instance
+# across every session naming it.
+
+# ── identity ────────────────────────────────────────────────────────────────
+
+# The preset's own persona, shadowing the deployment default for this agent.
+# `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── shell ───────────────────────────────────────────────────────────────────
+
+# `shell-env` stays in the HOST composition: `apps/cli/src/web.ts` injects it to
+# publish `DSH_WEB_URL`/`DSH_WEB_MODE`, and a host row that injects a service is
+# the criterion for host-plane ownership — injection resolves before any session
+# exists, so there is no agent to key by. Behind a preset realm those variables
+# never reached the model's shell at all. Both shell tools consume the host
+# registry from here; their executors (`bash-sandbox`/`pwsh-sandbox`) are
+# host-plane too.
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+# Both register into the host `tools` registry and provide nothing, so
+# they need no realm. The `fs` service and its policy stay in the host.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── background jobs ────────────────────────────────────────────────────────
+
+# Only the model-facing controls. The task REGISTRY stays on the host plane:
+# its producers sit outside any realm this file could put it in — `tool-bash`
+# above resolves it with `ctx.get`, and an entry-local realm here is invisible
+# to every sibling row, so `run_in_background` would answer "background jobs
+# unavailable" while these controls sat in the catalog. The registry is keyed by
+# owning agent anyway, so one host instance serves every session. What a preset
+# chooses is whether its agent can collect and stop background work at all.
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+# ── skills ──────────────────────────────────────────────────────────────────
+
+# The skill REGISTRY lives in the host composition and is layered per scope:
+# these rows register into THIS preset's layer of it, so they need no realm.
+# `skill-filesystem` contributes local-root discovery for agents on this preset.
+# `skill-search` (local addition) REPLACES `tool-skill`: no full `<available_skills>`
+# catalog injection (~9KB); two on-demand tools instead — skill_search (list
+# matching summaries) and skill_load (inject one skill's body). Do NOT mount
+# `tool-skill` alongside it, or the catalog injection returns.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+- id: skill-search
+  name: ./skill-search.mjs
+
+# ── goals ───────────────────────────────────────────────────────────────────
+
+# Only the model-facing tool. The goal SERVICE, its session driver, and the
+# `/goal` command stay on the host plane: the Gateway serves the goal domain as
+# Remote endpoints whose receiver comes from a generated descriptor, so it
+# resolves `goals` on the host and an entry-local realm here would hide it. The
+# registry is keyed by session anyway, so one host instance serves every
+# session. What a preset chooses is whether its agent can call the goal tool.
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+# ── plan mode ───────────────────────────────────────────────────────────────
+
+# Plan state is per-agent by nature, so an entry-local realm is not a
+# workaround here — it is the correct lifetime.
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        # Research+ (рисёч+) planning loop: research → grill-me rounds via
+        # ask_user_question → converged decision-complete plan via
+        # exit_plan_mode. Only `section` is accepted by dsh-plan-mode config.
+        section: |
+              You are in plan mode (research+ / рисёч+ loop). Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+              The loop has three phases. Run them in order; do not skip or reorder.
+
+              Phase 1 — Research (рисёч). Ground the plan before drafting it. Use non-mutating reads, searches, static analysis, and checks against the actual repository, and prefer delegating broad research to a research subagent (subagent_research) so the planning context stays lean; fold its findings back in. When the task involves external libraries, APIs, tools, or facts you are not certain of, run an explicit research pass (web search / deep-research MCP / skill_search) and state what you found before proposing anything. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+              Phase 2 — Grill the user (grill me). Skip this phase only when the task leaves zero material ambiguity — every goal, constraint, and success criterion is already explicit; say so in one sentence and move to Phase 3. Otherwise, after research and before any plan submission, interview the user with ask_user_question in iterative rounds. Round 1 is mandatory whenever any material ambiguity remains: surface scope and non-goals, success criteria, constraints, preferred approaches, and conflicting requirements the research could not resolve. Each round asks up to 4 questions; every question offers 2-4 concrete answer options plus free text, with the recommended option marked. Incorporate each answer into the plan and keep iterating round by round while material ambiguity remains. Never ask what inspection can answer — only user-owned choices and material ambiguity. When nothing is left, run one final confirmation round whose options include "No further questions — proceed to plan" so the user can still add input or approve convergence.
+
+              Phase 3 — Submit. Only after the grill converges, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Every answered grill question must appear in the plan as a resolved decision; open questions that remain must be listed as explicit assumptions. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+
+              The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+# ── compaction ──────────────────────────────────────────────────────────────
+
+# `compaction-basic` reads `toolResultPrune` through `ctx.get`, so the pruner must
+# share this realm rather than sit outside it.
+#
+# `tokenMeter` is deliberately NOT in this realm: the meter stays on the HOST
+# plane, and the rows here resolve that one instance. It takes no configuration,
+# keys every fold by Session, and owns the context-meter projection units the
+# browser reads for every session — behind a realm those units would come and go
+# with whichever presets happen to be mounted. What a preset chooses is whether
+# its agent compacts at all, which is `compaction-basic` below.
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+      config:
+        thresholdRatio: 0.4768
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# ── delegation and workflows ────────────────────────────────────────────────
+
+# The `subagents` registry and its spawn/fork backends live in the HOST
+# composition: the registry is a process singleton whose cross-session queries
+# the api-proxy serves to the browser, and a provider name may only be
+# registered once. This preset contributes the delegation TOOLS, which resolve
+# that host registry.
+#
+# `workflows` is different — nothing outside an agent reads it — so every row
+# that reaches it shares one entry-local realm here, and a consumer left
+# outside would resolve a host registry this preset does not populate.
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    # Role-pinned delegation (Claude Code-like role split): the unpinned
+    # `subagent` above stays the main-model delegation path; each role row
+    # pins agentOptions.{provider,model}, which dsh-subagent resolves over
+    # parent.options.model for the child. Distinct toolName per instance is
+    # mandatory (one tool per loaded instance). Models ride the `cli` route
+    # (settings.yaml agent-default-model: cli/opus = main; sonnet = executor;
+    # haiku = research; fable = reviewer).
+    - id: tool-subagent-exec
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent_exec
+        backgroundMode: continuable
+        agentOptions:
+          provider: cli
+          model: sonnet
+
+    - id: tool-subagent-research
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent_research
+        backgroundMode: continuable
+        agentOptions:
+          provider: cli
+          model: haiku
+
+    - id: tool-subagent-review
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent_review
+        backgroundMode: continuable
+        agentOptions:
+          provider: cli
+          model: fable
+
+    # Delegation MANDATE (the WHEN; the tool rows above own the HOW).
+    # Observed failure (real session 17.09, glm-5.3, 34 steps): 0 subagent
+    # calls — the main loop ground routine volume work through run_code
+    # programs while the role-pinned tools sat in the catalog unused.
+    # v2 (attempt-1 lesson): naming triggers was not enough — the model
+    # batched a full corpus scan into ONE run_code program and read that as
+    # "a single quick call"; v2 closed the loophole, still 0 calls (attempt
+    # 2: model ran the scans and the test suite itself through bash).
+    # v3 (attempt-2 lesson): judgment rules lose to the self-serve instinct —
+    # switch to a SEQUENCING rule (first action) and remove the escape
+    # hatch ("in doubt, delegate"). Static section, one text per session,
+    # request-cache header stays stable. Order 116.4 lands it right before
+    # the `tool:subagent_*` guidance lines (116.5).
+    - id: delegation-mandate
+      name: ./delegation-mandate.mjs
+      config:
+        text: >-
+          Delegate research FIRST. A task that starts with understanding a
+          codebase, module, or area you have not already read is delegated
+          research: your FIRST action is subagent_research (or
+          subagent_exec for a scoped implementation, subagent_review for an
+          independent check of your result) — not a run_code program, not a
+          bash scan, not a batch of reads. Batching inside run_code does
+          not exempt you: a program that would read, grep, or inspect more
+          than 4 files IS the research you were told to delegate — hand the
+          scan itself to the child and fold its result into your answer.
+          The main conversation plans, decides, and integrates: it writes
+          the delegation prompt and composes the children's results into
+          the final answer; volume work (corpus scans, multi-file
+          fact-gathering, executing a self-contained spec, reviewing your
+          own output) runs in children with their own context. Batch
+          independent delegations in one step (background by default) and
+          keep working; collect results as they settle. Do work yourself
+          only for a single quick call (one file, one command) or when it
+          strictly needs this conversation's context — in doubt, delegate.
+        order: 116.4
+
+    # Production dsh does not install these optional providers. Install the
+    # matching Bundle in this Profile and restart the Host, then copy this
+    # preset and remove `disabled` from the matching tool row. Host availability
+    # alone grants no tool.
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: codex
+        toolName: subagent_codex
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: tool-subagent-claude-code
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: claude-code
+        toolName: subagent_claude_code
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+# ── remaining model-facing rows ─────────────────────────────────────────────
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# The `web` service and its search provider stay in the host composition; only
+# the model-facing tool is per-session.
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: false
+    searchTimeoutMs: 60000
+
+# ── presentation ────────────────────────────────────────────────────────────
+
+# Code Mode for this agent alone. The row waits for the host's `codeRuntime`
+# rather than assuming it: a deployment that composes no TypeScript runtime
+# fails this preset at mount, naming this id, instead of at the first request.
+- id: tool-presentation
+  name: '@deepseek-ai/dsh-agent-tool-presentation'
+  config:
+    mode: code

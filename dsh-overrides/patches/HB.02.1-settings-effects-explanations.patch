@@ -1,0 +1,751 @@
+# Goal:      self-documenting examples в /settings+/effects хабах
+# Family:    HB.02
+# Status:    live
+# Files:     lib/types/effectsCatalog.js, lib/types/components/hubSettings.js,
+#            lib/types/components/SettingsExamples.js
+# Evidence:  TG-DSH-DEMO-20260924 узел 2; reports/demo-evidence/;
+#            reports/colab-golden-65-20260924T094136Z/
+# Upstream:  not-applicable
+# Added:     2026-09-24 (TG-DSH-DEMO-20260924 узел 2)
+
+# Goal:      self-documenting settings/effects — every hub field gets an example
+#            zone (booleans: on AND off fragments; enums: a mini-fragment per
+#            value; effects: a STATIC glyph demo + catalog description),
+#            painted with the live theme palette; effectsCatalog RU→EN.
+# Family:    UI.65 (settings/examples wave)
+# Status:    live
+# Files:     lib/types/effectsCatalog.js, lib/types/components/hubSettings.js,
+#            lib/types/components/SettingsExamples.js (new)
+# Evidence:  reports/demo-evidence/settings-examples-{red,green*}.txt (TG-DSH-DEMO-20260924 node 2)
+--- a/lib/types/effectsCatalog.js
++++ b/lib/types/effectsCatalog.js
+@@ -1,30 +1,32 @@
+ /**
+  * dsh-overrides 39: human descriptions for the LIVE42 effect registry
+  * (one per EFFECT_KEYS entry): what the effect does and where it lives in
+- * the UI — shown in the /effects panel's detail block. Russian, 1-2 lines.
+- * A missing entry is a warn (never fatal): getEffectDescription falls back
+- * to the key itself so the panel always renders.
++ * the UI — shown in the /effects panel's detail block. English, 1-2 lines
++ * (dsh-overrides 65 translated the patch-39 RU set — canon §5.4, the
++ * settings language is ALL-EN). A missing entry is a warn (never fatal):
++ * getEffectDescription falls back to the key itself so the panel always
++ * renders.
+  */
+ import { EFFECT_KEYS } from './animationsMode.js';
+-/** key → русское описание (что делает + где в UI). */
++/** key → English description (what it does + where in the UI). */
+ export const EFFECT_DESCRIPTIONS = {
+-    inputBorderBreath: 'Рамка поля ввода плавно дышит между акцентным цветом и его shimmer-вариантом; при работающем ходе — вдвое быстрее',
+-    todoPulse: 'Активная задача в todo-панели пульсирует глифом ◐ (toolDotTask ↔ более светлый гребень)',
+-    todoProgressBar: 'В заголовке todo-панели мини-бар прогресса из 5 ячеек вместо текста ✓ 0/2',
+-    headerGlimmer: 'Заголовок todo-панели переливается бегущим окном подсветки',
+-    ctxBarBreath: 'Бар контекста в статус-строке дышит яркостью, пока идёт ход модели',
+-    toolCardShimmer: 'Заголовок карточки terminal-инструмента мерцает тоном bashBorder, пока команда выполняется',
+-    spinnerRainbow: 'Глиф спиннера плавно циклирует радужную палитру shimmer-оттенков',
+-    spinnerGlimmer: 'Глагол под спиннером переливается бегущим окном подсветки',
++    inputBorderBreath: 'The input field border slowly breathes between the accent color and its shimmer variant; twice as fast while a turn is running',
++    todoPulse: 'The active task in the todo panel pulses its ◐ glyph (toolDotTask tone ↔ a lighter crest)',
++    todoProgressBar: 'A 5-cell mini progress bar in the todo panel header instead of the ✓ 0/2 text',
++    headerGlimmer: 'The todo panel header shimmers with a running highlight window',
++    ctxBarBreath: 'The context bar in the status row breathes brightness while a model turn is running',
++    toolCardShimmer: 'A terminal tool card title shimmers in the bashBorder tone while its command runs',
++    spinnerRainbow: 'The spinner glyph smoothly cycles a rainbow palette of shimmer tones',
++    spinnerGlimmer: 'The verb under the spinner shimmers with a running highlight window',
+     // dsh-overrides 40: glyph-bars wave.
+-    headerTextGradient: 'Заголовок панели задач залит градиентом, ползущим по буквам',
+-    subCellBars: 'Бары прогресса сглаживаются восьмыми долями ячеек (▏▎▍▌▋▊▉)',
+-    barGradientFill: 'Заливка бара контекста — градиент вдоль клеток',
++    headerTextGradient: 'The task panel header is filled with a gradient crawling across the letters',
++    subCellBars: 'Progress bars are smoothed to eighths of a cell (▏▎▍▌▋▊▉)',
++    barGradientFill: 'The context bar fill becomes a gradient along its cells',
+     // dsh-overrides 41: tool-progress wave.
+-    toolProgressBars: 'Мини-бар прогресса в карточке инструмента (curl/wget/tqdm — итоговый разбор вывода)',
+-    // dsh-overrides 42: sparklines (OPT-IN: включаются только явно).
+-    sparkTps: 'Спарклайн скорости генерации (ток/сек) брайль-глифами во второй строке статус-ряда',
+-    sparkCache: 'Спарклайн % попаданий в кеш запросов во второй строке статус-бара (скрывается, если маршрут не отдаёт кеш-поля)',
++    toolProgressBars: 'A mini progress bar in a tool card (curl/wget/tqdm — the finished output parsed afterwards)',
++    // dsh-overrides 42: sparklines (OPT-IN: enabled only explicitly).
++    sparkTps: 'A braille sparkline of generation speed (tokens/sec) on the second status row line',
++    sparkCache: 'A sparkline of the request cache hit rate on the second status line (hidden when the route reports no cache fields)',
+ };
+ /**
+  * The description for a registry key, or the key itself (with a warn) when
+--- a/lib/types/components/hubSettings.js
++++ b/lib/types/components/hubSettings.js
+@@ -5,18 +5,17 @@
+ import { POINTER } from '../cc/figures.js';
+ import { isValidThemeColor } from '../customTheme.js';
+ import { getThemeOptions } from './ThemePicker.js';
+-// dsh-overrides 46: the /effects-era demo components are REUSED as the
+-// settings screen's per-effect live demos (the panel itself is gone; the
+-// demo widgets are the point).
+-import { EffectDemo } from './EffectsPanel.js';
++// dsh-overrides 65: settings/effects self-documenting examples — the demo
++// registry (HUB_EXAMPLES) for the plain fields, plus the static effect and
++// minimum-metric examples the custom entries mount below (booleans show on
++// AND off, enums a mini-fragment per value, painted with the live palette).
++import { HUB_EXAMPLES, EffectExample, MinimumMetricExample } from './SettingsExamples.js';
+ import { SPINNER_NAMES, getSpinnerStyle } from '../spinnerCatalog.js';
+ import { EFFECT_KEYS, effectEnabled } from '../animationsMode.js';
+ import { getEffectDescription } from '../effectsCatalog.js';
+ // dsh-overrides 56: the invariant-8 minimum metric (canon §1.8 + §5.2) —
+ // which context metric keeps its slot on narrow status rows.
+ import { minimumMetricPref, writeMinimumMetricPref } from '../effectsPrefs.js';
+-import { subCells } from '../tuiDisplayPrefs.js';
+-import { sparkline } from '../sparkline.js';
+ // dsh-overrides 63: hub settings EN (canon §5.4 — the settings language is
+ // ALL-EN, the E3 user decision): every user-visible string literal of the
+ // hub — group titles, field labels, option labels, hints, demo rows — is
+@@ -75,6 +74,7 @@
+                 kind: 'select',
+                 group: 'hub-appearance',
+                 demo: 'powerline',
++                demoLines: 3,
+                 options: [
+                     { value: 'full', label: 'full (filled segments)' },
+                     { value: 'plain', label: 'plain (❯ separators)' },
+@@ -88,6 +88,7 @@
+                 kind: 'text',
+                 group: 'hub-appearance',
+                 demo: 'background',
++                demoLines: 2,
+                 parse: parseThemeColor,
+                 hint: 'Background color of the whole TUI (#rrggbb / rgb() / ansi256()); empty — the theme background (appBackground). Applied live.',
+             },
+@@ -97,6 +98,7 @@
+                 kind: 'select',
+                 group: 'hub-appearance',
+                 demo: 'animations',
++                demoLines: 3,
+                 options: [
+                     { value: 'full', label: 'full (all effects on)' },
+                     { value: 'custom', label: 'custom (per effect)' },
+@@ -120,6 +122,7 @@
+                 kind: 'text',
+                 group: 'hub-border',
+                 demo: 'inputBorder',
++                demoLines: 2,
+                 parse: parseThemeColor,
+                 hint: 'Accent color of the input field border (#rrggbb / rgb() / ansi256()); empty — the theme key promptBorder. Validated by the customTheme forms; applied live.',
+             },
+@@ -161,7 +164,7 @@
+                 label: 'Minimum metric',
+                 kind: 'custom',
+                 group: 'hub-effects',
+-                custom: { type: 'minimumMetric', demoLines: 1 },
++                custom: { type: 'minimumMetric', demoLines: 2 },
+                 hint: 'Invariant-8 minimum (canon §1.8): which context metric keeps its status-row slot on narrow widths (w>=40) when fields drop — ⚡ ctx (compact rung: ⚡ 41%) or comp (tokens left to auto-compact). Enter/space switches; applies live; persists to ~/.dsh-tui/effects.json.',
+             },
+             // ── Статус-ряд (нативная группа status-bar) ──
+@@ -171,6 +174,7 @@
+                 kind: 'select',
+                 group: 'status-bar',
+                 demo: 'ctxBarMode',
++                demoLines: 3,
+                 options: [
+                     { value: 'full', label: 'full (6 cells)' },
+                     { value: 'narrow', label: 'narrow (3 cells)' },
+@@ -184,6 +188,7 @@
+                 kind: 'select',
+                 group: 'status-bar',
+                 demo: 'cwdMode',
++                demoLines: 2,
+                 options: [
+                     { value: 'full', label: 'full (full path)' },
+                     { value: 'compact', label: 'compact (last segment)' },
+@@ -195,7 +200,7 @@
+                 label: 'sparkTps (t/s sparkline)',
+                 kind: 'custom',
+                 group: 'status-bar',
+-                custom: { type: 'effect', key: 'sparkTps', demoLines: 1 },
++                custom: { type: 'effect', key: 'sparkTps', demoLines: 2 },
+                 hint: `${getEffectDescription('sparkTps')}. OPT-IN: enabled only explicitly (effect registry, effectEnabled).`,
+             },
+             {
+@@ -203,7 +208,7 @@
+                 label: 'sparkCache (cache sparkline)',
+                 kind: 'custom',
+                 group: 'status-bar',
+-                custom: { type: 'effect', key: 'sparkCache', demoLines: 1 },
++                custom: { type: 'effect', key: 'sparkCache', demoLines: 2 },
+                 hint: `${getEffectDescription('sparkCache')}. OPT-IN: enabled only explicitly (effect registry, effectEnabled).`,
+             },
+             // dsh-overrides 47: our statusrow blocks — first-class toggles
+@@ -214,6 +219,7 @@
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'timer',
++                demoLines: 2,
+                 hint: 'The [⏱ turn time] segment in the powerline row — mounted only while a turn is running (patch 29). Turning it off removes the segment and leaves the rest untouched.',
+             },
+             {
+@@ -222,6 +228,7 @@
+                 kind: 'select',
+                 group: 'status-bar',
+                 demo: 'sparkWidth',
++                demoLines: 4,
+                 options: [
+                     { value: '8', label: '8 cells' },
+                     { value: '16', label: '16 cells (default)' },
+@@ -236,6 +243,7 @@
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'spending',
++                demoLines: 2,
+                 hint: 'The ⇄ field ($ per 24h by application + a request counter) in the left status group (patch 17). Hidden while there is no traffic.',
+             },
+             {
+@@ -244,6 +252,7 @@
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'realModel',
++                demoLines: 2,
+                 hint: 'Substitutes the "requested → actual" model when mini-key-switcher routed to a different one (patch 17; before patch 47 the key existed with no consumer).',
+             },
+             {
+@@ -252,6 +261,7 @@
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'compactProgress',
++                demoLines: 2,
+                 hint: 'The "⇣ N tokens to threshold + %" field with color escalation near the threshold (patch 17).',
+             },
+             {
+@@ -260,6 +270,7 @@
+                 kind: 'number',
+                 group: 'status-bar',
+                 demo: 'compactThresholdRatio',
++                demoLines: 1,
+                 hint: 'Fraction of the context window (0…1) the auto-compact threshold is computed from in the progress field. Default 0.8.',
+             },
+             {
+@@ -268,6 +279,7 @@
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'subagentRows',
++                demoLines: 2,
+                 hint: 'Mirrored ◐ rows of subagent tasks in the todo tree + the "◐ agents N" counter in the fold header (patches 13/14). Turning it off removes them without breaking the tree.',
+             },
+             {
+@@ -276,6 +288,7 @@
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'subagentAutoExpand',
++                demoLines: 2,
+                 hint: 'The first live subagent of the session expands the todo fold once (patch 27). Manual collapsing afterwards is respected.',
+             },
+             // ── Прогресс ──
+@@ -284,7 +297,7 @@
+                 label: 'toolProgressBars (tool mini-bars)',
+                 kind: 'custom',
+                 group: 'hub-progress',
+-                custom: { type: 'effect', key: 'toolProgressBars', demoLines: 1 },
++                custom: { type: 'effect', key: 'toolProgressBars', demoLines: 2 },
+                 hint: `${getEffectDescription('toolProgressBars')}. Note: the channel does not stream the output of a running tool — the bar appears AFTER completion (the final curl/wget/tqdm parse).`,
+             },
+         ],
+@@ -297,7 +310,7 @@
+         label: key,
+         kind: 'custom',
+         group,
+-        custom: { type: 'effect', key, demoLines: 1 },
++        custom: { type: 'effect', key, demoLines: 2 },
+         hint: `${getEffectDescription(key)} — enter/space toggles (effect registry, effectEnabled; no duplicate gates are created).`,
+     };
+ }
+@@ -483,9 +496,12 @@
+         }
+     });
+     const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, wrap: "truncate-end", children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsx(Text, { color: on ? 'success' : 'inactive', bold: focused, children: on ? '[✓] on' : '[  ] off' })] }));
+-    const [, time] = useAnimationFrame(120);
+-    const demo = (_jsxs(Text, { dimColor: true, children: [_jsx(EffectDemo, { effect: key, time: time }), _jsxs(Text, { dimColor: true, children: ["  ", key !== undefined ? getEffectDescription(key) : ''] })] }));
+-    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
++    // dsh-overrides 65: a STATIC on/off glyph example (what toggling does,
++    // painted with the live palette) plus the catalog description below —
++    // no animation clock while the row is focused (canon §3: a demo, not a
++    // second live effect).
++    const demo = (_jsxs(React.Fragment, { children: [_jsx(Box, { height: 1, overflow: "hidden", children: _jsx(EffectExample, { effect: key }) }), _jsx(Box, { height: 1, overflow: "hidden", children: _jsx(Text, { dimColor: true, wrap: "truncate-end", children: key !== undefined ? getEffectDescription(key) : '' }) })] }));
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, flexDirection: "column", children: demo }) : null] }));
+ }
+ /**
+  * dsh-overrides 56: Minimum metric — which context metric (⚡ ctx or comp)
+@@ -511,134 +527,14 @@
+         }
+     });
+     const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, wrap: "truncate-end", children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: current === 'comp' ? 'comp (tokens left)' : 'ctx (⚡ context)' }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" })] })] }));
+-    const demo = (_jsx(Text, { dimColor: true, children: current === 'comp'
+-            ? 'narrow row (w47):  ✦ glm…   comp 31k left'
+-            : 'narrow row (w47):  ✦ glm…   ⚡ 41%' }));
+-    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
++    // dsh-overrides 65: both rungs painted as the REAL compact rungs look
++    // (the ⚡ percent segment vs the ⇣ warning rung), the current one
++    // highlighted — the pair the user is choosing between.
++    const demo = _jsx(MinimumMetricExample, { current: current });
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 2, overflow: "hidden", children: demo }) : null] }));
+ }
+ // ── Demos for the plain (settings-backed) fields ────────────────────────
+-/** Live demo registry: every plain appearance field demos itself. */
+-export const HUB_FIELD_DEMOS = {
+-    powerline: PowerlineDemo,
+-    background: BackgroundDemo,
+-    animations: AnimationsDemo,
+-    inputBorder: InputBorderDemo,
+-    ctxBarMode: CtxBarModeDemo,
+-    cwdMode: CwdModeDemo,
+-    // dsh-overrides 47: our statusrow-block demos.
+-    timer: TimerDemo,
+-    sparkWidth: SparkWidthDemo,
+-    spending: SpendingDemo,
+-    realModel: RealModelDemo,
+-    compactProgress: CompactProgressDemo,
+-    compactThresholdRatio: CompactThresholdRatioDemo,
+-    subagentRows: SubagentRowsDemo,
+-    subagentAutoExpand: SubagentAutoExpandDemo,
+-};
+-/** Powerline chain sample in the selected style (theme-colored). */
+-function PowerlineDemo({ value }) {
+-    const [themeName] = useTheme();
+-    const theme = getTheme(themeName);
+-    if (value === 'off') {
+-        return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "stock row: " }), _jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" }), _jsx(Text, { dimColor: true, children: " · " }), _jsx(Text, { color: "inactiveShimmer", children: "~/…/deepseek_harness" })] }));
+-    }
+-    if (value === 'plain') {
+-        return (_jsxs(Text, { children: [_jsx(Text, { color: "claude", children: " ✦ glm-5.3 " }), _jsx(Text, { dimColor: true, children: "❯" }), _jsx(Text, { color: "text", children: " ~/…/deepseek_harness " }), _jsx(Text, { dimColor: true, children: "❯" }), _jsx(Text, { color: "text", children: " ⎇ main " })] }));
+-    }
+-    return (_jsxs(Text, { children: [_jsx(Text, { backgroundColor: theme.claude, color: "inverseText", children: " ✦ glm-5.3 " }), _jsx(Text, { color: "claude", children: "" }), _jsx(Text, { backgroundColor: theme.toolCardBackground, color: "text", children: " ~/…/dsh " }), _jsx(Text, { color: "toolCardBackground", children: "" }), _jsx(Text, { backgroundColor: theme.success, color: "inverseText", children: " ⎇ main " })] }));
+-}
+-/** Background color sample (the whole row paints). */
+-function BackgroundDemo({ value }) {
+-    const valid = typeof value === 'string' && value.trim() !== '' && isValidThemeColor(value.trim());
+-    if (!valid)
+-        return _jsx(Text, { dimColor: true, children: "empty = theme background (appBackground); forms: #rrggbb, rgb(), ansi256()" });
+-    return _jsx(Text, { backgroundColor: value.trim(), children: "  app background:████████████  " });
+-}
+-/** Animations mode sample: the breathing input frame, live when allowed. */
+-function AnimationsDemo() {
+-    const [, time] = useAnimationFrame(120);
+-    return (_jsxs(Text, { dimColor: true, children: ["sample: ", _jsx(EffectDemo, { effect: "inputBorderBreath", time: time })] }));
+-}
+-/** Input frame sample in the chosen color. */
+-function InputBorderDemo({ value }) {
+-    const valid = typeof value === 'string' && value.trim() !== '' && isValidThemeColor(value.trim());
+-    return (_jsxs(Text, { children: ["╭────────────╮  ", valid
+-            ? _jsx(Text, { color: value.trim(), children: "╭────────────╮" })
+-            : _jsx(Text, { dimColor: true, children: "empty = theme color (promptBorder)" })] }));
+-}
+-/** Ctx-bar sample in the selected mode (subCells smoothing included). */
+-function CtxBarModeDemo({ value }) {
+-    const mode = value === 'narrow' || value === 'percent-only' ? value : 'full';
+-    if (mode === 'percent-only')
+-        return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⚡ " }), _jsx(Text, { color: "inverseText", children: "69%" })] }));
+-    const cells = mode === 'narrow' ? 3 : 6;
+-    const { fill, track } = effectEnabled('subCellBars') ? subCells(0.69, cells) : subCells(Math.round(0.69 * cells) / cells, cells);
+-    return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⚡" }), _jsx(Text, { color: "inverseText", children: fill }), _jsx(Text, { dimColor: true, children: track }), _jsx(Text, { dimColor: true, children: " 69%" })] }));
+-}
+-/** Status-row path shape sample. */
+-function CwdModeDemo({ value }) {
+-    return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "full: " }), _jsx(Text, { color: "text", children: "~/…/deepseek_harness" }), _jsx(Text, { dimColor: true, children: "  ·  compact: " }), _jsx(Text, { color: "text", children: "deepseek_harness" })] }));
+-}
+-// ── dsh-overrides 47: our statusrow-block demos ─────────────────────────
+-/** Padded-duration helper shared by the timer demo (stable width — patch 48). */
+-function demoDuration(ms) {
+-    const seconds = Math.max(0, Math.floor(ms / 1000));
+-    const text = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+-    return text.padStart(6, ' ');
+-}
+-/** Timer segment demo: a live ticking, fixed-width sample. */
+-function TimerDemo() {
+-    const [, time] = useAnimationFrame(120);
+-    const elapsed = 64_000 + time;
+-    return (_jsxs(Text, { children: [_jsx(Text, { color: "toolCardBackgroundDim", children: " " }), _jsx(Text, { color: "claude", children: ` ${demoDuration(elapsed)} ` }), _jsx(Text, { dimColor: true, children: "  ticks only during a turn; width is stable" })] }));
+-}
+-/** Sparkline width demo: braille samples at the selected width. */
+-function SparkWidthDemo({ value }) {
+-    const cells = Number(value) >= 8 && Number(value) <= 32 ? Number(value) : 16;
+-    const series = Array.from({ length: 40 }, (_, i) => 20 + 18 * Math.sin(i / 4) + 6 * Math.cos(i / 1.7));
+-    return (_jsxs(Text, { dimColor: true, children: ["⎇ ", _jsx(Text, { color: "claude", children: sparklineValues(series, cells) }), ` ${(40 + cells / 8).toFixed(1)} t/s  (cells: ${cells})`] }));
+-}
+-/** mks spending field demo (on/off preview). */
+-function SpendingDemo({ value }) {
+-    return value === 'true'
+-        ? (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⇄ " }), _jsx(Text, { color: "inactiveShimmer", children: "$0.42" }), _jsx(Text, { dimColor: true, children: " · 128r" })] }))
+-        : _jsx(Text, { dimColor: true, children: "off: the spending field is not rendered" });
+-}
+-/** realModel substitution demo. */
+-function RealModelDemo({ value }) {
+-    return value === 'true'
+-        ? (_jsxs(Text, { children: [_jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" }), _jsx(Text, { dimColor: true, children: " → glm-5.3-air" })] }))
+-        : _jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" });
+-}
+-/** compactProgress reading demo. */
+-function CompactProgressDemo({ value }) {
+-    if (value !== 'true')
+-        return _jsx(Text, { dimColor: true, children: "off: no compact-threshold field is rendered" });
+-    return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⇣ " }), _jsx(Text, { color: "warning", children: "48k" }), _jsx(Text, { dimColor: true, children: " left · 76%" })] }));
+-}
+-/** compactThresholdRatio demo: the reading at the staged ratio. */
+-function CompactThresholdRatioDemo({ value }) {
+-    const ratio = Number(value);
+-    const safe = Number.isFinite(ratio) && ratio > 0 && ratio <= 1 ? ratio : 0.8;
+-    const threshold = Math.floor(262_144 * safe);
+-    const pct = Math.round((200_000 / threshold) * 100);
+-    return (_jsxs(Text, { dimColor: true, children: [`threshold ${safe}: `, _jsx(Text, { color: pct >= 85 ? 'warning' : 'inactiveShimmer', children: `${Math.round((threshold - 200_000) / 1000)}k left · ${pct}%` })] }));
+-}
+-/** Subagent rows demo: the fold header with/without the ◐ counter. */
+-function SubagentRowsDemo({ value }) {
+-    return value === 'true'
+-        ? (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "▾ ✓ " }), _jsx(Text, { color: "toolDotTask", children: "█████" }), _jsx(Text, { dimColor: true, children: " · " }), _jsx(Text, { color: "toolDotTask", children: "◐" }), _jsxs(Text, { dimColor: true, children: [" agents ", 2] }), _jsxs(Text, { dimColor: true, children: [" · jobs ", 1] })] }))
+-        : (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "▾ ✓ " }), _jsx(Text, { color: "toolDotTask", children: "█████" }), _jsxs(Text, { dimColor: true, children: [" · jobs ", 1] })] }));
+-}
+-/** Auto-expand demo: a one-line explanation with the toggle state. */
+-function SubagentAutoExpandDemo({ value }) {
+-    return (_jsxs(Text, { dimColor: true, children: [value === 'true'
+-                ? 'the fold auto-expands on the first live subagent (once per channel; manual collapsing is respected)'
+-                : 'the fold stays collapsed — expand it manually (alt+m / ctrl+q)'] }));
+-}
+-/** Braille sparkline over a static series (no buffer churn in the demo). */
+-function sparklineValues(values, cells) {
+-    // The live row uses the sparkline module's ring buffer; the demo
+-    // re-derives a static series through the same glyph math.
+-    return sparkline(values, cells);
+-}
++// dsh-overrides 65: the demo widgets moved to SettingsExamples.js (the
++// self-documenting examples wave — booleans show on AND off, enums a
++// mini-fragment per value, everything painted with the live palette).
++export const HUB_FIELD_DEMOS = HUB_EXAMPLES;
+--- /dev/null
++++ b/lib/types/components/SettingsExamples.js
+@@ -0,0 +1,332 @@
++import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
++import { Box, Text, useTheme, useTerminalSize } from '../ui.js';
++import { getTheme } from '../theme.js';
++import { stringWidth } from '../ink/stringWidth.js';
++import { isValidThemeColor } from '../customTheme.js';
++import { subCells } from '../tuiDisplayPrefs.js';
++import { sparkline } from '../sparkline.js';
++import { parseRGB, interpolateColor, toRGBColor } from './Spinner/spinnerUtils.js';
++// dsh-overrides 65: settings/effects self-documenting examples. Every hub
++// field demos itself next to its row while focused: booleans show the on
++// AND off fragments, enums show a mini-fragment per value (the current one
++// highlighted), effects show a STATIC glyph demo of what toggling does.
++// All fragments are painted with the REAL theme palette (raw color values
++// through getTheme), following the dsh-overrides 64 ThemePreview pattern —
++// a self-documenting interface, not a picker of names.
++// Требование (TG-DSH-DEMO-20260924 node 2, дословно): «в /settings и
++// /effects — пояснение значения каждой настройки и типа эффекта + ПРИМЕР
++// рядом (как выглядит вкл/выкл или каждое значение)»; язык EN; «Не пикер
++// из названий, а самодокументирующийся интерфейс». Канон
++// (reports/STATUS-BAR-CANON.md §3 Демо-режим): «По остальным эффектам и
++// настройкам в /settings — то же: пояснение значения каждой настройки и
++// типа эффекта + ПРИМЕР рядом (как выглядит включено/выключено или каждое
++// значение)».
++/**
++ * The powerline wedge glyph (U+E0B0), same as StatusLine's POWERLINE_SEP —
++ * drawn in the color of the PRECEDING segment's fill. Written as an escape
++ * because the private-use glyph is invisible in edits and diffs.
++ */
++const WEDGE = '\uE0B0';
++/** One example row: `<label>: <fragment>`, a hard 1-line cell.
++ *
++ * The label tone carries the semantics: 'on' → success, 'off' → inactive,
++ * 'current' → suggestion + bold (the highlighted enum value the setting
++ * holds RIGHT NOW), plain values → inactive. Different tones are real
++ * ANSI colors, so a probe (and the user) can tell on/off apart at a glance.
++ */
++function ExampleRow({ label, tone, children }) {
++    const color = tone === 'on' ? 'success' : tone === 'current' ? 'suggestion' : 'inactive';
++    return (_jsx(Box, { height: 1, flexShrink: 0, overflow: "hidden", children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: color, bold: tone === 'current', children: `${label}: ` }), children] }) }));
++}
++/** An enum example: one row per value, the CURRENT value highlighted. */
++function ValuesExample({ value, rows }) {
++    return (_jsx(Box, { flexDirection: "column", flexShrink: 0, children: rows.map(row => (_jsx(ExampleRow, { label: row.label, tone: row.value === value ? 'current' : 'value', children: row.fragment }, row.value))) }));
++}
++/** A boolean example: the on fragment vs the off fragment. */
++function OnOffExample({ onFragment, offFragment }) {
++    return (_jsxs(Box, { flexDirection: "column", flexShrink: 0, children: [_jsx(ExampleRow, { label: "on", tone: "on", children: onFragment }), _jsx(ExampleRow, { label: "off", tone: "off", children: offFragment })] }));
++}
++/** The theme's raw palette (the ThemePreview pattern: real color values). */
++function usePalette() {
++    const [themeName] = useTheme();
++    return getTheme(themeName);
++}
++/** A lifted (30% towards white) variant of a palette color, for the
++ * breathing demos where the shimmer key does not exist (ctxBarBreath and
++ * toolCardShimmer lift the base tone — the same math EffectsPanel uses). */
++function liftColor(palette, key) {
++    const base = parseRGB(palette[key]);
++    return base === null ? palette[key] : toRGBColor({
++        r: Math.round(base.r + (255 - base.r) * 0.3),
++        g: Math.round(base.g + (255 - base.g) * 0.3),
++        b: Math.round(base.b + (255 - base.b) * 0.3),
++    });
++}
++/** A gradient across `count` stops between two palette colors (hex- or
++ * rgb()-valued) — the static stand-in for the crawling gradients. */
++function gradientStops(palette, fromKey, toKey, count) {
++    const from = parseRGB(palette[fromKey]);
++    const to = parseRGB(palette[toKey]);
++    if (from === null || to === null)
++        return Array.from({ length: count }, () => palette[fromKey]);
++    return Array.from({ length: count }, (_, i) => toRGBColor(interpolateColor(from, to, count <= 1 ? 0 : i / (count - 1))));
++}
++// ── Plain-field demos (one per settings-backed hub field) ─────────────────
++/** appearance.powerline — one mini status row per style. */
++function PowerlineExample({ value }) {
++    const palette = usePalette();
++    return (_jsx(ValuesExample, { value: value, rows: [
++            {
++                value: 'full',
++                label: 'full',
++                fragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { backgroundColor: palette.claude, color: "inverseText", children: " ✦ glm " }), _jsx(Text, { color: palette.claude, children: WEDGE }), _jsx(Text, { backgroundColor: palette.toolCardBackground, color: "text", children: " ~/dsh " }), _jsx(Text, { color: palette.toolCardBackground, children: WEDGE }), _jsx(Text, { backgroundColor: palette.success, color: "inverseText", children: " ⎇ main " }), _jsx(Text, { color: palette.success, children: WEDGE })] })),
++            },
++            {
++                value: 'plain',
++                label: 'plain',
++                fragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: "claude", children: " ✦ glm " }), _jsx(Text, { dimColor: true, children: "❯" }), _jsx(Text, { color: "text", children: " ~/dsh " }), _jsx(Text, { dimColor: true, children: "❯" }), _jsx(Text, { color: "text", children: " ⎇ main " })] })),
++            },
++            {
++                value: 'off',
++                label: 'off',
++                fragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" }), _jsx(Text, { dimColor: true, children: " · " }), _jsx(Text, { color: "inactiveShimmer", children: "~/…/dsh" })] })),
++            },
++        ] }));
++}
++/** appearance.background — the set color vs the empty (theme) fallback. */
++function BackgroundExample({ value }) {
++    const palette = usePalette();
++    const trimmed = typeof value === 'string' ? value.trim() : '';
++    const valid = trimmed !== '' && isValidThemeColor(trimmed);
++    return (_jsxs(Box, { flexDirection: "column", flexShrink: 0, children: [_jsx(ExampleRow, { label: "set", tone: valid ? 'current' : 'value', children: valid
++                    ? (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { backgroundColor: trimmed, children: "          " }), _jsx(Text, { dimColor: true, children: ` ${trimmed}` })] }))
++                    : _jsx(Text, { dimColor: true, children: "(empty or invalid — falls back to the theme background)" }) }), _jsx(ExampleRow, { label: "empty", tone: !valid ? 'current' : 'value', children: palette.appBackground
++                    ? (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { backgroundColor: palette.appBackground, children: "          " }), _jsx(Text, { dimColor: true, children: " theme background (appBackground)" })] }))
++                    : (_jsx(Text, { wrap: "truncate-end", children: [_jsx(Text, { dimColor: true, children: "(transparent — the terminal's own background; themes may leave appBackground unset)" })] })) })] }));
++}
++/** appearance.animations — what each mode does to the input frame. */
++function AnimationsExample({ value }) {
++    const palette = usePalette();
++    return (_jsx(ValuesExample, { value: value, rows: [
++            {
++                value: 'full',
++                label: 'full',
++                fragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: palette.promptBorder, children: "╭────╮" }), _jsx(Text, { color: palette.promptBorderShimmer, children: " ╭────╮" }), _jsx(Text, { dimColor: true, children: " breathes between the two tones" })] })),
++            },
++            {
++                value: 'custom',
++                label: 'custom',
++                fragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: "success", children: "[✓]" }), _jsx(Text, { dimColor: true, children: " effects you enable  " }), _jsx(Text, { color: "inactive", children: "[  ]" }), _jsx(Text, { dimColor: true, children: " effects you disable (per-effect toggles)" })] })),
++            },
++            {
++                value: 'off',
++                label: 'off',
++                fragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: palette.promptBorder, children: "╭────╮" }), _jsx(Text, { dimColor: true, children: " static — nothing moves anywhere" })] })),
++            },
++        ] }));
++}
++/** appearance.inputBorder — the set color vs the theme promptBorder. */
++function InputBorderExample({ value }) {
++    const palette = usePalette();
++    const trimmed = typeof value === 'string' ? value.trim() : '';
++    const valid = trimmed !== '' && isValidThemeColor(trimmed);
++    return (_jsxs(Box, { flexDirection: "column", flexShrink: 0, children: [_jsx(ExampleRow, { label: "set", tone: valid ? 'current' : 'value', children: valid
++                    ? (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: trimmed, children: "╭──────────╮" }), _jsx(Text, { dimColor: true, children: ` ${trimmed}` })] }))
++                    : _jsx(Text, { dimColor: true, children: "(empty or invalid — falls back to the theme border)" }) }), _jsx(ExampleRow, { label: "empty", tone: !valid ? 'current' : 'value', children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: palette.promptBorder, children: "╭──────────╮" }), _jsx(Text, { dimColor: true, children: " theme promptBorder" })] }) })] }));
++}
++/** statusBar.ctxBarMode — the ⚡ segment shape per mode. The fragment is
++ * the REAL segment look: toolDotWrite background, inverseText fill, dim
++ * track (StatusLine's PowerlineSegment for the ctx rung) — not a loose
++ * dark-on-dark glyph. */
++function CtxBarModeExample({ value }) {
++    const palette = usePalette();
++    const seg = (cells) => {
++        const { fill, track } = subCells(0.69, cells);
++        return (_jsxs(Text, { backgroundColor: palette.toolDotWrite, color: "inverseText", children: [" ⚡", _jsx(Text, { children: fill }), _jsx(Text, { dimColor: true, children: track }), " 69% "] }));
++    };
++    return (_jsx(ValuesExample, { value: value, rows: [
++            { value: 'full', label: 'full', fragment: seg(6) },
++            { value: 'narrow', label: 'narrow', fragment: seg(3) },
++            { value: 'percent-only', label: 'percent-only', fragment: (_jsxs(Text, { backgroundColor: palette.toolDotWrite, color: "inverseText", children: [" ⚡ 69% "] })) },
++        ] }));
++}
++/** appearance.cwdMode — the path shape per mode. */
++function CwdModeExample({ value }) {
++    return (_jsx(ValuesExample, { value: value, rows: [
++            { value: 'full', label: 'full', fragment: _jsx(Text, { color: "text", children: "~/…/deepseek_harness" }) },
++            { value: 'compact', label: 'compact', fragment: _jsx(Text, { color: "text", children: "deepseek_harness" }) },
++        ] }));
++}
++/** statusBar.timer — the ⏱ segment vs its absence. */
++function TimerExample() {
++    const palette = usePalette();
++    return (_jsx(OnOffExample, { onFragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { backgroundColor: palette.toolCardBackgroundDim, color: "claude", children: " 1m 04s " }), _jsx(Text, { dimColor: true, children: " the timer segment (only while a turn runs)" })] })), offFragment: _jsx(Text, { dimColor: true, children: "the segment is not rendered — the row ends after ⚡ ctx" }) }));
++}
++/** appearance.sparkWidth — a braille sparkline at every offered width. */
++function SparkWidthExample({ value }) {
++    const series = Array.from({ length: 40 }, (_, i) => 20 + 18 * Math.sin(i / 4) + 6 * Math.cos(i / 1.7));
++    const widths = [8, 16, 24, 32];
++    return (_jsx(ValuesExample, { value: String(value), rows: widths.map(width => ({
++            value: String(width),
++            label: String(width),
++            fragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: "claude", children: sparkline(series, width) }), _jsx(Text, { dimColor: true, children: ` ${width} cells` })] })),
++        })) }));
++}
++/** statusBar.spending — the ⇄ field vs hidden. */
++function SpendingExample() {
++    return (_jsx(OnOffExample, { onFragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { dimColor: true, children: "⇄ " }), _jsx(Text, { color: "inactiveShimmer", children: "$0.42" }), _jsx(Text, { dimColor: true, children: " · 128r" })] })), offFragment: _jsx(Text, { dimColor: true, children: "the spending field is not rendered" }) }));
++}
++/** statusBar.realModel — the requested → actual substitution. */
++function RealModelExample() {
++    return (_jsx(OnOffExample, { onFragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" }), _jsx(Text, { dimColor: true, children: " → glm-5.3-air" })] })), offFragment: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" }), _jsx(Text, { dimColor: true, children: " (as requested, no substitution)" })] }) }));
++}
++/** statusBar.compactProgress — the ⇣ threshold field vs hidden. */
++function CompactProgressExample() {
++    return (_jsx(OnOffExample, { onFragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { dimColor: true, children: "⇣ " }), _jsx(Text, { color: "warning", children: "48k" }), _jsx(Text, { dimColor: true, children: " left · 76% (escalates near the threshold)" })] })), offFragment: _jsx(Text, { dimColor: true, children: "the threshold field is not rendered" }) }));
++}
++/** statusBar.compactThresholdRatio — the reading at the staged ratio. */
++function CompactThresholdRatioExample({ value }) {
++    const ratio = Number(value);
++    const safe = Number.isFinite(ratio) && ratio > 0 && ratio <= 1 ? ratio : 0.8;
++    const threshold = Math.floor(262_144 * safe);
++    const pct = Math.round((200_000 / threshold) * 100);
++    return (_jsx(ExampleRow, { label: `${safe}`, tone: "value", children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: pct >= 85 ? 'warning' : 'inactiveShimmer', children: `${Math.round((threshold - 200_000) / 1000)}k left · ${pct}%` }), _jsx(Text, { dimColor: true, children: " at 200k/262k used" })] }) }));
++}
++/** statusBar.subagentRows — the fold header with/without the ◐ counter. */
++function SubagentRowsExample() {
++    return (_jsx(OnOffExample, { onFragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { dimColor: true, children: "▾ ✓ " }), _jsx(Text, { color: "toolDotTask", children: "█████" }), _jsx(Text, { dimColor: true, children: " · " }), _jsx(Text, { color: "toolDotTask", children: "◐" }), _jsx(Text, { dimColor: true, children: " agents 2 · jobs 1" })] })), offFragment: (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { dimColor: true, children: "▾ ✓ " }), _jsx(Text, { color: "toolDotTask", children: "█████" }), _jsx(Text, { dimColor: true, children: " · jobs 1 (no ◐ rows, no counter)" })] })) }));
++}
++/** statusBar.subagentAutoExpand — behavior, nothing visual to paint. */
++function SubagentAutoExpandExample() {
++    return (_jsx(OnOffExample, { onFragment: _jsx(Text, { dimColor: true, children: "the fold auto-expands on the first live subagent (once per session)" }), offFragment: _jsx(Text, { dimColor: true, children: "the fold stays collapsed — expand it manually (alt+m / ctrl+q)" }) }));
++}
++/**
++ * The demo registry for the plain (settings-backed) hub fields — what
++ * hubSettings.js hands to the Settings screen as HUB_FIELD_DEMOS.
++ */
++export const HUB_EXAMPLES = {
++    powerline: PowerlineExample,
++    background: BackgroundExample,
++    animations: AnimationsExample,
++    inputBorder: InputBorderExample,
++    ctxBarMode: CtxBarModeExample,
++    cwdMode: CwdModeExample,
++    timer: TimerExample,
++    sparkWidth: SparkWidthExample,
++    spending: SpendingExample,
++    realModel: RealModelExample,
++    compactProgress: CompactProgressExample,
++    compactThresholdRatio: CompactThresholdRatioExample,
++    subagentRows: SubagentRowsExample,
++    subagentAutoExpand: SubagentAutoExpandExample,
++};
++// ── Effect demos (STATIC — honest glyph imitations, no animation clock) ────
++/**
++ * One effect's static on/off demo: `on: <glyph in base><glyph in crest>`
++ * (the two phases the effect breathes between) `off: <glyph in base>` (the
++ * static look). Every fragment is painted with the live theme's real
++ * palette keys — the same keys the animated components use. Under width
++ * pressure the off part drops whole (never a shredded half-glyph).
++ */
++export function EffectExample({ effect }) {
++    const palette = usePalette();
++    const { columns } = useTerminalSize();
++    const budget = Math.max(0, columns - 8); // paddingLeft 4 + card chrome
++    const onGlyphs = effectOnGlyphs(effect, palette);
++    const offGlyph = effectOffGlyph(effect, palette);
++    if (onGlyphs === null || offGlyph === null)
++        return _jsx(Text, { dimColor: true, children: `${effect}: toggle to see it live` });
++    const onWidth = 4 + onGlyphs.reduce((sum, g) => sum + stringWidth(g.text), 0) + (onGlyphs.length - 1);
++    const offWidth = 6 + stringWidth(offGlyph.text);
++    const offFits = onWidth + offWidth <= budget;
++    return (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: "success", children: "on: " }), onGlyphs.map((glyph, index) => (_jsxs(_Fragment, { children: [index > 0 ? ' ' : null, _jsx(Text, { color: glyph.color, ...(glyph.bg === undefined ? {} : { backgroundColor: glyph.bg }), children: glyph.text })] }, index))), offFits ? (_jsxs(_Fragment, { children: [_jsx(Text, { color: "inactive", children: "  off: " }), _jsx(Text, { color: offGlyph.color, ...(offGlyph.bg === undefined ? {} : { backgroundColor: offGlyph.bg }), children: offGlyph.text })] })) : null] }));
++}
++/** The on-look: the breath's two phases (base + crest), or the effect's
++ * own static glyph family when it is not a breath (rainbow cycles,
++ * gradients, sparklines). Null = no demo (unknown effect). */
++function effectOnGlyphs(effect, palette) {
++    switch (effect) {
++        case 'inputBorderBreath':
++            return [{ text: '╭───╮', color: palette.promptBorder }, { text: '╭───╮', color: palette.promptBorderShimmer }];
++        case 'todoPulse':
++            return [{ text: '◐', color: palette.toolDotTask }, { text: '◐', color: palette.todoActiveShimmer ?? palette.promptBorderShimmer }];
++        case 'todoProgressBar':
++            return [{ text: '████▎··', color: palette.toolDotTask }, { text: '████▎··', color: palette.todoActiveShimmer ?? palette.promptBorderShimmer }];
++        case 'headerGlimmer':
++            return [{ text: '✓ header', color: palette.claude }, { text: '✓ header', color: palette.claudeShimmer }];
++        case 'ctxBarBreath':
++            return [
++                { text: ' ⚡██████', color: palette.inverseText, bg: palette.toolDotWrite },
++                { text: ' ⚡██████', color: liftColor(palette, 'inverseText'), bg: palette.toolDotWrite },
++            ];
++        case 'toolCardShimmer':
++            return [{ text: '(npm build)', color: palette.bashBorder }, { text: '(npm build)', color: liftColor(palette, 'bashBorder') }];
++        case 'spinnerRainbow':
++            return ['rainbow_red_shimmer', 'rainbow_yellow_shimmer', 'rainbow_green_shimmer', 'rainbow_blue_shimmer']
++                .map(key => ({ text: '⠿', color: palette[key] ?? palette.claude }));
++        case 'spinnerGlimmer':
++            return [{ text: 'Embel', color: palette.claude }, { text: 'lishing', color: palette.claudeShimmer }];
++        case 'headerTextGradient': {
++            const stops = gradientStops(palette, 'claude', 'success', 5);
++            return ['T', 'a', 's', 'k', 's'].map((letter, i) => ({ text: letter, color: stops[i] }));
++        }
++        case 'subCellBars':
++            return [{ text: subCells(0.69, 6).fill, color: palette.toolDotTask }, { text: subCells(0.69, 6).track, color: palette.toolDotTask }];
++        case 'barGradientFill': {
++            const stops = gradientStops(palette, 'inverseText', 'claudeShimmer', 6);
++            return stops.map(color => ({ text: '█', color, bg: palette.toolDotWrite }));
++        }
++        case 'toolProgressBars':
++            return [{ text: '███████···', color: palette.toolDotTask }, { text: '87%', color: palette.toolDotTask }];
++        case 'sparkTps':
++            return [{ text: '⠷⠿⠇⠶⠤', color: palette.claude }, { text: '42 t/s', color: palette.claude }];
++        case 'sparkCache':
++            return [{ text: '⣷⣯⣟⣾', color: palette.claude }, { text: '61% hits', color: palette.claude }];
++        default:
++            return null;
++    }
++}
++/** The off-look: the static base-tone glyph (what the surface looks like
++ * with the effect disabled). Null = no demo. */
++function effectOffGlyph(effect, palette) {
++    switch (effect) {
++        case 'inputBorderBreath':
++            return { text: '╭───╮', color: palette.promptBorder };
++        case 'todoPulse':
++            return { text: '◐', color: palette.toolDotTask };
++        case 'todoProgressBar':
++            return { text: '████▎··', color: palette.toolDotTask };
++        case 'headerGlimmer':
++            return { text: '✓ header', color: palette.claude };
++        case 'ctxBarBreath':
++            return { text: ' ⚡██████', color: palette.inverseText, bg: palette.toolDotWrite };
++        case 'toolCardShimmer':
++            return { text: '(npm build)', color: palette.bashBorder };
++        case 'spinnerRainbow':
++            return { text: '⠿', color: palette.claude };
++        case 'spinnerGlimmer':
++            return { text: 'Embellishing', color: palette.claude };
++        case 'headerTextGradient':
++            return { text: 'Tasks', color: palette.claude };
++        case 'subCellBars':
++            return { text: '████', color: palette.toolDotTask };
++        case 'barGradientFill':
++            return { text: '██████', color: palette.inverseText, bg: palette.toolDotWrite };
++        case 'toolProgressBars':
++            return { text: '(no mini-bar in tool cards)', color: palette.inactive };
++        case 'sparkTps':
++            return { text: '(no second status line)', color: palette.inactive };
++        case 'sparkCache':
++            return { text: '(no cache sparkline)', color: palette.inactive };
++        default:
++            return null;
++    }
++}
++/** The minimum-metric pair — both rungs, the current one highlighted. The
++ * fragments are the REAL compact rungs (canon §1.8): ctx = the ⚡ percent
++ * rung on its toolDotWrite segment; comp = the ⇣ compact-progress rung in
++ * the warning tone. */
++export function MinimumMetricExample({ current }) {
++    const palette = usePalette();
++    return (_jsxs(Box, { flexDirection: "column", flexShrink: 0, children: [_jsx(ExampleRow, { label: "ctx", tone: current === 'ctx' ? 'current' : 'value', children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { backgroundColor: palette.toolDotWrite, color: "inverseText", children: " ⚡ 41% " }), _jsx(Text, { dimColor: true, children: " the ⚡ percent rung keeps the slot" })] }) }), _jsx(ExampleRow, { label: "comp", tone: current === 'comp' ? 'current' : 'value', children: _jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: "warning", children: "⇣ 31k left · 76%" }), _jsx(Text, { dimColor: true, children: " the ⇣ threshold rung keeps the slot" })] }) })] }));
++}

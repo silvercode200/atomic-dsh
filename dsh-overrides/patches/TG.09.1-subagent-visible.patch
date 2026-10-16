@@ -1,0 +1,70 @@
+# Goal:      субагенты видны: авто-раскрытие + ◐ + alt+m (чинит 09)
+# Family:    TG.09
+# Status:    live
+# Files:     lib/types/components/GoalTodoPanel.js, lib/types/utils/keymap.js
+# Evidence:  reports/subagent-marks-20260917/; facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (subagent marks)
+
+--- a/lib/types/components/GoalTodoPanel.js
++++ b/lib/types/components/GoalTodoPanel.js
+@@ -107,6 +107,11 @@
+         return _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "◐ " });
+     return _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "○ " });
+ }
++// dsh-overrides 27: subagent fold auto-expands once per channel. The flag is
++// a module-level WeakSet (not a component ref) so a Chat/panel remount can
++// not re-trigger the expand — the user's manual collapse after it sticks,
++// and a later second subagent never re-expands (no flap).
++const SUBAGENT_AUTO_EXPANDED = new WeakSet();
+ // dsh-overrides 14: the todo list is a TREE. Core patch 04 lets items carry
+ // an optional recursive `children` array (same shape, depth <= 3); subagent
+ // todos (mirrored per child since patch 13) anchor under the main todo that
+@@ -252,6 +257,23 @@
+         const timer = setInterval(() => setNow(Date.now()), collapsed ? 30000 : 1000);
+         return () => clearInterval(timer);
+     }, [goal, collapsed]);
++    // dsh-overrides 27: subagent fold auto-expands the FIRST time a live
++    // subagent appears in the session. The patch-09 default is collapsed and
++    // the ◐ subagent rows render only expanded, so without this the user
++    // never sees delegation activity (the complaint this patch answers).
++    // Fires at most once per channel (WeakSet above): after it the user owns
++    // the fold — a manual re-collapse stays collapsed. Must sit BEFORE the
++    // early null return (hook order), and it runs even while the panel body
++    // is unmounted (no todos yet) so the expand lands before the rows appear.
++    React.useEffect(() => {
++        if (!collapsed)
++            return;
++        const live = (channel.subagents ?? []).some(agent => agent.status === 'running' || agent.status === 'starting');
++        if (!live || SUBAGENT_AUTO_EXPANDED.has(channel))
++            return;
++        SUBAGENT_AUTO_EXPANDED.add(channel);
++        onToggle?.();
++    });
+     const elapsed = goal !== undefined && startRef.current !== undefined
+         ? formatDuration(now - startRef.current.at)
+         : undefined;
+@@ -379,7 +401,7 @@
+     if (hiddenSubRows > 0)
+         combined.push({ content: t('goal-todo-agent-more', { n: hiddenSubRows }), sub: { live: false, overflow: true } });
+     const rows = walkTree(combined, [], { mainCount: 0, merged: mergedRunning }, []);
+-    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "�� " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "│ " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["✓ ", doneCount, "/", allTodos.length] }), liveAgents.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · agents ", liveAgents.length] })), liveJobs.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · jobs ", liveJobs.length] })), _jsxs(Text, { dimColor: true, children: [" · ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["● ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["→ ○ ", next.content] }) })), !collapsed && (_jsx(Box, { flexDirection: "column", children: rows.map((row, index) => {
++    return (_jsxs(Box, { flexDirection: "column", paddingLeft: 2, paddingRight: 2, children: [goal !== undefined && (_jsxs(Box, { flexDirection: "column", marginBottom: showTodoSection ? 1 : 0, children: [_jsxs(Box, { flexDirection: "row", width: "100%", children: [_jsx(Text, { color: "suggestion", children: "�� " }), _jsx(Box, { flexGrow: 1, flexShrink: 1, children: _jsx(Text, { bold: true, wrap: "truncate", children: goal.objective }) }), _jsx(Box, { flexShrink: 0, marginLeft: 1, children: _jsx(PhaseBadge, { phase: goal.phase, roundsStarted: goal.roundsStarted, maxGoalRounds: goal.maxGoalRounds, elapsed: elapsed }) })] }), goal.phase === 'blocked' && goal.blockedReason !== undefined && (_jsxs(Box, { flexDirection: "row", marginTop: 1, children: [_jsx(Text, { dimColor: true, children: "│ " }), _jsx(Text, { color: "error", wrap: "truncate", children: goal.blockedReason.message })] }))] })), showTodoSection && (_jsxs(Box, { flexDirection: "column", children: [_jsxs(Box, { flexDirection: "row", onClick: onToggle, onMouseEnter: () => setHeaderHovered(true), onMouseLeave: () => setHeaderHovered(false), backgroundColor: headerHovered ? 'userMessageBackgroundHover' : undefined, children: [_jsxs(Text, { dimColor: true, children: [collapsed ? '▸' : '▾', " "] }), _jsxs(Text, { dimColor: true, children: ["✓ ", doneCount, "/", allTodos.length] }), liveAgents.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · ", _jsx(Text, { color: "toolDotTask", wrap: "truncate", children: "◐" }), " agents ", liveAgents.length] })), liveJobs.length > 0 && (_jsxs(Text, { dimColor: true, children: [" · jobs ", liveJobs.length] })), _jsxs(Text, { dimColor: true, children: [" · ", t('goal-todo-fold-hint', { mod: todoFoldMod() })] })] }), collapsed && current !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { color: "suggestion", wrap: "truncate", children: ["● ", current.content] }) })), collapsed && next !== undefined && (_jsx(Box, { flexDirection: "row", paddingLeft: 2, children: _jsxs(Text, { dimColor: true, wrap: "truncate", children: ["→ ○ ", next.content] }) })), !collapsed && (_jsx(Box, { flexDirection: "column", children: rows.map((row, index) => {
+                 // dsh-overrides 14: one flat row list from the tree walk.
+                 // Main rows keep the patch-13 look (dim branches, ● ○ ✓);
+                 // subagent rows are mist-rose with ◐ (works) / ○ (waits for
+--- a/lib/types/utils/keymap.js
++++ b/lib/types/utils/keymap.js
+@@ -174,7 +174,11 @@
+     { id: 'contextPanel', defaults: ['ctrl+p'] },
+     { id: 'showAll', defaults: ['ctrl+e'] },
+     { id: 'redraw', defaults: ['ctrl+l'] },
+-    { id: 'todoFold', defaults: ['ctrl+q'] },
++    // dsh-overrides 27: alt+m joins ctrl+q on todoFold — the original design's
++    // fold key, which the user's muscle memory expects. ctrl+q stays FIRST so
++    // the header hint (todoFoldMod reads effectiveCombos[0]) keeps its stable
++    // "ctrl+q to fold" text; both combos toggle through actionMatches.
++    { id: 'todoFold', defaults: ['ctrl+q', 'alt+m'] },
+     { id: 'expandEditor', defaults: ['ctrl+shift+e'] },
+ ];
+ const DEFAULT_COMBO_MAP = new Map(SHORTCUT_ACTIONS.map(action => [action.id, action.defaults.map(parseCombo).filter((combo) => combo !== undefined)]));

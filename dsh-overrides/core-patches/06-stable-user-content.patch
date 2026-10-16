@@ -1,0 +1,19 @@
+--- a/dist/api/anthropic-messages.js	2026-09-13 21:52:33.457868146 +0300
++++ b/dist/api/anthropic-messages.js	2026-09-13 21:52:45.016193323 +0300
+@@ -836,9 +836,15 @@
+         if (msg.role === "user") {
+             if (typeof msg.content === "string") {
+                 if (msg.content.trim().length > 0) {
++                    // Stable serialization (cache prefix stability, dsh core patch 06):
++                    // render user text as a typed block array, never a plain string.
++                    // Upstream wraps string content into an array only when it is the
++                    // last message (to attach cache_control), so a message flipped
++                    // string -> array between consecutive requests, breaking
++                    // byte-stable prompt prefixes on byte-sensitive cache layers.
+                     params.push({
+                         role: "user",
+-                        content: sanitizeSurrogates(msg.content),
++                        content: [{ type: "text", text: sanitizeSurrogates(msg.content) }],
+                     });
+                 }
+             }

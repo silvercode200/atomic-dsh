@@ -1,0 +1,138 @@
+# Goal:      geometry-trace ALWAYS-ON (~/.dsh-tui/trace/)
+# Family:    TR.04
+# Status:    live
+# Files:     lib/types/ink/geometry-trace.js
+# Evidence:  TG-DSH-REBUILD-20260921 (7.5);
+#            reports/colab-w4green-20260922T170736Z/
+# Upstream:  candidate
+# Added:     2026-09-23 (TG-DSH-REBUILD-20260921, 7.5)
+
+# 61-geometry-trace-always-on (TG-DSH-REBUILD-20260921, узел 7 item 7.5 —
+# «переделай механику» 2026-09-23): geometry-trace ALWAYS-ON по умолчанию.
+# Требование юзера: НИКАКИХ ручных действий (env, команды, тайминг-репорты)
+# для включения телеметрии — «DSH_TUI_GEOMETRY_TRACE не будет НИКОГДА».
+# Механика: трейс геометрии кадров (upstream forensics, issues #421/#433)
+# включён по умолчанию и пишется сам в ~/.dsh-tui/trace/geometry-<дата>.jsonl
+# (дневные файлы, ротация 8МБ + .1, чистка старше 7 дней). К моменту «опять
+# щель, примерно в 14:30» трейс уже на диске с t-таймстампами и pid.
+# DSH_TUI_GEOMETRY_TRACE=0 — kill-switch; =<file> — оверрайд пути (VM-пробы
+# и colab-dsh-geometry-trace.sh сохраняют старое поведение). В строку добавлен
+# pid (мульти-панели zellij пишут в один дневной файл — O_APPEND атомарен
+# по строке, pid разводит процессы при анализе).
+# Файл до патча — upstream-pristine (патч-стек его не трогал): апстримовый
+# env-гейт — единственное, что меняется; консьюмеры (ink.js,
+# render-node-to-output.js) гейтятся экспортируемым GEOMETRY_TRACE_ENABLED.
+--- a/lib/types/ink/geometry-trace.js
++++ b/lib/types/ink/geometry-trace.js
+@@ -1,14 +1,19 @@
+ /**
+  * Geometry forensics — per-frame scroll-geometry trace (issues #421/#433).
+  *
+- * `DSH_TUI_GEOMETRY_TRACE=<file>` appends one JSON line per painted frame:
+- * the frame's trigger cause, every ScrollBox's resolved geometry (scrollTop
+- * before/after follow + drain + virtual clamp, scrollHeight/maxScroll
+- * prev/cur, sticky/shrunk/grew flags, clamp bounds), the MessageList
+- * virtualization window, and aux counters (e.g. PromptInput content rows).
++ * dsh-overrides 61: ALWAYS-ON by default — the user never sets env vars or
++ * runs special commands; by the time a visual bug is reported («опять щель»),
++ * the evidence is already on disk. Default location:
++ * ~/.dsh-tui/trace/geometry-<YYYY-MM-DD>.jsonl (daily files, 8 MB rotation
++ * cap with one .1 generation, files older than 7 days reaped at first flush).
++ * DSH_TUI_GEOMETRY_TRACE=0 is the kill-switch; =<file> overrides the location
++ * (VM probes keep the old explicit behavior).
+  *
+- * Zero overhead when the env is unset: every entry point returns on a
+- * module-const boolean, so the disabled path is a single predictable branch.
++ * Each painted frame appends one JSON line: the frame's trigger cause,
++ * every ScrollBox's resolved geometry (scrollTop before/after follow +
++ * drain + virtual clamp, scrollHeight/maxScroll prev/cur, sticky/shrunk/
++ * grew flags, clamp bounds), the MessageList virtualization window, and
++ * aux counters (e.g. PromptInput content rows).
+  *
+  * Ordering contract: causes and React-side notes (list geometry, aux) land
+  * BETWEEN frames — at event/commit time, before the throttled paint. The
+@@ -16,10 +21,59 @@
+  * and resets. First-noted cause wins (the origin of the frame chain); no
+  * note at paint time means a plain reconciler commit.
+  */
+-import { appendFileSync } from 'node:fs';
+-export const GEOMETRY_TRACE_ENABLED = process.env.DSH_TUI_GEOMETRY_TRACE !== undefined &&
+-    process.env.DSH_TUI_GEOMETRY_TRACE !== '';
+-const TRACE_PATH = process.env.DSH_TUI_GEOMETRY_TRACE ?? '';
++import { appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
++import { dirname, join } from 'node:path';
++import { DATA_DIR } from '../utils/paths.js';
++
++// dsh-overrides 61: always-on geometry trace — «переделай механику»:
++// юзер НИКОГДА не выставляет env и не запускает команды с телеметрией;
++// трейс должен лежать на диске к моменту, когда он скажет «опять щель».
++// DSH_TUI_GEOMETRY_TRACE=0 — kill-switch; =<file> — оверрайд пути (VM-пробы).
++const envTrace = process.env.DSH_TUI_GEOMETRY_TRACE;
++export const GEOMETRY_TRACE_ENABLED = envTrace !== '0' && envTrace !== '';
++const usingDefaultDir = envTrace === undefined || envTrace === '';
++const TRACE_DIR = usingDefaultDir ? join(DATA_DIR, 'trace') : dirname(envTrace);
++const TRACE_PATH = usingDefaultDir
++    ? join(TRACE_DIR, `geometry-${new Date().toISOString().slice(0, 10)}.jsonl`)
++    : envTrace;
++const TRACE_CAP = 8 * 1024 * 1024; // байт на файл до ротации
++const TRACE_KEEP_DAYS = 7; // старше — подчищаем при первом флаше
++let writesSinceCheck = 0;
++let traceReady = false;
++/** Lazy dir init + one-time reap of stale daily files. Never throws. */
++function ensureTraceReady() {
++    if (traceReady)
++        return;
++    traceReady = true;
++    try {
++        mkdirSync(TRACE_DIR, { recursive: true });
++        if (usingDefaultDir) {
++            const cutoff = Date.now() - TRACE_KEEP_DAYS * 86400000;
++            for (const f of readdirSync(TRACE_DIR)) {
++                if (!/^geometry-\d{4}-\d{2}-\d{2}\.jsonl(\.1)?$/.test(f))
++                    continue;
++                const p = join(TRACE_DIR, f);
++                if (statSync(p).mtimeMs < cutoff)
++                    rmSync(p, { force: true });
++            }
++        }
++    }
++    catch {
++        // Unwritable location etc. — forensics must never break rendering.
++    }
++}
++/** Rotate the trace file once it grows past TRACE_CAP (keeps one .1). */
++function rotateIfNeeded() {
++    try {
++        if (statSync(TRACE_PATH).size < TRACE_CAP)
++            return;
++        rmSync(TRACE_PATH + '.1', { force: true });
++        renameSync(TRACE_PATH, TRACE_PATH + '.1');
++    }
++    catch {
++        // Rotation failure is non-fatal: keep appending to the capped file.
++    }
++}
+ let state = {
+     frame: -1,
+     cause: null,
+@@ -65,6 +119,7 @@
+     if (state.frame >= 0) {
+         const line = JSON.stringify({
+             t: new Date().toISOString(),
++            pid: process.pid,
+             frame: state.frame,
+             cause: state.cause ?? 'react-commit',
+             ms: Math.round(durationMs * 10) / 10,
+@@ -73,7 +128,12 @@
+             aux: state.aux
+         });
+         try {
++            ensureTraceReady();
+             appendFileSync(TRACE_PATH, line + '\n');
++            if (++writesSinceCheck >= 512) {
++                writesSinceCheck = 0;
++                rotateIfNeeded();
++            }
+         }
+         catch {
+             // Unwritable path etc. — forensics must never break rendering.

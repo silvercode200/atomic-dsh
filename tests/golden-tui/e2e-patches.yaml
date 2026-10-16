@@ -1,0 +1,574 @@
+# e2e-patches — универсальный termseer-lane E2E-сьют dsh против фейк-модели
+# (golden-tui, TG-DSH-PATCHE2E-20260920 node 2).
+#
+# Покрывает детекторы юзер-дефектов статус-бара/карточек из аудита
+# reports/statusbar-audit-20260918/README.md и реестра
+# reports/statusbar-fix-20260919/USER-BUGS-REGISTRY.md:
+#   D1 DUP-PCT          — пороговый pct встречается в статус-ряду 2 раза
+#                         (исправлен патчем 50: pct только в ⚡-сегменте)
+#   D3 TIMER-CLIP       — таймер-поле обрезано посреди числа («1m 3» из
+#                         «1m 35s»; исправлен патчем 50: целый или дроп)
+#   D4 SEP-COLLAPSE     — хвостовые поля склеены без сепаратора ' · '
+#   D5 ELLIPSIS-NOISE   — шред полей: фрагменты 1-2 символа между сепараторами
+#                         (целое-или-дроп — патчи 50/51)
+#   D7 SUBAGENT-CARD-SHRED — шред заголовка карточки субагента («haik»,
+#                         «runni», «ng») и пустые waterfall-строки «│ │ │»
+#                         (whole-or-drop — патч 53)
+# Плюс: no_freeze (живой стрим, не репетитивный фриз repguard),
+# panels_present (/theme + /effects + /settings), resize_integrity
+# (80/120 без шреда), exit_clean (чистый выход dsh).
+#
+# ПРЕБРЕКВИЗИТЫ (обеспечивает live-драйвер, см. tests/golden-tui/live-smoke.sh):
+#   1. fake-llm уже поднят на 127.0.0.1:8787 (setup проверяет /health);
+#      рекомендуем STREAM_TOTAL_MS=20000-30000 — иначе turn_long живёт
+#      150 c (дефолт) и тест тянется (таймаут выхода это покрывает).
+#   2. Роут fake в ~/.dsh/settings.yaml (llm-pi-ai.providers.fake ->
+#      baseURL http://127.0.0.1:8787, apiKeyEnv FAKE_LLM_KEY, модель
+#      fake-sonnet, contextWindow 262144) и ВЫБРАН как провайдер dsh —
+#      см. tools/dsh-fake-llm/README.md. Если ушёл в живой bg/cli —
+#      wait_for маркеров ответов фейк-сценариев таймаутится (честный red).
+#   3. Профиль dsh-tui существует и dsh в PATH (проверяет setup).
+#
+# АРХИТЕКТУРА (механика program_executor lane=termseer):
+#   - send_line/wait_for/read_screen/send_key/sleep — шаги pane-API;
+#     resize/record/frames — run-команды, интерцептируемые ДО shell.
+#   - Каждый тест = СВОЯ панель (сплит от anchor) + свежие переменные,
+#     поэтому каждый тест сам поднимает dsh и сам выходит.
+#   - dsh запускается send_line-строкой
+#       «dsh --profile dsh-tui && echo "DSH_EX""ITED_OK" || echo "DSH_EX""ITED_FAIL"»:
+#     маркер выхода печатается ТОЛЬКО после смерти dsh (кавычки в echo
+#     прячут маркер от самого эха команды) — wait_for DSH_EXITED_OK
+#     гарантирует и завершение, и exit code 0.
+#   - Ассерты над кадрами — bash-детекторы ПОСЛЕ /exit по ФАЙЛАМ записи
+#     (record start/stop пишет <cwd>/reports/recordings/<name>/frames/*.txt
+#     + meta.jsonl со status_row_text на тик): печать «DETECTOR <name>: ...»
+#     в stdout и честный rc шага; пороги не ослаблены. Переменные с
+#     многострочным экраном в run-команды НЕ подставляются (переносы строк
+#     ломают marker-обёртку) — только assert-шаги ('in'/'not in' держат
+#     multi-line) и файлы записи.
+program: e2e-patches
+lane: termseer
+cwd: /home/user/xeon-Programms/deepseek_harness
+
+vars:
+  dsh_bin: dsh
+  dsh_profile: dsh-tui
+  # запуск dsh: маркер выхода виден на экране ТОЛЬКО после смерти процесса
+  dsh_cmd: "dsh --profile dsh-tui && echo \"DSH_EX\"\"ITED_OK\" || echo \"DSH_EX\"\"ITED_FAIL\""
+  rec: reports/recordings
+  boot_geo: 180x50
+
+setup:
+  # fake-llm жив (curl -sf падает не-нулевым rc, если сервера нет — setup
+  # red, все тесты error: лучше честный фейл, чем 9 таймаутов)
+  - id: fake_llm_health
+    run: "curl -sf http://127.0.0.1:8787/health"
+    capture: fake_health
+    timeout: 30
+  - id: fake_llm_alive
+    assert: "'ok' in $fake_health"
+    message: "fake-llm /health не вернул ok — сервер должен быть поднят live-драйвером (см. live-smoke.sh)"
+  # dsh и профиль на месте
+  - id: dsh_ready
+    run: "command -v dsh >/dev/null && test -d ~/.dsh/profiles/dsh-tui && echo DSH_READY"
+    capture: dsh_check
+    timeout: 30
+  - id: dsh_ready_assert
+    assert: "'DSH_READY' in $dsh_check"
+    message: "dsh в PATH и/или профиль ~/.dsh/profiles/dsh-tui не найден"
+
+tests:
+  # ==============================================================
+  # boot: dsh стартовал — рамка ввода + статус-бар в кадре
+  # ==============================================================
+  - name: boot
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_boot 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - sleep: 2
+      - run: "record stop"
+        timeout: 60
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 60
+      # последний кадр записи = устоявшийся boot-экран
+      - id: det_boot_ready
+        run: >-
+          f="$(ls $rec/e2e_boot/frames/*.txt | sort | tail -1)";
+          top="$(grep -c '╭' "$f")"; bot="$(grep -c '╰' "$f")";
+          logo="$(grep -c 'dsh' "$f")";
+          last="$(grep '[^[:space:]]' "$f" | tail -1 | tr -d '[:space:]')";
+          echo "DETECTOR boot_ready: input_frame_top=$top bottom=$bot logo=$logo status_row_len=${#last} expected: 1/1/>=1/>=10";
+          test "$top" -ge 1 && test "$bot" -ge 1 && test "$logo" -ge 1 && test "${#last}" -ge 10
+        timeout: 30
+
+  # ==============================================================
+  # turn_short: обычный ответ — статус-бар 1 строка, ctx 1 раз, без дубля pct (D1)
+  # ==============================================================
+  - name: turn_short
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_short 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - send_line: "SCENARIO:short привет"
+      - wait_for: "фиктивная локальная модель"
+        timeout: 120
+      - sleep: 3
+      - run: "record stop"
+        timeout: 60
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 60
+      - id: det_answer_short
+        run: >-
+          f="$(ls $rec/e2e_short/frames/*.txt | sort | tail -1)";
+          a="$(grep -c 'фиктивная локальная модель' "$f")";
+          echo "DETECTOR answer_present: short_response=$a expected>=1";
+          test "$a" -ge 1
+        timeout: 30
+      - id: det_status_one_line
+        run: >-
+          f="$(ls $rec/e2e_short/frames/*.txt | sort | tail -1)";
+          n="$(awk '/╰/{seen=1;next} seen && / · /{c++} END{print c+0}' "$f")";
+          echo "DETECTOR status_one_line: footer_rows_with_field_separator=$n expected=1 (2+ = статус-бар разъехался на несколько строк; считаем ниже рамки ввода — заголовок чата тоже несёт « · »)";
+          test "$n" -eq 1
+        timeout: 30
+      - id: det_ctx_once_short
+        run: >-
+          f="$(ls $rec/e2e_short/frames/*.txt | sort | tail -1)";
+          n="$(grep -o 'ctx ' "$f" | wc -l)";
+          echo "DETECTOR ctx_field_once: ctx_fields=$n expected=1 (2+ = дубль поля)";
+          test "$n" -eq 1
+        timeout: 30
+      - id: det_d1_short
+        run: >-
+          f="$(ls $rec/e2e_short/frames/*.txt | sort | tail -1)";
+          row="$(grep '[^[:space:]]' "$f" | tail -1)";
+          dup="$(printf '%s\n' "$row" | grep -oE '[0-9]+(\.[0-9]+)?%' | sort | uniq -d | wc -l)";
+          echo "DETECTOR d1_dup_pct: dup_pct_values=$dup expected=0 | status_row: $row";
+          test "$dup" -eq 0
+        timeout: 30
+
+  # ==============================================================
+  # turn_tools: цикл Bash->Read->Write — имена тулз целиком, статус-бар
+  # без склеек (D4) и без огрызков полей (D5)
+  # ==============================================================
+  - name: turn_tools
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_tools 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - send_line: "SCENARIO:tools запусти цикл инструментов"
+      - wait_for: "Bash"
+        timeout: 120
+      - wait_for: "Цикл инструментов завершён"
+        timeout: 180
+      - sleep: 3
+      - run: "record stop"
+        timeout: 60
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 60
+      - id: det_tool_names_whole
+        run: >-
+          f="$(ls $rec/e2e_tools/frames/*.txt | sort | tail -1)";
+          b="$(grep -ow 'Bash' "$f" | wc -l)"; r="$(grep -ow 'Read' "$f" | wc -l)"; w="$(grep -ow 'Write' "$f" | wc -l)";
+          echo "DETECTOR tool_names_whole: Bash=$b Read=$r Write=$w expected each>=1";
+          test "$b" -ge 1 && test "$r" -ge 1 && test "$w" -ge 1
+        timeout: 30
+      - id: det_d4_tools
+        run: >-
+          f="$(ls $rec/e2e_tools/frames/*.txt | sort | tail -1)";
+          row="$(grep '[^[:space:]]' "$f" | tail -1)";
+          glue="$(printf '%s\n' "$row" | grep -cE '[A-Za-z0-9#]·|·[A-Za-z0-9#]')";
+          echo "DETECTOR d4_sep_collapse: glued_separators=$glue expected=0 | status_row: $row";
+          test "$glue" -eq 0
+        timeout: 30
+      - id: det_d5_tools
+        run: >-
+          f="$(ls $rec/e2e_tools/frames/*.txt | sort | tail -1)";
+          row="$(grep '[^[:space:]]' "$f" | tail -1)";
+          shred="$(printf '%s\n' "$row" | awk -F' · ' '{for(i=1;i<=NF;i++){s=$i; gsub(/…|[ \t]/,"",s); if(length(s)<=2) c++}} END{print c+0}')";
+          tail_part="$(printf '%s' "$row" | awk -F'⚡' '{print (NF>1)?$NF:$0}')";
+          ells="$(printf '%s\n' "$tail_part" | grep -oE '[^ ]*…' | grep -cvE '^(~/|▕)' || true)";
+          echo "DETECTOR d5_field_shred: orphan_field_fragments=$shred ellipsis_tail_orphans=$ells expected: 0/0 (поля целиком или дроп, усечённые огрызки запрещены) | status_row: $row";
+          test "$shred" -eq 0 && test "$ells" -eq 0
+        timeout: 30
+      # D3 TIMER-CLIP: таймер-токен «Nm» обязан нести целые секунды «Nm Ns»
+      # (клип из аудита: «1m 3» из «1m 35s», голое «1m»); пост-51: таймер
+      # целый или дропнут целиком (m-токенов нет вообще)
+      - id: det_d3_tools
+        run: >-
+          f="$(ls $rec/e2e_tools/frames/*.txt | sort | tail -1)";
+          row="$(grep '[^[:space:]]' "$f" | tail -1)";
+          m_total="$(printf '%s\n' "$row" | grep -oE '[0-9]+m' | wc -l)";
+          m_whole="$(printf '%s\n' "$row" | grep -oE '[0-9]+m[[:space:]]*[0-9]+s' | wc -l)";
+          clip=$(( m_total - m_whole ));
+          echo "DETECTOR d3_timer_clip: timer_m_tokens=$m_total whole_m_s=$m_whole clipped=$clip expected clipped=0 | status_row: $row";
+          test "$clip" -eq 0
+        timeout: 30
+
+  # ==============================================================
+  # turn_waves: реальный спавн субагента — карточка целиком (D7),
+  # waterfall не пустой, статус целым словом
+  # ==============================================================
+  - name: turn_waves
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_waves 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - send_line: "SCENARIO:waves запусти волну"
+      - wait_for: "ubagent"
+        timeout: 120
+      - sleep: 2
+      - wait_for: "Волны субагентов выполнены"
+        timeout: 120
+      - sleep: 3
+      - run: "record stop"
+        timeout: 60
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 60
+      - id: det_d7_card
+        run: >-
+          cards="$(cat $rec/e2e_waves/frames/*.txt | grep -h 'Subagent' | sort -u)";
+          n="$(printf '%s' "$cards" | grep -c 'Subagent' || true)";
+          shred="$(printf '%s\n' "$cards" | grep -cwE 'haik|runni|runnin' || true)";
+          frag="$(printf '%s\n' "$cards" | awk -F' · ' '{for(i=1;i<=NF;i++){s=$i; gsub(/…|[ \t]/,"",s); if(length(s)>0 && length(s)<=2 && s !~ /^[0-9]+[sm]/) c++}} END{print c+0}')";
+          echo "DETECTOR d7_subagent_card: cards=$n word_shreds=$shred orphan_fragments=$frag expected: >=1/0/0";
+          echo "--- cards ---"; printf '%s\n' "$cards";
+          test "$n" -ge 1 && test "$shred" -eq 0 && test "$frag" -eq 0
+        timeout: 30
+      - id: det_d7_status
+        run: >-
+          cards="$(cat $rec/e2e_waves/frames/*.txt | grep -h 'Subagent' | sort -u)";
+          total="$(printf '%s\n' "$cards" | grep -c 'Subagent' || true)";
+          whole="$(printf '%s\n' "$cards" | grep -cE '(running|completed|failed|cancelled)$' || true)";
+          echo "DETECTOR d7_subagent_status: status_whole=$whole of $total card_lines expected equal (статус целым словом: running/completed/failed/cancelled)";
+          test "$total" -ge 1 && test "$whole" -eq "$total"
+        timeout: 30
+      - id: det_d7_waterfall
+        run: >-
+          empty="$(cat $rec/e2e_waves/frames/*.txt | grep -cE '^[[:space:]]*(│[[:space:]]*)+$' || true)";
+          echo "DETECTOR d7_waterfall_empty: bare_bar_lines=$empty expected=0 (пустые waterfall-рамки «│ │ │» запрещены; placeholder «  │ …» допустим)";
+          test "$empty" -eq 0
+        timeout: 30
+      - id: det_waves_final
+        run: >-
+          f="$(ls $rec/e2e_waves/frames/*.txt | sort | tail -1)";
+          a="$(grep -c 'Волны субагентов выполнены' "$f")";
+          echo "DETECTOR waves_final_text: final=$a expected>=1";
+          test "$a" -ge 1
+        timeout: 30
+
+  # ==============================================================
+  # turn_ctx90: ctx ~90% окна — ctx-поле 1 раз, pct без дубля (D1)
+  # ==============================================================
+  - name: turn_ctx90
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_ctx90 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - send_line: "SCENARIO:ctx90 проверь контекст"
+      - wait_for: "заполнению контекста"
+        timeout: 120
+      - sleep: 3
+      - run: "record stop"
+        timeout: 60
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 60
+      - id: det_ctx_once_90
+        run: >-
+          f="$(ls $rec/e2e_ctx90/frames/*.txt | sort | tail -1)";
+          n="$(grep -o 'ctx ' "$f" | wc -l)";
+          echo "DETECTOR ctx_field_once: ctx_fields=$n expected=1";
+          test "$n" -eq 1
+        timeout: 30
+      - id: det_d1_ctx90
+        run: >-
+          f="$(ls $rec/e2e_ctx90/frames/*.txt | sort | tail -1)";
+          row="$(grep '[^[:space:]]' "$f" | tail -1)";
+          dup="$(printf '%s\n' "$row" | grep -oE '[0-9]+(\.[0-9]+)?%' | sort | uniq -d | wc -l)";
+          echo "DETECTOR d1_dup_pct: dup_pct_values=$dup expected=0 | status_row: $row";
+          test "$dup" -eq 0
+        timeout: 30
+
+  # ==============================================================
+  # turn_long: длинная генерация + запись кадров — стрим ЖИВОЙ (не фриз
+  # repguard), таймлайн frames diff на месте
+  # ==============================================================
+  - name: turn_long
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_long 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - send_line: "SCENARIO:long пиши длинный текст"
+      - wait_for: "Секция 1"
+        timeout: 60
+      # сэмплы экрана каждые ~2с: кадры обязаны МЕНЯТЬСЯ
+      - sleep: 2
+      - read_screen: true
+        capture: long_s1
+      - sleep: 2
+      - read_screen: true
+        capture: long_s2
+      - sleep: 2
+      - read_screen: true
+        capture: long_s3
+      - sleep: 2
+      - read_screen: true
+        capture: long_s4
+      - run: "record stop"
+        timeout: 60
+      # /exit уходит в input-бокс во время стрима: dsh исполняет слэш-команду
+      # сразу или после конца генерации — таймаут 240 покрывает дефолтный
+      # STREAM_TOTAL_MS=150000, живому драйверу рекомендуется 20-30с
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 240
+      # стрим живой: изменившиеся кадры после бута (ts>4s) — фриз repguard
+      # даёт 0-2, живой стрим на 250мс-сэмплере даёт десятки
+      - id: det_no_freeze
+        run: >-
+          n="$(python3 -c "import json,sys; print(sum(1 for l in open(sys.argv[1]) if (e:=json.loads(l))['changed'] and e['ts']>4))" $rec/e2e_long/meta.jsonl)";
+          echo "DETECTOR no_freeze: changed_frames_after_boot=$n expected>=10 (0-2 = экран замер, фриз повторов)";
+          test "$n" -ge 10
+        timeout: 30
+      # сэмплы экрана различаются: s1 != s4 (стрим двигался и на глазах)
+      - id: det_no_freeze_samples
+        assert: "$long_s1 != $long_s4"
+        message: "сэмплы экрана через ~6с идентичны — стрим не двигался (фриз)"
+      - id: det_long_timeline
+        run: >-
+          ticks="$(wc -l < $rec/e2e_long/meta.jsonl)";
+          changed="$(grep -o '"changed": true' $rec/e2e_long/meta.jsonl | wc -l)";
+          ne="$(grep -o '"last_nonempty_row"' $rec/e2e_long/meta.jsonl | wc -l)";
+          echo "DETECTOR timeline_present: meta_ticks=$ticks changed=$changed last_nonempty_fields=$ne expected: >=20/>=10/>=20 (таймлайн frames diff построен)";
+          test "$ticks" -ge 20 && test "$changed" -ge 10 && test "$ne" -ge 20
+        timeout: 30
+      # структурный таймлайн в stdout шага (rc=0) — как в fake-model-smoke
+      - run: "frames e2e_long diff"
+        timeout: 60
+
+  # ==============================================================
+  # slash_panels: /theme пикер и /effects панель открываются и закрываются
+  # ==============================================================
+  - name: slash_panels
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_panels 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - send_line: "/theme"
+      - wait_for: "Color theme"
+        timeout: 30
+      - read_screen: true
+        capture: screen_theme
+      - send_key: "esc"
+      - sleep: 1
+      - send_key: "esc"
+      - sleep: 1
+      - send_line: "/effects"
+      - wait_for: "inputBorderBreath"
+        timeout: 30
+      - read_screen: true
+        capture: screen_effects
+      - send_key: "esc"
+      - sleep: 1
+      - send_key: "esc"
+      - sleep: 1
+      # /settings: полная панель настроек (группы Оформление/Эффекты/Тема/
+      # Рамка/Спиннеры/Прогресс + нативная Статус-ряд; уникальный лейбл —
+      # «Powerline-ряд», в /effects его нет)
+      - send_line: "/settings"
+      - wait_for: "Powerline-ряд"
+        timeout: 30
+      - read_screen: true
+        capture: screen_settings
+      - send_key: "esc"
+      - sleep: 1
+      - send_key: "esc"
+      - sleep: 1
+      - run: "record stop"
+        timeout: 60
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 60
+      - id: det_panels_theme
+        run: >-
+          n="$(cat $rec/e2e_panels/frames/*.txt | grep -hc 'Color theme' | awk '{s+=$1} END{print s+0}')";
+          sw="$(cat $rec/e2e_panels/frames/*.txt | grep -h '██' | wc -l)";
+          echo "DETECTOR panels_present: theme_picker_frames=$n theme_swatch_lines=$sw expected: >=1/>=5";
+          test "$n" -ge 1 && test "$sw" -ge 5
+        timeout: 30
+      - id: det_panels_effects
+        run: >-
+          n="$(cat $rec/e2e_panels/frames/*.txt | grep -hc 'inputBorderBreath' | awk '{s+=$1} END{print s+0}')";
+          m="$(cat $rec/e2e_panels/frames/*.txt | grep -hc 'spinnerRainbow' | awk '{s+=$1} END{print s+0}')";
+          echo "DETECTOR panels_present: effects_inputBorderBreath=$n effects_spinnerRainbow=$m expected each>=1";
+          test "$n" -ge 1 && test "$m" -ge 1
+        timeout: 30
+      - id: det_panels_settings
+        run: >-
+          n="$(cat $rec/e2e_panels/frames/*.txt | grep -hc 'Powerline-ряд' | awk '{s+=$1} END{print s+0}')";
+          g="$(cat $rec/e2e_panels/frames/*.txt | grep -hc 'Оформление' | awk '{s+=$1} END{print s+0}')";
+          echo "DETECTOR panels_present: settings_powerline_row=$n settings_group_design=$g expected each>=1";
+          test "$n" -ge 1 && test "$g" -ge 1
+        timeout: 30
+      - id: assert_panels_closed
+        run: >-
+          f="$(ls $rec/e2e_panels/frames/*.txt | sort | tail -1)";
+          t="$(grep -c 'Color theme' "$f")"; e="$(grep -c 'inputBorderBreath' "$f")"; s="$(grep -c 'Powerline-ряд' "$f")";
+          echo "DETECTOR panels_closed: theme_in_last_frame=$t effects_in_last_frame=$e settings_in_last_frame=$s expected: 0/0/0 (Esc закрыл панели)";
+          test "$t" -eq 0 && test "$e" -eq 0 && test "$s" -eq 0
+        timeout: 30
+
+  # ==============================================================
+  # resize_integrity: узкие ширины 80/120 — статус-бар без шреда (D4/D5);
+  # дропнутые поля допустимы, огрызки — нет
+  # ==============================================================
+  - name: resize_integrity
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_resize 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - sleep: 1
+      - run: "resize 80x24"
+        timeout: 60
+        capture: resize80
+      - assert: "'now 80x24' in $resize80"
+        message: "resize 80x24 не приземлился — проверка узкой ширины невозможна (окружение lane)"
+      - sleep: 2
+      - run: "resize 120x30"
+        timeout: 60
+        capture: resize120
+      - assert: "'now 120x30' in $resize120"
+        message: "resize 120x30 не приземлился — проверка средней ширины невозможна (окружение lane)"
+      - sleep: 2
+      - run: "resize $boot_geo"
+        timeout: 60
+        capture: resize180
+      - assert: "'now 180x50' in $resize180"
+        message: "resize 180x50 не приземлился"
+      - sleep: 1
+      - run: "record stop"
+        timeout: 60
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 60
+      # рамка ввода = ширина терминала: байты ╭-строки / 3 = колонки
+      # (╭,─,╮ — по 3 байта UTF-8; last 80-wide frame = D4/D5 полигон)
+      - id: det_width80
+        run: >-
+          f80="";
+          for f in $(ls $rec/e2e_resize/frames/*.txt | sort); do
+            w=$(( ($(grep -m1 '╭' "$f" | wc -c) - 1) / 3 ));
+            if [ "$w" -eq 80 ]; then f80="$f"; fi;
+          done;
+          echo "DETECTOR width_landed: frame_80=$f80 expected nonempty (TUI реально перерисовался на 80 колонок)";
+          test -n "$f80"
+        timeout: 60
+      - id: det_d4_d5_w80
+        run: >-
+          f80="";
+          for f in $(ls $rec/e2e_resize/frames/*.txt | sort); do
+            w=$(( ($(grep -m1 '╭' "$f" | wc -c) - 1) / 3 ));
+            if [ "$w" -eq 80 ]; then f80="$f"; fi;
+          done;
+          row="$(grep '[^[:space:]]' "$f80" | tail -1)";
+          glue="$(printf '%s\n' "$row" | grep -cE '[A-Za-z0-9#]·|·[A-Za-z0-9#]')";
+          shred="$(printf '%s\n' "$row" | awk -F' · ' '{for(i=1;i<=NF;i++){s=$i; gsub(/…|[ \t]/,"",s); if(length(s)<=2) c++}} END{print c+0}')";
+          tail_part="$(printf '%s' "$row" | awk -F'⚡' '{print (NF>1)?$NF:$0}')";
+          ells="$(printf '%s\n' "$tail_part" | grep -oE '[^ ]*…' | grep -cvE '^(~/|▕)' || true)";
+          m_total="$(printf '%s\n' "$row" | grep -oE '[0-9]+m' | wc -l)";
+          m_whole="$(printf '%s\n' "$row" | grep -oE '[0-9]+m[[:space:]]*[0-9]+s' | wc -l)";
+          echo "DETECTOR d4_sep_collapse@80: glued=$glue expected=0";
+          echo "DETECTOR d5_field_shred@80: orphans=$shred ellipsis_tail=$ells expected: 0/0 (дроп поля целиком допустим) | status_row: $row";
+          echo "DETECTOR d3_timer_clip@80: clipped=$(( m_total - m_whole )) of $m_total timer tokens expected clipped=0";
+          test "$glue" -eq 0 && test "$shred" -eq 0 && test "$ells" -eq 0 && test "$(( m_total - m_whole ))" -eq 0
+        timeout: 60
+      - id: det_d4_d5_w120
+        run: >-
+          f120="";
+          for f in $(ls $rec/e2e_resize/frames/*.txt | sort); do
+            w=$(( ($(grep -m1 '╭' "$f" | wc -c) - 1) / 3 ));
+            if [ "$w" -eq 120 ]; then f120="$f"; fi;
+          done;
+          row="$(grep '[^[:space:]]' "$f120" | tail -1)";
+          glue="$(printf '%s\n' "$row" | grep -cE '[A-Za-z0-9#]·|·[A-Za-z0-9#]')";
+          shred="$(printf '%s\n' "$row" | awk -F' · ' '{for(i=1;i<=NF;i++){s=$i; gsub(/…|[ \t]/,"",s); if(length(s)<=2) c++}} END{print c+0}')";
+          tail_part="$(printf '%s' "$row" | awk -F'⚡' '{print (NF>1)?$NF:$0}')";
+          ells="$(printf '%s\n' "$tail_part" | grep -oE '[^ ]*…' | grep -cvE '^(~/|▕)' || true)";
+          m_total="$(printf '%s\n' "$row" | grep -oE '[0-9]+m' | wc -l)";
+          m_whole="$(printf '%s\n' "$row" | grep -oE '[0-9]+m[[:space:]]*[0-9]+s' | wc -l)";
+          echo "DETECTOR d4_sep_collapse@120: glued=$glue expected=0";
+          echo "DETECTOR d5_field_shred@120: orphans=$shred ellipsis_tail=$ells expected: 0/0 | status_row: $row";
+          echo "DETECTOR d3_timer_clip@120: clipped=$(( m_total - m_whole )) of $m_total timer tokens expected clipped=0";
+          test "$glue" -eq 0 && test "$shred" -eq 0 && test "$ells" -eq 0 && test "$(( m_total - m_whole ))" -eq 0
+        timeout: 60
+
+  # ==============================================================
+  # exit_clean: /exit завершает процесс, рамка ввода исчезает
+  # ==============================================================
+  - name: exit_clean
+    steps:
+      - run: "resize $boot_geo"
+        timeout: 60
+      - run: "record start e2e_exit 250"
+        timeout: 60
+      - send_line: "$dsh_cmd"
+      - wait_for: "dsh-TUI"
+        timeout: 90
+      - sleep: 1
+      - run: "record stop"
+        timeout: 60
+      - send_line: "/exit"
+      - wait_for: "DSH_EXITED_OK"
+        timeout: 60
+      # выхода достаточно: маркер печатается только после смерти dsh (exit 0);
+      # экран-ассерт здесь не нужен — dsh может оставить последний кадр на
+      # экране (inline-режим), это не признак живого процесса
+      # процесса dsh не осталось ([i]-трюк: pgrep не матчит сам детектор)
+      - id: det_exit_clean
+        run: >-
+          p="$(pgrep -fc 'dsh --profile dsh-tu[i]' || true)"; p="${p:-0}";
+          echo "DETECTOR exit_clean: leftover_dsh_processes=$p expected=0";
+          test "$p" -eq 0
+        timeout: 30
+
+teardown:
+  - run: "echo E2E_PATCHES_TEARDOWN_DONE"
+    timeout: 30

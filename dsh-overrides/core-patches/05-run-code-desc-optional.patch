@@ -1,0 +1,44 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1096,9 +1096,9 @@
+ 				required: true,
+ 				description: TYPESCRIPT_FLAVOR.codeDescription
+ 			},
++			// dsh-overrides core 05: run_code description optional (TG-DSH-RUNCODE-DESC-20260911)
+ 			description: {
+ 				type: "string",
+-				required: true,
+ 				description: RUN_CODE_DESCRIPTION_PARAM_DESCRIPTION
+ 			}
+ 		},
+@@ -1125,7 +1125,8 @@
+ 			}
+ 		},
+ 		async execute(args, exec) {
+-			if (args.description.trim().length === 0) throw new Error("invalid description: expected a non-empty string");
++			// dsh-overrides core 05: run_code description optional — пустой/отсутствующий
++			// description больше не ошибка (дефолтный титул катится в presentCall)
+ 			const runtime = requireRuntime();
+ 			const runController = new AbortController();
+ 			const onOuterAbort = () => {
+@@ -1357,7 +1358,8 @@
+ 		},
+ 		presentCall: (args) => ({
+ 			card: "generic",
+-			title: args.description,
++			// dsh-overrides core 05: run_code description optional — дефолтный титул
++			title: (args.description ?? "").trim() || "(no description)",
+ 			kind: "execute",
+ 			rawInput: args.code
+ 		})
+@@ -1374,9 +1376,9 @@
+ 				required: true,
+ 				description: resolveFlavor(peekRuntime).codeDescription
+ 			},
++			// dsh-overrides core 05: run_code description optional (TG-DSH-RUNCODE-DESC-20260911)
+ 			description: {
+ 				type: "string",
+-				required: true,
+ 				description: RUN_CODE_DESCRIPTION_PARAM_DESCRIPTION
+ 			}
+ 		})

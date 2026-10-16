@@ -1,0 +1,19 @@
+# Goal:      пустой экран старта: flexGrow транскрипт-ряда rows>0
+# Family:    CH.01
+# Status:    live
+# Files:     lib/types/screens/Chat.js
+# Evidence:  reports/patch-stack-revision-20260921/facts/patches-A.md
+# Upstream:  not-applicable
+# Added:     2026-09-04, W1 — стартовый реестр 0.10.0-beta.4
+
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -2956,7 +2956,7 @@
+                         seekRow(anchorUserRowId);
+                     else
+                         handle?.scrollToBottom();
+-                } })), _jsxs(Box, { flexDirection: "row", flexGrow: 1, flexShrink: 1, width: "100%", children: [_jsxs(ScrollBox, { ref: setHandle, flexDirection: "column", flexGrow: 1, flexShrink: 1, stickyScroll: true, children: [_jsx(LogoHeader, { model: channel.model, effort: channel.reasoningEffort, cwd: channel.displayCwd, whale: channel.whale, 
++                } })), _jsxs(Box, { flexDirection: "row", flexGrow: channel.rows.length > 0 ? 1 : 0, flexShrink: 1, width: "100%", children: [_jsxs(ScrollBox, { ref: setHandle, flexDirection: "column", flexGrow: 1, flexShrink: 1, stickyScroll: true, children: [_jsx(LogoHeader, { model: channel.model, effort: channel.reasoningEffort, cwd: channel.displayCwd, whale: channel.whale, 
+                                 // Resuming a long session skips the ~3.4s opening animation: it
+                                 // keeps firing low-frequency React commits that compete with the
+                                 // transcript mount batches (and the first wheel events) for the

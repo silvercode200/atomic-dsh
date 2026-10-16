@@ -1,0 +1,37 @@
+# Goal:      intro-панель: invalidate+reanchor первого кадра
+# Family:    CH.03
+# Status:    live
+# Files:     lib/types/screens/Chat.js
+# Evidence:  reports/intro-align-frames/; facts/patches-C.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (wave-b)
+
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -688,6 +688,26 @@
+         ink?.reanchorViewport();
+     }, []);
+     /**
++     * dsh-overrides 32: the panel MOUNT re-anchors the frame. The startup
++     * context panel appears asynchronously (loadedContext lands after boot)
++     * and grows the main-screen transcript by the same +2 rows as the
++     * Ctrl+P toggle above — but nothing invalidated the renderer for the
++     * mount, so the first frames after startup could reuse stale blank
++     * cells (misaligned intro row, stray blank lines — until the next full
++     * repaint, e.g. the /-menu). Mirror the toggle's invalidate/reanchor on
++     * the false→true transition of loadedContextVisible.
++     */
++    const loadedContextShownRef = React.useRef(loadedContextVisible);
++    React.useEffect(() => {
++        const wasShown = loadedContextShownRef.current;
++        loadedContextShownRef.current = loadedContextVisible;
++        if (!wasShown && loadedContextVisible) {
++            const ink = instances.get(process.stdout) ?? instances.values().next().value;
++            ink?.invalidatePrevFrame();
++            ink?.reanchorViewport();
++        }
++    }, [loadedContextVisible]);
++    /**
+      * Click-to-act targets: the Ink instance's hyperlink-open callback (wired
+      * in the effect below) resolves every clickable target the transcript
+      * renders — http(s) links open the browser, `dsh-file:`/`file://` paths

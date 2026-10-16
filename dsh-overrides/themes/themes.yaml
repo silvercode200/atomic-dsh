@@ -1,0 +1,259 @@
+# Манифест тем dsh-tui, генерируемых из iTerm2-Color-Schemes (MIT).
+# Поля: id (kebab-case, имя файла темы), displayName, base (dark|light),
+# sourceFile (файл в sources/), family (семейство палитр).
+# Замены против research-отбора (404/дубликаты в датасете):
+#   Solarized Dark -> iTerm2 Solarized Dark; Solarized Light -> iTerm2 Solarized Light
+#   Ayu Dark -> Ayu; One Dark (дубль Atom One Dark) -> Darkside
+#   Synthwave 84 -> Synthwave; Eldritch -> Wombat; Nightfly -> Hybrid
+#   Iceberg -> Iceberg Dark; Zenbones -> Zenbones Dark
+themes:
+  - id: catppuccin-mocha
+    displayName: Catppuccin Mocha
+    base: dark
+    sourceFile: Catppuccin Mocha.itermcolors
+    family: Catppuccin
+  - id: catppuccin-macchiato
+    displayName: Catppuccin Macchiato
+    base: dark
+    sourceFile: Catppuccin Macchiato.itermcolors
+    family: Catppuccin
+  - id: catppuccin-frappe
+    displayName: Catppuccin Frappe
+    base: dark
+    sourceFile: Catppuccin Frappe.itermcolors
+    family: Catppuccin
+  - id: tokyonight-storm
+    displayName: TokyoNight Storm
+    base: dark
+    sourceFile: TokyoNight Storm.itermcolors
+    family: TokyoNight
+  - id: tokyonight-night
+    displayName: TokyoNight Night
+    base: dark
+    sourceFile: TokyoNight Night.itermcolors
+    family: TokyoNight
+  - id: tokyonight-moon
+    displayName: TokyoNight Moon
+    base: dark
+    sourceFile: TokyoNight Moon.itermcolors
+    family: TokyoNight
+  - id: gruvbox-dark
+    displayName: Gruvbox Dark
+    base: dark
+    sourceFile: Gruvbox Dark.itermcolors
+    family: Gruvbox
+  - id: gruvbox-dark-hard
+    displayName: Gruvbox Dark Hard
+    base: dark
+    sourceFile: Gruvbox Dark Hard.itermcolors
+    family: Gruvbox
+  - id: gruvbox-material-dark
+    displayName: Gruvbox Material Dark
+    base: dark
+    sourceFile: Gruvbox Material Dark.itermcolors
+    family: Gruvbox
+  - id: dracula
+    displayName: Dracula
+    base: dark
+    sourceFile: Dracula.itermcolors
+    family: Dracula
+  - id: nord
+    displayName: Nord
+    base: dark
+    sourceFile: Nord.itermcolors
+    family: Nord
+  - id: solarized-dark
+    displayName: iTerm2 Solarized Dark
+    base: dark
+    sourceFile: iTerm2 Solarized Dark.itermcolors
+    family: Solarized
+  - id: rose-pine
+    displayName: Rose Pine
+    base: dark
+    sourceFile: Rose Pine.itermcolors
+    family: Rosé Pine
+  - id: rose-pine-moon
+    displayName: Rose Pine Moon
+    base: dark
+    sourceFile: Rose Pine Moon.itermcolors
+    family: Rosé Pine
+  - id: everforest-dark-hard
+    displayName: Everforest Dark Hard
+    base: dark
+    sourceFile: Everforest Dark Hard.itermcolors
+    family: Everforest
+  - id: kanagawa-wave
+    displayName: Kanagawa Wave
+    base: dark
+    sourceFile: Kanagawa Wave.itermcolors
+    family: Kanagawa
+  - id: kanagawa-dragon
+    displayName: Kanagawa Dragon
+    base: dark
+    sourceFile: Kanagawa Dragon.itermcolors
+    family: Kanagawa
+  - id: night-owl
+    displayName: Night Owl
+    base: dark
+    sourceFile: Night Owl.itermcolors
+    family: Night Owl
+  - id: ayu-dark
+    displayName: Ayu Dark
+    base: dark
+    sourceFile: Ayu.itermcolors
+    family: Ayu
+  - id: darkside
+    displayName: Darkside
+    base: dark
+    sourceFile: Darkside.itermcolors
+    family: Darkside
+  - id: one-half-dark
+    displayName: One Half Dark
+    base: dark
+    sourceFile: One Half Dark.itermcolors
+    family: One Half
+  - id: synthwave
+    displayName: Synthwave
+    base: dark
+    sourceFile: Synthwave.itermcolors
+    family: Synthwave
+  - id: cyberpunk
+    displayName: Cyberpunk
+    base: dark
+    sourceFile: Cyberpunk.itermcolors
+    family: Cyberpunk
+  - id: everblush
+    displayName: Everblush
+    base: dark
+    sourceFile: Everblush.itermcolors
+    family: Everblush
+  - id: wombat
+    displayName: Wombat
+    base: dark
+    sourceFile: Wombat.itermcolors
+    family: Wombat
+  - id: horizon
+    displayName: Horizon
+    base: dark
+    sourceFile: Horizon.itermcolors
+    family: Horizon
+  - id: iceberg-dark
+    displayName: Iceberg Dark
+    base: dark
+    sourceFile: Iceberg Dark.itermcolors
+    family: Iceberg
+  - id: jellybeans
+    displayName: Jellybeans
+    base: dark
+    sourceFile: Jellybeans.itermcolors
+    family: Jellybeans
+  - id: moonfly
+    displayName: Moonfly
+    base: dark
+    sourceFile: Moonfly.itermcolors
+    family: Moonfly
+  - id: hybrid
+    displayName: Hybrid
+    base: dark
+    sourceFile: Hybrid.itermcolors
+    family: Hybrid
+  - id: srcery
+    displayName: Srcery
+    base: dark
+    sourceFile: Srcery.itermcolors
+    family: Srcery
+  - id: sonokai
+    displayName: Sonokai
+    base: dark
+    sourceFile: Sonokai.itermcolors
+    family: Sonokai
+  - id: shades-of-purple
+    displayName: Shades of Purple
+    base: dark
+    sourceFile: Shades Of Purple.itermcolors
+    family: Shades of Purple
+  - id: tomorrow-night
+    displayName: Tomorrow Night
+    base: dark
+    sourceFile: Tomorrow Night.itermcolors
+    family: Tomorrow
+  - id: tomorrow-night-eighties
+    displayName: Tomorrow Night Eighties
+    base: dark
+    sourceFile: Tomorrow Night Eighties.itermcolors
+    family: Tomorrow
+  - id: zenbones-dark
+    displayName: Zenbones Dark
+    base: dark
+    sourceFile: Zenbones Dark.itermcolors
+    family: Zenbones
+  - id: zenwritten-dark
+    displayName: Zenwritten Dark
+    base: dark
+    sourceFile: Zenwritten Dark.itermcolors
+    family: Zenwritten
+  - id: bluloco-dark
+    displayName: Bluloco Dark
+    base: dark
+    sourceFile: Bluloco Dark.itermcolors
+    family: Bluloco
+  - id: doom-one
+    displayName: Doom One
+    base: dark
+    sourceFile: Doom One.itermcolors
+    family: Doom
+  - id: monokai-pro
+    displayName: Monokai Pro
+    base: dark
+    sourceFile: Monokai Pro.itermcolors
+    family: Monokai
+  - id: atom-one-dark
+    displayName: Atom One Dark
+    base: dark
+    sourceFile: Atom One Dark.itermcolors
+    family: Atom
+  - id: challenger-deep
+    displayName: Challenger Deep
+    base: dark
+    sourceFile: Challenger Deep.itermcolors
+    family: Challenger Deep
+  - id: hardcore
+    displayName: Hardcore
+    base: dark
+    sourceFile: Hardcore.itermcolors
+    family: Hardcore
+  - id: jetbrains-darcula
+    displayName: JetBrains Darcula
+    base: dark
+    sourceFile: JetBrains Darcula.itermcolors
+    family: JetBrains
+  - id: andromeda
+    displayName: Andromeda
+    base: dark
+    sourceFile: Andromeda.itermcolors
+    family: Andromeda
+  - id: catppuccin-latte
+    displayName: Catppuccin Latte
+    base: light
+    sourceFile: Catppuccin Latte.itermcolors
+    family: Catppuccin
+  - id: tokyonight-day
+    displayName: TokyoNight Day
+    base: light
+    sourceFile: TokyoNight Day.itermcolors
+    family: TokyoNight
+  - id: solarized-light
+    displayName: iTerm2 Solarized Light
+    base: light
+    sourceFile: iTerm2 Solarized Light.itermcolors
+    family: Solarized
+  - id: rose-pine-dawn
+    displayName: Rose Pine Dawn
+    base: light
+    sourceFile: Rose Pine Dawn.itermcolors
+    family: Rosé Pine
+  - id: zenwritten-light
+    displayName: Zenwritten Light
+    base: light
+    sourceFile: Zenwritten Light.itermcolors
+    family: Zenwritten

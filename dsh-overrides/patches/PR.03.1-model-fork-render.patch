@@ -1,0 +1,324 @@
+# Goal:      фриз после /model-форка: paint watchdog + bindAgent
+# Family:    PR.03
+# Status:    live
+# Files:     lib/types/ink/ink.js, lib/types/dsh-adapter/channel.js,
+#            lib/types/screens/Chat.js
+# Evidence:  reports/model-fork-repro-20260913/; facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-13, W3 (model-fork freeze)
+
+--- a/lib/types/ink/ink.js
++++ b/lib/types/ink/ink.js
+@@ -221,6 +221,12 @@
+             leading: true,
+             trailing: true
+         });
++        // dsh-overrides 22: `lastPaintAt` records the last onRender time so the
++        // channel-side paint watchdog (see channel.js) can detect a render
++        // stall after a `/model` session fork (React commits stop while the
++        // event loop, the session log and the channel store keep running; the
++        // screen stays on the last streamed frame forever).
++        this.lastPaintAt = Date.now();
+         // Ignore last render after unmounting a tree to prevent empty output before exit
+         this.isUnmounted = false;
+         // Unmount when process exits
+@@ -563,6 +569,7 @@
+         this.drainTimer = setTimeout(this.renderNow, FRAME_INTERVAL_MS >> 2);
+     }
+     onRender() {
++        this.lastPaintAt = Date.now();
+         if (this.isUnmounted || this.isPaused) {
+             return;
+         }
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -6,6 +6,14 @@
+ import { isReservedCredentialRef } from './credentialRefGuard.js';
+ import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from './recap.js';
+ import { swallowNestedUpdateOverflow } from '../ink/update-overflow-guard.js';
++// dsh-overrides 22: paint watchdog deps (see the watchdog comment near
++// bindAgent) — the live ink instance for stall detection and the reconciler's
++// discreteUpdates for a sync-priority commit that bypasses a stalled
++// DefaultLane scheduler queue.
++import instances from '../ink/instances.js';
++import reconciler from '../ink/reconciler.js';
++const PAINT_WATCHDOG_INTERVAL_MS = 1000;
++const PAINT_STALL_THRESHOLD_MS = 2500;
+ import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js';
+ import { fetchBalance } from '../deepseekBalance.js';
+ import { isPeakHour } from '../deepseekPricing.js';
+@@ -29,7 +37,7 @@
+ import { composePreset, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf, serviceForAgent } from './presets.js';
+ import { resolveCompatiblePreset, rosterOf } from './preset-resolution.js';
+ import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js';
+-import { existsSync, statSync, writeFileSync } from 'node:fs';
++import { appendFileSync, existsSync, statSync, writeFileSync } from 'node:fs';
+ import { logForDebugging } from '../utils/debug.js';
+ import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js';
+ import { extractMentions } from '../utils/mentions.js';
+@@ -1035,6 +1043,8 @@
+         ctx.logger.warn(`dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`);
+     }
+     const listeners = new Set();
++    /** LS_TRACE heartbeat throttle (see emit). */
++    let lastLsTraceAt = 0;
+     /** True while a frame-aligned stream notification is pending (emitStream). */
+     let streamNotifyScheduled = false;
+     /** True while subagent assistant/chunk deltas have deferred their
+@@ -2450,13 +2460,32 @@
+         jobControl,
+         subscribe(listener) {
+             listeners.add(listener);
++            // dsh-overrides 22: LS_TRACE diagnostic (env-gated) — listener-set
++            // churn and zero-listener emits are the first suspects when a
++            // post-fork screen freezes; log them to /tmp/dsh-ls-trace.log.
++            if (process.env.DSH_TUI_LS_TRACE) {
++                try { appendFileSync('/tmp/dsh-ls-trace.log', `${Date.now()} subscribe size=${listeners.size}\n`); } catch { }
++            }
+             return () => {
+                 listeners.delete(listener);
++                if (process.env.DSH_TUI_LS_TRACE) {
++                    try { appendFileSync('/tmp/dsh-ls-trace.log', `${Date.now()} unsubscribe size=${listeners.size}\n`); } catch { }
++                }
+             };
+         },
+         emit() {
+             foldRows(state.rows, MAX_ROWS, foldCursor);
+             state.version += 1;
++            if (process.env.DSH_TUI_LS_TRACE) {
++                // dsh-overrides 22: LS_TRACE — zero-listener emits are a hard
++                // signal; otherwise a 1/s heartbeat proves the channel (and
++                // this emit path) stays alive across a screen freeze.
++                const now = Date.now();
++                if (listeners.size === 0 || now - lastLsTraceAt > 1000) {
++                    lastLsTraceAt = now;
++                    try { appendFileSync('/tmp/dsh-ls-trace.log', `${now} emit v=${state.version} ls=${listeners.size} working=${state.working}\n`); } catch { }
++                }
++            }
+             // #185 self-heal: a forceStoreRerender enqueue can surface React's
+             // nested-update overflow here; React resets the counter on throw, so
+             // absorb it and let the next wakeup render with a clean slate.
+@@ -3963,6 +3992,15 @@
+             catch (error) {
+                 state.notify(t('model-switch-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 });
+             }
++            // dsh-overrides 22: the rebind below mutates shared channel state
++            // (rows, trackers, the bound agent) while `switchModel` itself has
++            // no try/catch — a throw mid-swap used to escape as an unhandled
++            // rejection AND leave the channel half-rebond. Wrap it: on failure
++            // restore the previous agent binding so the screen keeps rendering
++            // the live conversation, then rethrow for the Chat-side toast
++            // (switchModelRecorded catches it — see dsh-overrides 22 in Chat.js).
++            const previousHandle = currentHandle;
++            try {
+             streaming = undefined;
+             reasoning = undefined;
+             // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
+@@ -4052,6 +4090,19 @@
+                 });
+             }
+             return true;
++            }
++            catch (error) {
++                // dsh-overrides 22: rebind failed mid-swap — restore the
++                // previous agent binding so the screen stays live instead of
++                // freezing on the half-swapped channel, then surface the error.
++                if (previousHandle !== undefined && currentHandle !== previousHandle) {
++                    agent = previousHandle.agent;
++                    currentHandle = previousHandle;
++                    bindAgent();
++                }
++                state.emit();
++                throw error;
++            }
+         },
+         listEfforts,
+         setEffort,
+@@ -6811,8 +6862,6 @@
+     const bindAgent = () => {
+         agentBindingGeneration += 1;
+         state.agentBindingGeneration = agentBindingGeneration;
+-        for (const dispose of agentSubscriptions)
+-            dispose();
+         stopActivityTick();
+         // Cancel state and deferred interrupt delivery belong to one bound agent.
+         // A replacement must neither inherit the old latch nor receive its queued
+@@ -6863,9 +6912,26 @@
+         }
+         void applyPreferredEffort();
+         refreshMode();
+-        agentSubscriptions = [
+-            installModelSelection(agent.ctx, selection),
+-            ctx.on('agent/status', ({ agent: subject, status }) => {
++        // dsh-overrides 22: build the replacement subscription set into a local
++        // array and only dispose the previous set after it exists (see the
++        // switchModel comment) — a throw while building used to leave the
++        // channel with zero live listeners while `agent` already pointed at
++        // the forked agent: typing followed the fork, its answers never
++        // rendered. Review fix: `track` records each disposer the MOMENT its
++        // array element evaluates, so a mid-literal throw still leaves every
++        // already-created subscription disposable in the catch below — `ctx`
++        // is the shared host context (one per channel, reused across
++        // rebinds), so a leaked listener would keep firing for every future
++        // agent of this channel.
++        const freshSubscriptions = [];
++        const track = (dispose) => {
++            freshSubscriptions.push(dispose);
++            return dispose;
++        };
++        try {
++        const built = [
++            track(installModelSelection(agent.ctx, selection)),
++            track(ctx.on('agent/status', ({ agent: subject, status }) => {
+                 if (subject !== agent)
+                     return;
+                 state.status = status;
+@@ -6873,15 +6939,15 @@
+                 if (status === 'idle')
+                     reconcileRetiredProjection('idle');
+                 state.emit();
+-            }),
+-            ctx.on('agent/disposed', ({ agent: subject }) => {
++            })),
++            track(ctx.on('agent/disposed', ({ agent: subject }) => {
+                 if (subject !== agent)
+                     return;
+                 state.status = 'disposed';
+                 stopActivityTick();
+                 reconcileRetiredProjection('disposed');
+                 state.emit();
+-            }),
++            })),
+             // Pending delivery is driven by the agent inbox: a claimed message
+             // has landed in a turn (steer → step boundary, followup → next turn);
+             // a discarded one was dropped by a cancel or withdrawn via Alt+Up.
+@@ -6889,7 +6955,7 @@
+             // single-payload notifications `{ agent, message }`; `inserted` is not
+             // handled here because trackPending already registered the preview
+             // synchronously at submit time.
+-            (() => {
++            track((() => {
+                 const retirePending = (payload) => {
+                     if (payload.agent !== agent)
+                         return;
+@@ -6909,8 +6975,8 @@
+                     for (const dispose of disposers)
+                         dispose();
+                 };
+-            })(),
+-            ctx.on('session/event', (session, event) => {
++            })()),
++            track(ctx.on('session/event', (session, event) => {
+                 // The currently bound main session always wins. SubagentActivityStore
+                 // intentionally retains Session-object mappings for completed cards;
+                 // if one of those sessions is later adopted/resumed as the main agent,
+@@ -6992,11 +7058,11 @@
+                     state.emitStream();
+                 else
+                     state.emit();
+-            }),
++            })),
+             // Subagent lifecycle tracking. The dsh-subagent service publishes scoped
+             // observe-only events as `subagent/start` and `subagent/end`; the parent
+             // Agent is carried by Cordis scope dispatch, not included in the payload.
+-            (() => {
++            track((() => {
+                 const disposeStart = ctx.on('subagent/start', (info) => {
+                     if (!info?.id)
+                         return;
+@@ -7058,9 +7124,78 @@
+                     disposeStart();
+                     disposeEnd();
+                 };
+-            })(),
++            })()),
+         ];
++        // dsh-overrides 22: the new set is complete — swap it in, disposing the
++        // previous agent's subscriptions only now (no zero-listener window).
++        for (const dispose of agentSubscriptions)
++            dispose();
++        agentSubscriptions = freshSubscriptions;
++        }
++        catch (error) {
++            // dsh-overrides 22 (review fix): building the fresh set threw
++            // mid-literal — dispose everything `track` already captured (the
++            // host-ctx listeners above); the PREVIOUS subscriptions are
++            // untouched (the swap happens only after a complete build), and
++            // the caller's switchModel catch restores the previous agent
++            // binding on top.
++            for (const dispose of freshSubscriptions) {
++                try {
++                    dispose();
++                }
++                catch {
++                    // disposal must not mask the original error
++                }
++            }
++            throw error;
++        }
+     };
++    // dsh-overrides 22: paint watchdog (model-fork render freeze, self-heal).
++    // After a `/model` session fork the store's version wakeups can stop
++    // reaching React mid-turn (observed 2026-09-13: DefaultLane updates stop
++    // being scheduled — the event loop, the session log and this channel keep
++    // running, but the screen stays on the last streamed frame forever; a
++    // forceUpdate on the root App is NOT enough — React bails out on the
++    // identical children element). The watchdog polls the ink instance's
++    // lastPaintAt: past the stall threshold it bumps the store version inside
++    // discreteUpdates (sync-priority commit that re-renders Chat with fresh
++    // rows) and paints synchronously. Until the scheduler recovers it keeps
++    // the screen alive at one commit per stall window (~2.5s) instead of a
++    // permanent freeze.
++    const paintWatchdogTimer = setInterval(() => {
++        const ink = instances.values().next().value;
++        if (ink === undefined || ink.isUnmounted || ink.isPaused)
++            return;
++        if (Date.now() - (ink.lastPaintAt ?? Date.now()) < PAINT_STALL_THRESHOLD_MS)
++            return;
++        // dsh-overrides 22 (review fix): idle-guard — an idle screen paints
++        // nothing by design, so lastPaintAt keeps aging on a healthy idle
++        // TUI; forcing emit+renderNow there re-rendered the whole tree every
++        // ~3s forever. Only a stall DURING active work (streaming turn or a
++        // working flag stuck mid-turn) is a freeze worth resuscitating.
++        if (!state.working && streaming === undefined)
++            return;
++        try {
++            if (process.env.DSH_TUI_WD_TRACE) {
++                try { appendFileSync('/tmp/mfk-watchdog.log', `${Date.now()} wd fire silence=${Date.now() - (ink.lastPaintAt ?? 0)}ms\n`); } catch { }
++            }
++            reconciler.discreteUpdates(() => {
++                state.emit();
++            });
++            ink.renderNow();
++        }
++        catch (error) {
++            // Self-heal only: never let the watchdog take the UI down. But
++            // never swallow silently either — #185 surfacing here means the
++            // oscillation ratchet is live; log it under the trace flag so
++            // PTY repro runs capture the mechanism.
++            if (process.env.DSH_TUI_WD_TRACE) {
++                try { appendFileSync('/tmp/mfk-watchdog.log', `${Date.now()} wd error: ${error instanceof Error ? error.message : String(error)}\n`); } catch { }
++            }
++        }
++    }, PAINT_WATCHDOG_INTERVAL_MS);
++    if (typeof paintWatchdogTimer.unref === 'function')
++        paintWatchdogTimer.unref();
+     // Subagents inherit provider/model from AgentOptions, but resumed TUI
+     // agents can legitimately carry their route only in persisted request
+     // headers. Their child scopes do not share this channel's per-agent
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -336,6 +336,13 @@
+                 channel.notify(t('model-switched', { name }));
+             setModelRecents(recordModelUse({ provider, id }));
+             return ok;
++        }).catch((error) => {
++            // dsh-overrides 22: a mid-swap rebind failure rethrows after
++            // restoring the old binding — show it instead of a silent
++            // unhandled rejection with a frozen-looking screen.
++            const message = error instanceof Error ? error.message : String(error);
++            channel.notify(t('model-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 });
++            return false;
+         });
+     };
+     /** `/skills` 技能目录（issue #204）：null = 注册表快照在途。 */

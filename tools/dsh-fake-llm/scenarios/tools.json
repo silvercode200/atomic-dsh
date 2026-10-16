@@ -1,0 +1,56 @@
+{
+  "name": "tools",
+  "description": "Цикл из трёх tool_use (Bash -> Read -> Write) с финальным текстом",
+  "usage": {
+    "input_tokens": 2100,
+    "output_tokens": 950,
+    "cache_read_input_tokens": 1600,
+    "cache_creation_input_tokens": 400
+  },
+  "segments": [
+    {
+      "thinking": [
+        "Нужен цикл инструментов. ",
+        "Сначала посмотрю содержимое каталога, затем прочитаю файл и запишу в него результат. ",
+        "После tool_result каждого шага продолжу сценарий."
+      ]
+    },
+    {
+      "text": [
+        "Сейчас выполню три инструмента по очереди: Bash, Read, Write — и подведу итог.\n"
+      ]
+    },
+    {
+      "tool_use": {
+        "name": "Bash",
+        "input": {
+          "command": "ls -la /tmp",
+          "description": "Показать содержимое /tmp"
+        }
+      }
+    },
+    {
+      "tool_use": {
+        "name": "Read",
+        "input": {
+          "file_path": "/tmp/dsh-fake-llm-demo.txt"
+        }
+      }
+    },
+    {
+      "tool_use": {
+        "name": "Write",
+        "input": {
+          "file_path": "/tmp/dsh-fake-llm-demo.txt",
+          "content": "dsh-fake-llm demo file\nwritten by fake tool cycle\n"
+        }
+      }
+    },
+    {
+      "text": [
+        "Цикл инструментов завершён: Bash посмотрел каталог, Read прочитал файл, Write записал демо-файл в /tmp. ",
+        "Тулз-карты и прогресс должны были отрендериться в TUI, input_tokens рос с каждым tool_result."
+      ]
+    }
+  ]
+}

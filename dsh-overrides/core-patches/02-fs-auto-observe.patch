@@ -1,0 +1,191 @@
+--- a/lib/index.js	2026-09-10 18:02:24.672511051 +0300
++++ b/lib/index.js	2026-09-10 18:55:00.310138490 +0300
+@@ -284,6 +284,58 @@
+ 	};
+ }
+ //#endregion
++// dsh-overrides core 02: fs auto re-observe + one-shot retry (TG-DSH-CLEAN-20260910 node 3)
++// FS_NOT_OBSERVED (write/edit по файлу, который этот процесс никогда не читал —
++// рестарт сессии, субагент с seed-историей родителя) и FS_STALE_VERSION (файл
++// менялся «внешне», напр. собственным bash/gofmt агента через run_code) раньше
++// валили инструмент наглухо. Теперь: пере-наблюдение теми же stat/read
++// примитивами, что у read-инструмента, и ОДИН ретрай. CAS сохраняется
++// (replaceIfVersion по свеженаблюдённой версии) — конкурентный писатель всё
++// равно фейлит ретрай, циклов нет (one-shot).
++/** FsError codes eligible for the auto re-observe + one-shot retry. */
++const AUTO_OBSERVE_RETRYABLE_CODES = /* @__PURE__ */ new Set(["FS_NOT_OBSERVED", "FS_STALE_VERSION"]);
++/** Marker notes for results that succeeded via the auto re-observe retry. */
++const AUTO_OBSERVE_NOTES = {
++	/** never observed in this process (session restart / subagent seed) */
++	FS_NOT_OBSERVED: "file was not previously read; original content in diff",
++	/** observed, but changed externally since (e.g. the agent's own bash) */
++	FS_STALE_VERSION: "file changed since it was read; auto re-read, original content in diff"
++};
++/** Whether an (already sandbox-mapped) error is retryable via re-observation. */
++function isAutoObserveRetryable(error) {
++	return typeof error?.code === "string" && AUTO_OBSERVE_RETRYABLE_CODES.has(error.code);
++}
++/**
++* Re-record an authoritative observation for `target` exactly the way the read
++* tool does: one stat for the version, then the text/binary guard (full
++* readText for small files, an 8 KiB stream sample for large ones, mirroring
++* read's stream path). Binary or unreadable files abort the retry and surface
++* their own honest error.
++* @param ctx - the plugin context (fs service + event bus).
++* @param target - the already-resolved write/edit target.
++* @param exec - the tool-execution context (agent, signal).
++* @returns true when the file is present and now observed; false when it
++*   vanished (the caller surfaces the original error).
++*/
++async function autoObserveTarget(ctx, target, exec) {
++	const info = await ctx.fs.stat(target, exec.signal);
++	if (info === void 0) {
++		ctx.emit("fs/observed", target, { kind: "absent" }, exec);
++		return false;
++	}
++	if (info.type !== "file") return false;
++	if (info.size === void 0 || info.size < STREAM_MIN_SIZE) await ctx.fs.readText(target, exec.signal);
++	else {
++		const stream = await ctx.fs.streamText(target, exec.signal);
++		let sampled = 0;
++		for await (const chunk of stream) {
++			sampled += chunk.length;
++			if (sampled >= 8192) break;
++		}
++	}
++	ctx.emit("fs/observed", target, { kind: "present", version: info.version }, exec);
++	return true;
++}
+ //#region lib/types/read.js
+ /**
+ * Model-facing UTF-8 read. It performs one provider stat for type, routing, and observed version,
+@@ -637,12 +689,18 @@
+ 					after: {
+ 						type: "string",
+ 						required: true
++					},
++					// dsh-overrides core 02: optional note on the auto re-observe retry path
++					note: {
++						type: "string"
+ 					}
+ 				}
+ 			},
+ 			render: (_args, value) => [{
+ 				type: "text",
+-				text: formatWriteOutput(value.path, value)
++				// dsh-overrides core 02: surface the auto-observe note to the model
++				text: value.note === void 0 ? formatWriteOutput(value.path, value) : `${formatWriteOutput(value.path, value)}
++<note>${value.note}</note>`
+ 			}],
+ 			presentationMeta: (args, value) => ({ diffs: value.before === null ? [] : computeHunkDiffs(args.file_path, value.before, value.after).map(({ path, oldText, newText }) => ({
+ 				path,
+@@ -656,10 +714,30 @@
+ 			const target = await ctx.fs.resolve(input.filePath, sessionResolveOptions(exec, input.filePath, sandboxPolicy?.workspaceRoot));
+ 			const intent = await ctx.waterfall("fs/write-intent", target, exec, () => void 0);
+ 			let outcome;
++			// dsh-overrides core 02: auto re-observe + ONE retry on FS_NOT_OBSERVED /
++			// FS_STALE_VERSION (session restart / subagent seed / external mutation).
++			let autoNote;
+ 			try {
+ 				outcome = await ctx.fs.writeText(target, input.content, intent, exec.signal, sandboxPolicy);
+ 			} catch (error) {
+-				throw remediateFsError(sandbox.mapError(error, sandboxPolicy));
++				const mapped = sandbox.mapError(error, sandboxPolicy);
++				if (!isAutoObserveRetryable(mapped)) throw remediateFsError(mapped);
++				let observed;
++				try {
++					observed = await autoObserveTarget(ctx, target, exec);
++				} catch (readError) {
++					throw remediateFsError(sandbox.mapError(readError, sandboxPolicy));
++				}
++				// vanished file: only the stale-read case can proceed (fresh intent =
++				// createIfAbsent, still no-clobber); otherwise surface the original error
++				if (!observed && mapped.code !== "FS_STALE_VERSION") throw remediateFsError(mapped);
++				autoNote = AUTO_OBSERVE_NOTES[mapped.code];
++				const retryIntent = await ctx.waterfall("fs/write-intent", target, exec, () => void 0);
++				try {
++					outcome = await ctx.fs.writeText(target, input.content, retryIntent, exec.signal, sandboxPolicy);
++				} catch (retryError) {
++					throw remediateFsError(sandbox.mapError(retryError, sandboxPolicy));
++				}
+ 			}
+ 			ctx.emit("fs/observed", target, {
+ 				kind: "present",
+@@ -669,7 +747,8 @@
+ 				path: target.displayPath,
+ 				operation: outcome.operation,
+ 				before: outcome.before,
+-				after: outcome.after
++				after: outcome.after,
++				...autoNote !== void 0 ? { note: autoNote } : {}
+ 			};
+ 		},
+ 		presentCall(args) {
+@@ -786,12 +865,18 @@
+ 					after: {
+ 						type: "string",
+ 						required: true
++					},
++					// dsh-overrides core 02: optional note on the auto re-observe retry path
++					note: {
++						type: "string"
+ 					}
+ 				}
+ 			},
+ 			render: (args, value) => [{
+ 				type: "text",
+-				text: formatEditOutput(value.path, args.replace_all ?? false)
++				// dsh-overrides core 02: surface the auto-observe note to the model
++				text: value.note === void 0 ? formatEditOutput(value.path, args.replace_all ?? false) : `${formatEditOutput(value.path, args.replace_all ?? false)}
++<note>${value.note}</note>`
+ 			}],
+ 			presentationMeta: (args, value) => ({ diffs: computeHunkDiffs(args.file_path, value.before, value.after).map(({ path, oldText, newText }) => ({
+ 				path,
+@@ -804,6 +889,9 @@
+ 			const sandboxPolicy = await sandbox.resolvePolicy("edit", args, exec);
+ 			const target = await ctx.fs.resolve(input.filePath, sessionResolveOptions(exec, input.filePath, sandboxPolicy?.workspaceRoot));
+ 			let outcome;
++			// dsh-overrides core 02: auto re-observe + ONE retry on FS_NOT_OBSERVED /
++			// FS_STALE_VERSION (session restart / subagent seed / external mutation).
++			let autoNote;
+ 			try {
+ 				const intent = await ctx.waterfall("fs/edit-intent", target, exec, () => void 0);
+ 				outcome = await ctx.fs.editText(target, {
+@@ -812,7 +900,26 @@
+ 					replaceAll: input.replaceAll
+ 				}, intent, exec.signal, sandboxPolicy);
+ 			} catch (error) {
+-				throw remediateFsError(sandbox.mapError(error, sandboxPolicy));
++				const mapped = sandbox.mapError(error, sandboxPolicy);
++				if (!isAutoObserveRetryable(mapped)) throw remediateFsError(mapped);
++				let observed;
++				try {
++					observed = await autoObserveTarget(ctx, target, exec);
++				} catch (readError) {
++					throw remediateFsError(sandbox.mapError(readError, sandboxPolicy));
++				}
++				if (!observed) throw remediateFsError(mapped);
++				autoNote = AUTO_OBSERVE_NOTES[mapped.code];
++				const intent = await ctx.waterfall("fs/edit-intent", target, exec, () => void 0);
++				try {
++					outcome = await ctx.fs.editText(target, {
++						oldString: input.oldString,
++						newString: input.newString,
++						replaceAll: input.replaceAll
++					}, intent, exec.signal, sandboxPolicy);
++				} catch (retryError) {
++					throw remediateFsError(sandbox.mapError(retryError, sandboxPolicy));
++				}
+ 			}
+ 			ctx.emit("fs/observed", target, {
+ 				kind: "present",
+@@ -821,7 +928,8 @@
+ 			return {
+ 				path: target.displayPath,
+ 				before: outcome.before,
+-				after: outcome.after
++				after: outcome.after,
++				...autoNote !== void 0 ? { note: autoNote } : {}
+ 			};
+ 		},
+ 		presentCall(args) {

@@ -1,0 +1,267 @@
+# Goal:      Palette saturation option (muted/moderate/vivid) in /settings
+#            with live demo. Three exported pure functions (rgbToHsl,
+#            hslToRgb, adjustSaturation) in spinnerUtils.js; schema entry
+#            (saturationSetting) + normalizer in tuiDisplayPrefs.js; hub
+#            field in hubSettings.js; SaturationExample demo in
+#            SettingsExamples.js; application point in customTheme.js
+#            buildTheme() — adjustSaturation applied to all parsable color
+#            keys after {...base, ...spec.colors} merge + shimmer restore.
+#            Multiplier: muted=0.6, moderate=1.0 (no-op default), vivid=1.4.
+#            Non-color values (ansi:, ansi256(), non-strings) untouched.
+# Family:    TH.05
+# Status:    live
+# Files:     lib/types/components/Spinner/spinnerUtils.js,
+#            lib/types/tuiDisplayPrefs.js,
+#            lib/types/components/hubSettings.js,
+#            lib/types/components/SettingsExamples.js,
+#            lib/types/customTheme.js
+# Evidence:  tests/th05-saturation.test.mjs, VISUAL-CANON.md §3
+# Upstream:  not-applicable
+# Added:     2026-10-16 (TG-DSH-REBUILD-20260921, node 7, TH.05)
+
+--- a/lib/types/components/Spinner/spinnerUtils.js
++++ b/lib/types/components/Spinner/spinnerUtils.js
+@@ -117,3 +117,78 @@
+     rgbParseCache.set(colorStr, parsed);
+     return parsed;
+ }
++// DSH-P75-SATURATION-OPTION: palette saturation control (TH.05.1).
++// Three exported pure functions for RGB↔HSL conversion and saturation
++// adjustment — used by customTheme.buildTheme() to apply the user's
++// saturation preference (muted/moderate/vivid) across all rgb() palette
++// keys. Standard MDN algorithm; all HSL components in [0,1].
++/**
++ * Convert RGB (0-255 per channel) to HSL (all in [0,1]).
++ * @param r - Red channel (0-255).
++ * @param g - Green channel (0-255).
++ * @param b - Blue channel (0-255).
++ * @returns {{h:number, s:number, l:number}} HSL with h,s,l in [0,1].
++ */
++export function rgbToHsl(r, g, b) {
++    const rd = r / 255, gd = g / 255, bd = b / 255;
++    const max = Math.max(rd, gd, bd), min = Math.min(rd, gd, bd);
++    const l = (max + min) / 2;
++    let h = 0, s = 0;
++    if (max !== min) {
++        const d = max - min;
++        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
++        if (max === rd)
++            h = ((gd - bd) / d + (gd < bd ? 6 : 0)) / 6;
++        else if (max === gd)
++            h = ((bd - rd) / d + 2) / 6;
++        else
++            h = ((rd - gd) / d + 4) / 6;
++    }
++    return { h, s, l };
++}
++/**
++ * Convert HSL (all in [0,1]) to RGB (0-255 per channel, rounded).
++ * @param h - Hue (0-1).
++ * @param s - Saturation (0-1).
++ * @param l - Lightness (0-1).
++ * @returns {{r:number, g:number, b:number}} RGB with channels in [0,255].
++ */
++export function hslToRgb(h, s, l) {
++    let r, g, b;
++    if (s === 0) {
++        r = g = b = l;
++    } else {
++        const hue2rgb = (p, q, t) => {
++            if (t < 0) t += 1;
++            if (t > 1) t -= 1;
++            if (t < 1 / 6) return p + (q - p) * 6 * t;
++            if (t < 1 / 2) return q;
++            if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
++            return p;
++        };
++        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
++        const p = 2 * l - q;
++        r = hue2rgb(p, q, h + 1 / 3);
++        g = hue2rgb(p, q, h);
++        b = hue2rgb(p, q, h - 1 / 3);
++    }
++    return {
++        r: Math.round(r * 255),
++        g: Math.round(g * 255),
++        b: Math.round(b * 255),
++    };
++}
++/**
++ * Adjust the saturation of an RGB color by a multiplier.
++ * Gray colors (s=0) are unaffected regardless of multiplier.
++ * @param rgbObj - {{r:number, g:number, b:number}} input color (0-255).
++ * @param multiplier - Saturation multiplier (0.6=muted, 1.0=identity, 1.4=vivid).
++ * @returns {{r:number, g:number, b:number}} Adjusted RGB (0-255, rounded).
++ */
++export function adjustSaturation(rgbObj, multiplier) {
++    const hsl = rgbToHsl(rgbObj.r, rgbObj.g, rgbObj.b);
++    if (hsl.s === 0)
++        return { r: rgbObj.r, g: rgbObj.g, b: rgbObj.b };
++    const adjustedS = Math.max(0, Math.min(1, hsl.s * multiplier));
++    return hslToRgb(hsl.h, adjustedS, hsl.l);
++}
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -94,6 +94,10 @@
+ // effect on (default); 'custom' = per-effect opt-out through the
+ // `effects` map; 'off' = the whole wave static.
+ const ANIMATIONS_STYLES = new Set(['full', 'custom', 'off']);
++// DSH-P75-SATURATION-OPTION: the palette saturation modes (TH.05.1).
++// muted=0.6 multiplier (softer), moderate=1.0 (identity, default),
++// vivid=1.4 (intensified). Applied by customTheme.buildTheme().
++export const SATURATION_MODES = new Set(['muted', 'moderate', 'vivid']);
+ // dsh-overrides 66: `animations: false` (boolean) is the legacy form of
+ // the knob — the user settings.yaml predates the string enum. Map it
+ // instead of dropping it: the dropped boolean fell through undefined to
+@@ -125,6 +129,17 @@
+ // section — the contract changes ONLY for the boolean form.
+ export const animationsSetting = Schema.union(['full', 'custom', 'off',
+     Schema.transform(Schema.boolean(), normalizeAnimationsStyle)]);
++// DSH-P75-SATURATION-OPTION: settings-schema field for appearance.saturation.
++// Plain string union (schemastery 3.18.1: Schema.union accepts string arrays
++// as literal enum — same pattern as animationsSetting above).
++export const saturationSetting = Schema.union(['muted', 'moderate', 'vivid']);
++/** Normalize an appearance.saturation value to the enum, else undefined. */
++export function normalizeSaturationStyle(value) {
++    return typeof value === 'string' && SATURATION_MODES.has(value) ? value : undefined;
++}
+ /**
+  * dsh-overrides 36: resolve the app background color. Theme-first
+  * design: the theme's `appBackground` key is the usual source (the
+@@ -252,6 +267,7 @@
+     const input = value;
+     normalized.powerline = normalizePowerlineStyle(input.powerline);
+     normalized.animations = normalizeAnimationsStyle(input.animations);
++    normalized.saturation = normalizeSaturationStyle(input.saturation);
+     normalized.effects = normalizeEffectsMap(input.effects);
+     // dsh-overrides 36: the app background color (same validation forms
+     // as inputBorder — isValidThemeColor).
+--- a/lib/types/components/hubSettings.js
++++ b/lib/types/components/hubSettings.js
+@@ -118,6 +118,21 @@
+                 ],
+                 hint: 'The LIVE42-wave gate: full — everything on (except opt-in sparklines), custom — each Effects toggle decides, off — fully static. Env DSH_TUI_ANIMATIONS/REDUCED_MOTION takes precedence.',
+             },
++            // DSH-P75-SATURATION-OPTION: palette saturation control (TH.05.1).
++            {
++                path: ['appearance', 'saturation'],
++                label: 'Palette',
++                kind: 'select',
++                group: 'hub-appearance',
++                demo: 'saturation',
++                demoLines: 3,
++                options: [
++                    { value: 'muted', label: 'Muted (softened)' },
++                    { value: 'moderate', label: 'Moderate (default)' },
++                    { value: 'vivid', label: 'Vivid (intensified)' },
++                ],
++                hint: 'Color saturation — muted softens, vivid intensifies. Applied live across the whole palette.',
++            },
+             // ── Тема ──
+             {
+                 path: ['hub', 'theme'],
+--- a/lib/types/components/SettingsExamples.js
++++ b/lib/types/components/SettingsExamples.js
+@@ -5,7 +5,7 @@
+ import { isValidThemeColor } from '../customTheme.js';
+ import { subCells } from '../tuiDisplayPrefs.js';
+ import { sparkline } from '../sparkline.js';
+-import { parseRGB, interpolateColor, toRGBColor } from './Spinner/spinnerUtils.js';
++import { parseRGB, interpolateColor, toRGBColor, adjustSaturation } from './Spinner/spinnerUtils.js';
+ // dsh-overrides 65: settings/effects self-documenting examples. Every hub
+ // field demos itself next to its row while focused: booleans show the on
+ // AND off fragments, enums show a mini-fragment per value (the current one
+@@ -200,6 +200,29 @@
+ function SubagentAutoExpandExample() {
+     return (_jsx(OnOffExample, { onFragment: _jsx(Text, { dimColor: true, children: "the fold auto-expands on the first live subagent (once per session)" }), offFragment: _jsx(Text, { dimColor: true, children: "the fold stays collapsed — expand it manually (alt+m / ctrl+q)" }) }));
+ }
++// DSH-P75-SATURATION-OPTION: palette saturation demo (TH.05.1).
++// Shows 4 color swatches (text, claude, success, inactive) at each of
++// the 3 saturation levels through usePalette() + adjustSaturation.
++// The current value is highlighted (same ValuesExample pattern).
++function SaturationExample({ value }) {
++    const palette = usePalette();
++    const levels = [
++        { value: 'muted', label: 'muted', multiplier: 0.6 },
++        { value: 'moderate', label: 'moderate', multiplier: 1.0 },
++        { value: 'vivid', label: 'vivid', multiplier: 1.4 },
++    ];
++    const swatchKeys = ['text', 'claude', 'success', 'inactive'];
++    const rows = levels.map(level => ({
++        value: level.value,
++        label: level.label,
++        fragment: (_jsxs(Text, { wrap: "truncate-end", children: swatchKeys.map(key => {
++            const base = parseRGB(palette[key]);
++            const color = base === null ? palette[key] : toRGBColor(adjustSaturation(base, level.multiplier));
++            return _jsx(Text, { backgroundColor: color, children: "  " }, key);
++        }) })),
++    }));
++    return _jsx(ValuesExample, { value: value, rows: rows });
++}
+ /**
+  * The demo registry for the plain (settings-backed) hub fields — what
+  * hubSettings.js hands to the Settings screen as HUB_FIELD_DEMOS.
+@@ -208,6 +231,7 @@
+     powerline: PowerlineExample,
+     background: BackgroundExample,
+     animations: AnimationsExample,
++    saturation: SaturationExample,
+     inputBorder: InputBorderExample,
+     ctxBarMode: CtxBarModeExample,
+     cwdMode: CwdModeExample,
+--- a/lib/types/customTheme.js
++++ b/lib/types/customTheme.js
+@@ -23,6 +23,8 @@
+ import { join } from 'node:path';
+ import { getTheme, AUTO_THEME_NAME } from './theme.js';
+ import { DATA_DIR } from './utils/paths.js';
++// DSH-P75-SATURATION-OPTION: saturation control (TH.05.1).
++import { parseRGB, toRGBColor, adjustSaturation } from './components/Spinner/spinnerUtils.js';
+ /** The base palettes a user theme may overlay. */
+ export const THEME_BASE_NAMES = ['light', 'dark', 'dark-ansi'];
+ /** The directory user theme files live in (~/.dsh-tui/themes). */
+@@ -246,14 +248,42 @@
+     }
+     return restored;
+ }
++// DSH-P75-SATURATION-OPTION: apply the user's saturation preference to a
++// built palette. Each value parseRGB can parse (rgb(r,g,b) or #hex) gets
++// its saturation scaled; non-color values (ansi:, ansi256(), etc.) pass
++// through untouched. multiplier: muted=0.6, vivid=1.4, moderate/other=1.0.
++const SATURATION_MULTIPLIERS = { muted: 0.6, moderate: 1.0, vivid: 1.4 };
++/**
++ * Apply saturation adjustment to every parsable color value in a palette.
++ * @param palette - The built theme palette (key → color string).
++ * @param saturation - 'muted' | 'moderate' | 'vivid' | undefined.
++ * @returns A new palette with adjusted color values (or the original if no-op).
++ */
++function applySaturationToPalette(palette, saturation) {
++    const multiplier = SATURATION_MULTIPLIERS[saturation] ?? 1.0;
++    if (multiplier === 1.0)
++        return palette;
++    const result = { ...palette };
++    for (const key of Object.keys(result)) {
++        const value = result[key];
++        if (typeof value !== 'string')
++            continue;
++        const rgb = parseRGB(value);
++        if (rgb !== null)
++            result[key] = toRGBColor(adjustSaturation(rgb, multiplier));
++    }
++    return result;
++}
+ /**
+  * Overlay a spec's overrides onto its base palette.
+  * @param spec - Validated theme spec.
++ * @param saturation - Optional saturation mode ('muted'|'moderate'|'vivid').
+  * @returns The full concrete palette.
+  */
+-export function buildTheme(spec) {
++export function buildTheme(spec, saturation) {
+     const base = getTheme(spec.base);
+-    return restoreShimmerFirmware({ ...base, ...spec.colors }, base);
++    const merged = restoreShimmerFirmware({ ...base, ...spec.colors }, base);
++    return applySaturationToPalette(merged, saturation);
+ }
+ /**
+  * Resolve a user theme name to its full palette, cached after first load.

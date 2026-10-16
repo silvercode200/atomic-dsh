@@ -1,0 +1,472 @@
+program: dsh-blank-flicker
+# suiteVersion: 2 — убрано: SOC schema не принимает extra inputs (verify_no_steps_executed).
+# Версия сьюта документирована в комментариях (v2, TG-DSH-BLANK-FLICKER-20260918 node 1).
+# dsh-blank-flicker — изолированный blank-flicker-only suite (Вариант B плана
+# reports/blank-flicker-plan-20261014.md §c). Отделяет детекторы blank_spike /
+# descent / flicker / scroll_jitter от шумных v1/v3/v4 тестов (effects,
+# slash_menu, theme_picker, compaction), которые давали 20×FAIL (70% — app-баг
+# патча 38, 30% — инфра-каскад, 20% — setup crash; blank/descent/flicker
+# срабатывали ТОЛЬКО при полном infra collapse = мёртвая панель = bash-кадр).
+#
+# Ключевые отличия от dsh-tui-live.yaml v2:
+#   1. suiteVersion: 2 — машиночитаемое поле (§2.3 golden suite версионирование)
+#   2. fake-llm (SCENARIO:long) вместо реальной модели — тайминги модели НЕ
+#      влияют на layout/render баги (это не timing-dependent баги)
+#   3. Геометрии: 47×23 (mks4 trace юзера) + 80×50 + 120×50 (стенд) + ≤39col
+#      (Bug-3 viewport-explosion из mks4-20260928)
+#   4. Сэмплы: 100мс интервал, 300 кадров (30с окно) — плотнее v2 (250мс/60кадров)
+#   5. health-check перед каждым test-блоком: pane_dead → exit 2 (INFRA, не FAIL)
+#   6. Артефакты: frames + pin-trace + boot.err → /root/dsh-bf-frames/
+#      (драйвер colab-dsh-live-check.sh --suite выгружает в reports/)
+#   7. НЕТ effects/slash_menu/theme_picker/compaction — только boot + gen + resize
+#      Сценарии: boot + gen_w47 + gen_w80 + gen_w120 + narrow_resize
+#
+# Запуск: scripts/colab-dsh-live-check.sh \
+#   --suite tests/colab/dsh-blank-flicker.yaml \
+#   --target patches:<git-ref> --fake-model \
+#   --detectors blank_spike,descent,flicker,scroll_jitter
+lane: colab
+vars:
+  sess: dsh-bf
+  frames: /root/dsh-bf-frames
+  work: /root/dsh-bf
+  samples: /root/dsh-bf-v2
+
+setup:
+  - run: 'mkdir -p $frames $work $samples && rm -f $frames/*.txt $frames/*.ansi $frames/*.tsv $frames/*.jsonl $samples/*.txt $samples/*.tsv'
+    timeout: 60
+  - run: 'tmux kill-session -t $sess 2>/dev/null || true'
+    timeout: 60
+    ignore_error: true
+  # Пустая tmux-сессия 47×23 (геометрия юзера из mks4 trace) — boot и gen_w47
+  # идут на ней; gen_w80/narrow_resize меняют resize-window. Панель = SHELL
+  # (без команды!): с "sleep 3600" send-keys dsh уходил в stdin процесса sleep.
+  - run: 'tmux new-session -d -s $sess -x 47 -y 23'
+    timeout: 60
+  - run: 'tmux set -as terminal-overrides ",xterm-256color:Tc"'
+    timeout: 60
+  # Метрики кадра: health_check, snap_series (100мс интервал), analyze_series
+  # (blank_spike/descent/flicker), scroll_fingerprints (unique_fingerprints).
+  # Внутренние переменные ≠ переменные программы ($sess/$frames/$samples):
+  # executor раскрывает $имена в тексте команды ДО отправки на VM.
+  - id: metrics_lib
+    run: |
+      cat > $work/metrics.sh <<'MEOF'
+      #!/usr/bin/env bash
+      # metrics.sh — метрики кадра TUI для blank-flicker suite (v2).
+      # snap_series: 100мс интервал, 300 кадров (30с окно) — плотнее v2 (250мс/60).
+      # analyze_series: blank_spike + descent + flicker (определения из плана §d).
+      # scroll_fingerprints: unique_fingerprints > 1 = scroll_jitter RED.
+      # health_check: pane_dead + prompt (❯) — exit 2 = INFRA (не продукт-FAIL).
+      set -euo pipefail
+      Cmd="${1:?cmd}"
+      case "$Cmd" in
+        health_check)
+          Session="${2:?session}"
+          dead=$(tmux display-message -p -t "$Session" "#{pane_dead}")
+          if [ "$dead" != "0" ]; then echo "HEALTH_FAIL: pane_dead=$dead"; exit 2; fi
+          frame=$(tmux capture-pane -p -t "$Session")
+          if echo "$frame" | grep -q "❯"; then echo "HEALTH_OK"; exit 0; fi
+          echo "HEALTH_FAIL: no prompt (❯) in frame"; exit 2
+          ;;
+        snap_series)
+          Session="${2:?}"; OutDir="${3:?}"; Count="${4:?}"; Ms="${5:?}"; Prefix="${6:?}"
+          mkdir -p "$OutDir"; : > "$OutDir/$Prefix-series.tsv"
+          Sec=$(awk "BEGIN {printf \"%.3f\", $Ms/1000}")
+          for ((I=1; I<=Count; I++)); do
+            F="$OutDir/$Prefix-$I.txt"
+            tmux capture-pane -p -t "$Session" > "$F"
+            awk -v idx="$I" '
+              { Rows[NR] = ($0 ~ /[^[:space:]]/) ? 1 : 0; Total = NR }
+              END {
+                Empty = 0; Content = 0; First = 0; Last = 0
+                for (r = 1; r <= Total; r++) {
+                  if (Rows[r]) { Content++; if (!First) First = r; Last = r }
+                  else Empty++
+                }
+                ratio = (Total > 0) ? Empty / Total : 1
+                printf "%d %.3f %d %d %d\n", idx, ratio, Content, First, Last
+              }' "$F" >> "$OutDir/$Prefix-series.tsv"
+            sleep "$Sec"; [ "$I" -lt "$Count" ] || break
+          done
+          echo "series_done: $Prefix count=$Count interval=${Ms}ms"
+          ;;
+        analyze_series)
+          OutDir="${2:?}"; Prefix="${3:?}"
+          python3 - "$OutDir" "$Prefix" <<'PYA'
+      import sys, os, json
+      outdir, prefix = sys.argv[1], sys.argv[2]
+      tsv = os.path.join(outdir, f"{prefix}-series.tsv")
+      rows = []
+      with open(tsv) as f:
+          for line in f:
+              parts = line.split()
+              if len(parts) == 5:
+                  rows.append((int(parts[0]), float(parts[1]), int(parts[2]),
+                               int(parts[3]), int(parts[4])))
+      def frames():
+          fs = sorted([p for p in os.listdir(outdir)
+                       if p.startswith(f"{prefix}-") and p.endswith(".txt")
+                       and p[len(prefix)+1:-4].isdigit()],
+                      key=lambda p: int(p[len(prefix)+1:-4]))
+          return [os.path.join(outdir, p) for p in fs]
+      verdict = {"blank_spike": False, "descent": False, "flicker": False,
+                 "samples": len(rows)}
+      has_content = any(r[1] <= 0.5 for r in rows)
+      run_blank = 0
+      for r in rows:
+          if r[1] > 0.5:
+              run_blank += 1
+              if run_blank >= 2 and has_content:
+                  verdict["blank_spike"] = True
+          else:
+              run_blank = 0
+      for a, b in zip(rows, rows[1:]):
+          if abs(a[2] - b[2]) <= 1 and abs(b[4] - a[4]) >= 5:
+              verdict["descent"] = True
+      fl = frames()
+      toggles = 0
+      flicker_rows = 0
+      if len(fl) >= 3:
+          grids = []
+          for p in fl:
+              with open(p, errors="replace") as fh:
+                  grids.append([bool(l.strip()) for l in fh.read().splitlines()])
+          h = min(len(g) for g in grids)
+          for ri in range(h):
+              row_toggles = 0
+              for k in range(len(grids) - 2):
+                  if grids[k][ri] and not grids[k+1][ri] and grids[k+2][ri]:
+                      row_toggles += 1
+              toggles += row_toggles
+              if row_toggles >= 2:
+                  flicker_rows += 1
+      # Flicker = ≥3 rows with REPEATED toggling (≥2 toggles per row).
+      # Single toggles per row = normal streaming (content reflow), not flicker.
+      verdict["flicker"] = flicker_rows >= 3
+      verdict["flicker_toggle_rows"] = toggles
+      verdict["flicker_repeated_rows"] = flicker_rows
+      print(json.dumps(verdict, ensure_ascii=False))
+      ok = not (verdict["blank_spike"] or verdict["descent"] or verdict["flicker"])
+      sys.exit(0 if ok else 1)
+      PYA
+          ;;
+        scroll_fingerprints)
+          # scroll_jitter: 5 кадров с интервалом 200мс на статичном контенте.
+          # fingerprint = md5 хэша рядов с визуальными маркерами (╭╰❯●).
+          # unique_fingerprints > 1 = RED (контент дрожит без новой генерации).
+          Session="${2:?}"; OutDir="${3:?}"; Prefix="${4:?}"
+          mkdir -p "$OutDir"
+          for ((I=1; I<=5; I++)); do
+            F="$OutDir/$Prefix-fp-$I.txt"
+            tmux capture-pane -p -t "$Session" > "$F"
+            awk '/╭|╰|❯|●/ {Line=$0; gsub(/[[:space:]]/, "", Line); print NR ":" substr(Line,1,15)}' "$F" \
+              | md5sum | cut -d" " -f1 > "$OutDir/$Prefix-fp-$I.hash"
+            sleep 0.2
+          done
+          unique=$(cat "$OutDir/$Prefix-fp-"*.hash | sort -u | wc -l)
+          echo "{\"scroll_jitter\": $([ "$unique" -gt 1 ] && echo true || echo false), \"unique_fingerprints\": $unique, \"samples\": 5}"
+          ;;
+        pane_cmd)
+          tmux display-message -p -t "$2" "#{pane_current_command}"
+          ;;
+        count_sub)
+          Sub="${3:?substring}"
+          (tmux capture-pane -p -t "$2" | grep -oF -- "$Sub" || true) | wc -l
+          ;;
+        selftest)
+          tmux capture-pane -p -t "$2" | wc -l
+          ;;
+        *) echo "unknown cmd: $Cmd" >&2; exit 2 ;;
+      esac
+      MEOF
+      chmod +x $work/metrics.sh
+      v="$(bash $work/metrics.sh selftest "$sess")"
+      echo "DETECTOR metrics_selftest: lines=$v expected>=1"
+      [ "$v" -ge 1 ]
+    timeout: 120
+  # launch_dsh: DSH_TUI_PIN_TRACE=1 + DSH_TUI_WD_TRACE=1 — трассы pin/watchdog
+  # для root-cause анализа (узлы 2-3 TG-DSH-BLANK-FLICKER-20260918).
+  # Fake-llm активируется через colab-dsh-up.sh --fake-model (деплой поднимает
+  # dsh-fake-llm на 127.0.0.1:8787 + переключает agent-default-model).
+  - id: launch_dsh
+    run: 'tmux send-keys -t $sess "DSH_TUI_WD_TRACE=1 DSH_TUI_PIN_TRACE=1 FAKE_LLM_KEY=fake-local-key dsh --profile $(cat /root/.dsh-live-target) 2>$work/boot.err" Enter'
+    timeout: 60
+  # Опрос готовности: до 60×1с НА VM. Готовность = рамка ввода (❯) или hint.
+  - id: boot_poll
+    run: |
+      for i in $(seq 1 60); do
+        tmux capture-pane -p -t $sess > $frames/boot.txt
+        if grep -qE "❯|for shortcuts" $frames/boot.txt; then echo READY; exit 0; fi
+        sleep 1
+      done
+      echo NOT_READY
+      exit 1
+    timeout: 150
+  - run: 'tmux capture-pane -pe -t $sess > $frames/boot.ansi'
+    timeout: 60
+
+tests:
+  # --- Сценарий 0: boot (санити + канонический артефакт-кадр) ----------------
+  - name: boot_ready
+    steps:
+      - run: 'v="$(bash $work/metrics.sh count_sub $sess "❯")"; echo "DETECTOR boot_ready: input_frames=$v expected>=1"; [ "$v" -ge 1 ]'
+        timeout: 90
+
+  # --- gen_w47: 47×23 геометрия юзера, fake-llm длинная генерация --------------
+  # 47×23 — геометрия юзера из mks4 trace. SCENARIO:long — fake-llm сценарий
+  # циклического текста (STREAM_TOTAL_MS ~2.5мин). snap_series 300×100мс = 30с.
+  - name: gen_w47
+    steps:
+      - run: |
+          v="$(bash $work/metrics.sh health_check $sess 2>&1)" || { echo "HEALTH_FAIL gen_w47: $v"; exit 2; }
+          tmux resize-window -t $sess -x 47 -y 23; sleep 1
+          echo "HEALTH_OK RESIZED_47"
+        timeout: 150
+      - run: 'tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; tmux send-keys -t $sess "SCENARIO:long reply with a long essay about the sea" Enter; echo SENT'
+        timeout: 150
+      - run: 'bash $work/metrics.sh snap_series $sess $samples 300 100 gen47; tmux capture-pane -p -t $sess > $samples/gen47-final.txt; echo SAMPLED'
+        timeout: 300
+      - run: |
+          # gen_done: generation complete when spinner text disappears from frame.
+          # Spinner shows "total Xs" (time indicator) during generation.
+          # ● is the message bullet (persists after generation) — NOT the spinner.
+          # base = spinner presence in snap frame 1. Wait for spinner to disappear.
+          # Fallback: frame stable for 3 consecutive checks (md5sum) = done.
+          base=$(grep -cE "total [0-9]+s" $samples/gen47-1.txt 2>/dev/null || echo 0)
+          seen=$base
+          prev_hash=""
+          stable=0
+          for w in $(seq 1 90); do
+            tmux capture-pane -p -t $sess > $samples/gen47-done.txt
+            n=$(grep -cE "total [0-9]+s" $samples/gen47-done.txt 2>/dev/null || echo 0)
+            [ "$n" -gt 0 ] && seen=$n
+            if [ "$seen" -gt 0 ] && [ "$n" -eq 0 ]; then
+              echo GEN_DONE base=$base seen=$seen spinner_gone; exit 0
+            fi
+            cur_hash=$(md5sum < $samples/gen47-done.txt | cut -d" " -f1)
+            if [ "$cur_hash" = "$prev_hash" ]; then
+              stable=$((stable + 1))
+              [ "$stable" -ge 3 ] && { echo GEN_DONE stable=$stable frame_stable; exit 0; }
+            else
+              stable=0
+            fi
+            prev_hash="$cur_hash"
+            if [ "$seen" -eq 0 ] && [ "$w" -ge 30 ]; then
+              echo GEN_DONE base=$base seen=$seen no_spinner_timeout; exit 0
+            fi
+            sleep 2
+          done
+          echo GEN_TIMEOUT base=$base seen=$seen stable=$stable
+          exit 1
+        timeout: 250
+
+  # --- gen_w80: 80×50 стенд, fake-llm длинная генерация -----------------------
+  - name: gen_w80
+    steps:
+      - run: |
+          v="$(bash $work/metrics.sh health_check $sess 2>&1)" || { echo "HEALTH_FAIL gen_w80: $v"; exit 2; }
+          tmux resize-window -t $sess -x 80 -y 50; sleep 1
+          echo "HEALTH_OK RESIZED_80"
+        timeout: 150
+      - run: 'tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; tmux send-keys -t $sess "SCENARIO:long reply with a long essay about mountains" Enter; echo SENT'
+        timeout: 150
+      - run: 'bash $work/metrics.sh snap_series $sess $samples 300 100 gen80; tmux capture-pane -p -t $sess > $samples/gen80-final.txt; echo SAMPLED'
+        timeout: 300
+      - run: |
+          # gen_done: generation complete when spinner text disappears from frame.
+          # Spinner shows "total Xs" (time indicator) during generation.
+          base=$(grep -cE "total [0-9]+s" $samples/gen80-1.txt 2>/dev/null || echo 0)
+          seen=$base
+          prev_hash=""
+          stable=0
+          for w in $(seq 1 90); do
+            tmux capture-pane -p -t $sess > $samples/gen80-done.txt
+            n=$(grep -cE "total [0-9]+s" $samples/gen80-done.txt 2>/dev/null || echo 0)
+            [ "$n" -gt 0 ] && seen=$n
+            if [ "$seen" -gt 0 ] && [ "$n" -eq 0 ]; then
+              echo GEN_DONE base=$base seen=$seen spinner_gone; exit 0
+            fi
+            cur_hash=$(md5sum < $samples/gen80-done.txt | cut -d" " -f1)
+            if [ "$cur_hash" = "$prev_hash" ]; then
+              stable=$((stable + 1))
+              [ "$stable" -ge 3 ] && { echo GEN_DONE stable=$stable frame_stable; exit 0; }
+            else
+              stable=0
+            fi
+            prev_hash="$cur_hash"
+            if [ "$seen" -eq 0 ] && [ "$w" -ge 30 ]; then
+              echo GEN_DONE base=$base seen=$seen no_spinner_timeout; exit 0
+            fi
+            sleep 2
+          done
+          echo GEN_TIMEOUT base=$base seen=$seen stable=$stable
+          exit 1
+        timeout: 250
+
+  # --- gen_w120: 120×50 широкая геометрия, fake-llm длинная генерация ---------
+  - name: gen_w120
+    steps:
+      - run: |
+          v="$(bash $work/metrics.sh health_check $sess 2>&1)" || { echo "HEALTH_FAIL gen_w120: $v"; exit 2; }
+          tmux resize-window -t $sess -x 120 -y 50; sleep 1
+          echo "HEALTH_OK RESIZED_120"
+        timeout: 150
+      - run: 'tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; tmux send-keys -t $sess "SCENARIO:long reply with a long essay about the sky" Enter; echo SENT'
+        timeout: 150
+      - run: 'bash $work/metrics.sh snap_series $sess $samples 300 100 gen120; tmux capture-pane -p -t $sess > $samples/gen120-final.txt; echo SAMPLED'
+        timeout: 300
+      - run: |
+          # gen_done: generation complete when spinner text disappears from frame.
+          # Spinner shows "total Xs" (time indicator) during generation.
+          base=$(grep -cE "total [0-9]+s" $samples/gen120-1.txt 2>/dev/null || echo 0)
+          seen=$base
+          prev_hash=""
+          stable=0
+          for w in $(seq 1 90); do
+            tmux capture-pane -p -t $sess > $samples/gen120-done.txt
+            n=$(grep -cE "total [0-9]+s" $samples/gen120-done.txt 2>/dev/null || echo 0)
+            [ "$n" -gt 0 ] && seen=$n
+            if [ "$seen" -gt 0 ] && [ "$n" -eq 0 ]; then
+              echo GEN_DONE base=$base seen=$seen spinner_gone; exit 0
+            fi
+            cur_hash=$(md5sum < $samples/gen120-done.txt | cut -d" " -f1)
+            if [ "$cur_hash" = "$prev_hash" ]; then
+              stable=$((stable + 1))
+              [ "$stable" -ge 3 ] && { echo GEN_DONE stable=$stable frame_stable; exit 0; }
+            else
+              stable=0
+            fi
+            prev_hash="$cur_hash"
+            if [ "$seen" -eq 0 ] && [ "$w" -ge 30 ]; then
+              echo GEN_DONE base=$base seen=$seen no_spinner_timeout; exit 0
+            fi
+            sleep 2
+          done
+          echo GEN_TIMEOUT base=$base seen=$seen stable=$stable
+          exit 1
+        timeout: 250
+
+  # --- narrow_resize: ≤39col для Bug-3 viewport-explosion --------------------
+  # Bug-3 (mks4-20260928): unpinned ScrollBox красит весь транскрипт без clamp
+  # к termRows (renderer.js:70) при ≤39 колонок. viewport 81-118 строк вместо 23.
+  # Детекторы blank_spike/descent/flicker поймают это через пустые строки и прыжки.
+  - name: narrow_resize
+    steps:
+      - run: |
+          v="$(bash $work/metrics.sh health_check $sess 2>&1)" || { echo "HEALTH_FAIL narrow_resize: $v"; exit 2; }
+          tmux resize-window -t $sess -x 39 -y 23; sleep 1
+          echo "HEALTH_OK RESIZED_39"
+        timeout: 150
+      - run: 'tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; tmux send-keys -t $sess "SCENARIO:long reply with a long essay about forests" Enter; echo SENT'
+        timeout: 150
+      - run: 'bash $work/metrics.sh snap_series $sess $samples 300 100 narrow39; tmux capture-pane -p -t $sess > $samples/narrow39-final.txt; echo SAMPLED'
+        timeout: 300
+      - run: |
+          # Bug-3 проверка: viewport explosion = видимый контент >> pane_height.
+          # При нормальном рендере capture-pane -p = pane_height строк.
+          # При viewport explosion (ScrollBox без clamp) — намного больше.
+          pane_h=$(tmux display-message -p -t $sess "#{pane_height}")
+          visible=$(tmux capture-pane -p -t $sess | wc -l)
+          # scrollback для диагностики
+          tmux capture-pane -p -S -2000 -t $sess > $samples/narrow39-scrollback.txt
+          sb_lines=$(wc -l < $samples/narrow39-scrollback.txt)
+          echo "DETECTOR narrow_resize: pane_height=$pane_h visible=$visible scrollback=$sb_lines"
+          # visible > pane_height*2 = viewport взорван (redraw превысил терминал)
+          [ "$visible" -le $((pane_h * 2)) ] || { echo "VIEWPORT_EXPLOSION: visible=$visible > $((pane_h * 2))"; exit 1; }
+        timeout: 150
+
+  # --- blank_spike: пустых строк >50% ≥2 сэмплов подряд при живом контенте ----
+  # Анализирует ВСЕ серии (gen47, gen80, narrow39): сработал хоть на одной → RED.
+  - name: blank_spike
+    steps:
+      - run: |
+          v="$(bash $work/metrics.sh health_check $sess 2>&1)" || { echo "HEALTH_FAIL blank_spike: $v"; exit 2; }
+          out=0; detail=""
+          for p in gen47 gen80 gen120 narrow39; do
+            v="$(bash $work/metrics.sh analyze_series $samples $p 2>/dev/null || true)"
+            if [ -n "$v" ]; then
+              fired=$(printf '%s' "$v" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d["blank_spike"] else "no")' 2>/dev/null || echo no)
+              detail="$detail $p:blank=$fired"
+              [ "$fired" = "yes" ] && out=1
+            fi
+          done
+          echo "DETECTOR blank_spike: пустых строк >50% ≥2 сэмплов подряд при живом контенте →$detail"
+          [ "$out" -eq 0 ]
+        timeout: 150
+
+  # --- descent: последняя непустая строка прыгает ≥5 строк без нового вывода --
+  - name: descent
+    steps:
+      - run: |
+          v="$(bash $work/metrics.sh health_check $sess 2>&1)" || { echo "HEALTH_FAIL descent: $v"; exit 2; }
+          out=0; detail=""
+          for p in gen47 gen80 gen120 narrow39; do
+            v="$(bash $work/metrics.sh analyze_series $samples $p 2>/dev/null || true)"
+            if [ -n "$v" ]; then
+              fired=$(printf '%s' "$v" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d["descent"] else "no")' 2>/dev/null || echo no)
+              detail="$detail $p:descent=$fired"
+              [ "$fired" = "yes" ] && out=1
+            fi
+          done
+          echo "DETECTOR descent: последняя непустая строка прыгает ≥5 строк без нового вывода →$detail"
+          [ "$out" -eq 0 ]
+        timeout: 150
+
+  # --- flicker: строка чередует значение/пусто ≥3 тогглов ---------------------
+  - name: flicker
+    steps:
+      - run: |
+          v="$(bash $work/metrics.sh health_check $sess 2>&1)" || { echo "HEALTH_FAIL flicker: $v"; exit 2; }
+          out=0; detail=""
+          for p in gen47 gen80 gen120 narrow39; do
+            v="$(bash $work/metrics.sh analyze_series $samples $p 2>/dev/null || true)"
+            if [ -n "$v" ]; then
+              fired=$(printf '%s' "$v" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["flicker_toggle_rows"])' 2>/dev/null || echo 0)
+              n=$(printf '%s' "$v" | python3 -c 'import json,sys; print("yes" if json.load(sys.stdin)["flicker"] else "no")' 2>/dev/null || echo no)
+              detail="$detail $p:toggles=$fired($n)"
+              [ "$n" = "yes" ] && out=1
+            fi
+          done
+          echo "DETECTOR flicker: строка чередует значение/пусто ≥3 тогглов →$detail"
+          [ "$out" -eq 0 ]
+        timeout: 150
+
+  # --- scroll_jitter: unique_fingerprints > 1 за 5 кадров --------------------
+  # 5 кадров с интервалом 200мс на СТАТИЧНОМ контенте (после C-c). Fingerprint =
+  # md5 хэша рядов с визуальными маркерами (╭╰❯●). unique > 1 = контент дрожит
+  # без новой генерации = scroll_jitter RED. Отличие от inline scroll_jitter:
+  # упрощённый (без SGR wheel injection + trace-metrics.py) — достаточно для
+  # detect дрожания на статичном кадре; полный scroll_jitter — в dsh-tui-inline.
+  - name: scroll_jitter
+    steps:
+      - run: |
+          v="$(bash $work/metrics.sh health_check $sess 2>&1)" || { echo "HEALTH_FAIL scroll_jitter: $v"; exit 2; }
+          # resize to 80×50 for stable geometry
+          tmux resize-window -t $sess -x 80 -y 50; sleep 1
+          # C-c to stop any ongoing generation, settle
+          tmux send-keys -t $sess C-c; sleep 2
+          # Take 5 fingerprints at 200ms intervals on static content
+          bash $work/metrics.sh scroll_fingerprints $sess $samples scroll
+          v=$(cat $samples/scroll-fp-*.hash 2>/dev/null | sort -u | wc -l)
+          echo "DETECTOR scroll_jitter: unique_fingerprints=$v expected=1 (5 кадров 200мс, статичный контент)"
+          [ "$v" -le 1 ]
+        timeout: 150
+
+# --- teardown: копирование артефактов + kill session -------------------------
+# Драйвер colab-dsh-live-check.sh --suite выгружает /root/dsh-bf-frames/ в reports/.
+# Копируем pin-trace, geometry-trace, boot.err и series TSV для root-cause.
+teardown:
+  - run: |
+      # pin-trace + geometry-trace → frames (выгружаются драйвером)
+      cp $work/boot.err $frames/boot.err 2>/dev/null || true
+      cp ~/.dsh-tui/trace/pin-*.jsonl $frames/ 2>/dev/null || true
+      cp ~/.dsh-tui/trace/geometry-*.jsonl $frames/ 2>/dev/null || true
+      # series TSV + final frames → frames
+      cp $samples/*.tsv $samples/*-final.txt $samples/*-done.txt $samples/*-scrollback.txt $frames/ 2>/dev/null || true
+      echo "ARTIFACTS_COPIED to $frames"
+    timeout: 60
+    ignore_error: true
+  - run: 'tmux kill-session -t $sess 2>/dev/null || true'
+    timeout: 60
+    ignore_error: true

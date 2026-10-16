@@ -1,0 +1,19 @@
+# Goal:      меню помощи без пустой строки (marginBottom снят)
+# Family:    PI.03
+# Status:    live
+# Files:     lib/types/components/PromptInput.js
+# Evidence:  facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (fullscreen-путь)
+
+--- a/lib/types/components/PromptInput.js
++++ b/lib/types/components/PromptInput.js
+@@ -2399,7 +2399,7 @@
+     // On short panes that row reads as stray whitespace wedged between the
+     // spinner/status row and the frame; the EffortInputBorder top border already
+     // separates the input from the transcript visually.
+-    return (_jsxs(Box, { flexDirection: "column", marginTop: 0, children: [floatersOpen && (_jsxs(OverlayAbove, { maxHeight: Math.max(terminalRows - 6, 1), children: [helpOpen && (_jsx(Box, { marginBottom: 1, children: _jsx(HelpMenu, { commands: channel.commandList, viewportHeight: helpViewportHeight, viewportWidth: columns, scrollRef: helpScrollRef, onCommandPick: (name) => {
++    return (_jsxs(Box, { flexDirection: "column", marginTop: 0, children: [floatersOpen && (_jsxs(OverlayAbove, { maxHeight: Math.max(terminalRows - 6, 1), children: [helpOpen && (_jsx(Box, { children: _jsx(HelpMenu, { commands: channel.commandList, viewportHeight: helpViewportHeight, viewportWidth: columns, scrollRef: helpScrollRef, onCommandPick: (name) => {
+                                 // 点击命令行 = 填入 /name 并关闭帮助（Tab 补全的鼠标等价）
+                                 updateFoldBlock(null);
+                                 setInput(`/${name} `);

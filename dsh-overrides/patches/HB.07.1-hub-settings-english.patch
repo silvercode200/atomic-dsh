@@ -1,0 +1,443 @@
+# Goal:      весь /settings-хаб на английском (canon §5.4)
+# Family:    HB.07
+# Status:    live
+# Files:     lib/types/components/hubSettings.js
+# Evidence:  TG-DSH-REBUILD-20260921 узел 7 E3;
+#            reports/colab-golden-63-20260923T221903Z/
+# Upstream:  not-applicable
+# Added:     2026-09-24 (TG-DSH-REBUILD-20260921 узел 7 E3)
+
+# 63-hub-settings-english (TG-DSH-REBUILD-20260921, node 7 item E3 —
+# «в настройках русскоязычные пункты, бардак»): язык /settings-хаба — ВЕСЬ
+# EN (canon reports/STATUS-BAR-CANON.md §5.4, решение юзера). Патч 46 завёл
+# хаб с русскими группами/лейблами/хинтами; 63 переводит ВСЕ юзер-видимые
+# строковые литералы hubSettings.js (заголовки групп, лейблы полей, лейблы
+# опций, хинты, строки демо-рядов) на естественный EN в стилистике нативных
+# полей /settings (Title Case лейблы, sentence-case хинты; технические
+# термины не калькируются: Powerline, powerline/fish style, braille).
+# База диффа = live-состояние файла со стеком 01-62 (46 завёл RU, 63
+# переводит поверх). НЕ тронуты: id групп/полей, ключи реестра эффектов,
+# комментарии в коде (RU-комментарии остаются — перевод только юзер-видимых
+# литералов) и описания effectsCatalog.js (патч 39 — отдельная поверхность:
+# они интерполируются в хинты effect-рядов и остаются RU до отдельной волны).
+# Проверка: probe reports/e3-evidence/hub-en-probe.mjs — RED до (83
+# кириллических литерала, счётчик-токенайзер исключает комментарии) /
+# GREEN после (=0); структурная проба /settings — EN-заголовки в кадре
+# (reports/e3-evidence/hub-struct-probe.mjs + кадры).
+--- a/lib/types/components/hubSettings.js
++++ b/lib/types/components/hubSettings.js
+@@ -17,6 +17,11 @@
+ import { minimumMetricPref, writeMinimumMetricPref } from '../effectsPrefs.js';
+ import { subCells } from '../tuiDisplayPrefs.js';
+ import { sparkline } from '../sparkline.js';
++// dsh-overrides 63: hub settings EN (canon §5.4 — the settings language is
++// ALL-EN, the E3 user decision): every user-visible string literal of the
++// hub — group titles, field labels, option labels, hints, demo rows — is
++// English. Ids, registry key names and the effectsCatalog descriptions
++// (patch 39, a separate surface) are untouched.
+ /**
+  * dsh-overrides 46: appearance hub lives inside the settings screen.
+  *
+@@ -55,93 +60,93 @@
+ export function hubSettingsSectionParts() {
+     return {
+         groups: [
+-            { id: 'hub-appearance', title: 'Оформление' },
+-            { id: 'hub-effects', title: 'Эффекты' },
+-            { id: 'hub-theme', title: 'Тема' },
+-            { id: 'hub-border', title: 'Рамка' },
+-            { id: 'hub-spinner', title: 'Спиннеры' },
+-            { id: 'hub-progress', title: 'Прогресс' },
++            { id: 'hub-appearance', title: 'Appearance' },
++            { id: 'hub-effects', title: 'Effects' },
++            { id: 'hub-theme', title: 'Theme' },
++            { id: 'hub-border', title: 'Border' },
++            { id: 'hub-spinner', title: 'Spinners' },
++            { id: 'hub-progress', title: 'Progress' },
+         ],
+         fields: [
+             // ── Оформление ──
+             {
+                 path: ['appearance', 'powerline'],
+-                label: 'Powerline-ряд',
++                label: 'Powerline row',
+                 kind: 'select',
+                 group: 'hub-appearance',
+                 demo: 'powerline',
+                 options: [
+-                    { value: 'full', label: 'full (сегменты с заливкой)' },
+-                    { value: 'plain', label: 'plain (❯-разделители)' },
+-                    { value: 'off', label: 'off (стоковый ряд)' },
++                    { value: 'full', label: 'full (filled segments)' },
++                    { value: 'plain', label: 'plain (❯ separators)' },
++                    { value: 'off', label: 'off (stock row)' },
+                 ],
+-                hint: 'Статус-ряд в стиле powerlevel/fish: заполненные сегменты [✦ модель][путь][⎇ ветка][⚡ ctx][таймер] + приглушённый хвост. off — обычный ряд полей.',
++                hint: 'powerlevel/fish-style status row: filled segments [✦ model][path][⎇ branch][⚡ ctx][timer] + a dimmed tail. off — the plain field row.',
+             },
+             {
+                 path: ['appearance', 'background'],
+-                label: 'Фон приложения',
++                label: 'App background',
+                 kind: 'text',
+                 group: 'hub-appearance',
+                 demo: 'background',
+                 parse: parseThemeColor,
+-                hint: 'Цвет фона всего TUI (#rrggbb / rgb() / ansi256()); пусто — фон темы (appBackground). Применяется живьём.',
++                hint: 'Background color of the whole TUI (#rrggbb / rgb() / ansi256()); empty — the theme background (appBackground). Applied live.',
+             },
+             {
+                 path: ['appearance', 'animations'],
+-                label: 'Режим анимаций',
++                label: 'Animation mode',
+                 kind: 'select',
+                 group: 'hub-appearance',
+                 demo: 'animations',
+                 options: [
+-                    { value: 'full', label: 'full (все эффекты вкл)' },
+-                    { value: 'custom', label: 'custom (по-эффектно)' },
+-                    { value: 'off', label: 'off (статика)' },
++                    { value: 'full', label: 'full (all effects on)' },
++                    { value: 'custom', label: 'custom (per effect)' },
++                    { value: 'off', label: 'off (static)' },
+                 ],
+-                hint: 'Гейт LIVE42-волны: full — всё включено (кроме opt-in спарклайнов), custom — решает каждый тумблер Эффектов, off — всё статично. Env DSH_TUI_ANIMATIONS/REDUCED_MOTION выше.',
++                hint: 'The LIVE42-wave gate: full — everything on (except opt-in sparklines), custom — each Effects toggle decides, off — fully static. Env DSH_TUI_ANIMATIONS/REDUCED_MOTION takes precedence.',
+             },
+             // ── Тема ──
+             {
+                 path: ['hub', 'theme'],
+-                label: 'Тема',
++                label: 'Theme',
+                 kind: 'custom',
+                 group: 'hub-theme',
+                 custom: { type: 'theme', demoLines: 1 },
+-                hint: '←/→ — живой превью (палитра применяется сразу, без записи), enter — закрепить (та же цепочка, что /theme: живьём + персист theme.json). Фокус ушёл без enter — откат к закреплённой.',
++                hint: '←/→ — live preview (the palette applies immediately, no write), enter — commit (the same chain as /theme: live + persist to theme.json). Focus leaves without enter — reverts to the committed theme.',
+             },
+             // ── Рамка ──
+             {
+                 path: ['appearance', 'inputBorder'],
+-                label: 'Цвет рамки ввода',
++                label: 'Input border color',
+                 kind: 'text',
+                 group: 'hub-border',
+                 demo: 'inputBorder',
+                 parse: parseThemeColor,
+-                hint: 'Акцент рамки поля ввода (#rrggbb / rgb() / ansi256()); пусто — ключ темы promptBorder. Валидируется формами customTheme; применяется живьём.',
++                hint: 'Accent color of the input field border (#rrggbb / rgb() / ansi256()); empty — the theme key promptBorder. Validated by the customTheme forms; applied live.',
+             },
+             // ── Спиннеры ──
+             {
+                 path: ['spinner', 'main'],
+-                label: 'Спиннер: главный',
++                label: 'Spinner: main',
+                 kind: 'custom',
+                 group: 'hub-spinner',
+                 custom: { type: 'spinner', place: 'main', demoLines: 1 },
+-                hint: 'Стиль главного спиннера (каталог патча 43, 58 стилей). ←/→ — перелистать с живым демо, enter — закрепить (settings.yaml dsh-tui.spinner.main, живьём через channel.setSpinnerPrefs).',
++                hint: 'Main spinner style (the patch-43 catalog, 58 styles). ←/→ — page through with a live demo, enter — commit (settings.yaml dsh-tui.spinner.main, applied live via channel.setSpinnerPrefs).',
+             },
+             {
+                 path: ['spinner', 'subagent'],
+-                label: 'Спиннер: строки субагентов',
++                label: 'Spinner: subagent rows',
+                 kind: 'custom',
+                 group: 'hub-spinner',
+                 custom: { type: 'spinner', place: 'subagent', demoLines: 1 },
+-                hint: 'Стиль спиннера в строках субагентов (AgentView). ←/→ + enter — как у главного.',
++                hint: 'Spinner style in subagent rows (AgentView). ←/→ + enter — same as the main one.',
+             },
+             {
+                 path: ['spinner', 'toolCard'],
+-                label: 'Спиннер: карточки инструментов',
++                label: 'Spinner: tool cards',
+                 kind: 'custom',
+                 group: 'hub-spinner',
+                 custom: { type: 'spinner', place: 'toolCard', demoLines: 1 },
+-                hint: 'Стиль лоадера карточки инструмента (ToolUseLoader). ←/→ + enter — как у главного.',
++                hint: 'Tool-card loader style (ToolUseLoader). ←/→ + enter — same as the main one.',
+             },
+             // ── Эффекты ──
+             ...EFFECT_GROUP_KEYS().map(key => effectField(key, 'hub-effects')),
+@@ -162,125 +167,125 @@
+             // ── Статус-ряд (нативная группа status-bar) ──
+             {
+                 path: ['statusBar', 'ctxBarMode'],
+-                label: 'Режим ctx-бара',
++                label: 'ctx-bar mode',
+                 kind: 'select',
+                 group: 'status-bar',
+                 demo: 'ctxBarMode',
+                 options: [
+-                    { value: 'full', label: 'full (6 ячеек)' },
+-                    { value: 'narrow', label: 'narrow (3 ячейки)' },
+-                    { value: 'percent-only', label: 'percent-only (без бара)' },
++                    { value: 'full', label: 'full (6 cells)' },
++                    { value: 'narrow', label: 'narrow (3 cells)' },
++                    { value: 'percent-only', label: 'percent-only (no bar)' },
+                 ],
+-                hint: 'Форма ⚡-сегмента контекста в powerline-ряду (ключ statusBar.ctxBarMode — до патча 46 хаб писал мёртвый appearance.ctxBarMode).',
++                hint: 'Shape of the context ⚡ segment in the powerline row (key statusBar.ctxBarMode — before patch 46 the hub wrote a dead appearance.ctxBarMode).',
+             },
+             {
+                 path: ['appearance', 'cwdMode'],
+-                label: 'Путь в статус-ряду',
++                label: 'Status row path',
+                 kind: 'select',
+                 group: 'status-bar',
+                 demo: 'cwdMode',
+                 options: [
+-                    { value: 'full', label: 'full (весь путь)' },
+-                    { value: 'compact', label: 'compact (последний сегмент)' },
++                    { value: 'full', label: 'full (full path)' },
++                    { value: 'compact', label: 'compact (last segment)' },
+                 ],
+-                hint: 'Форма пути в сегменте/поле cwd. НЕ statusBar.compact (тот гасит powerline целиком).',
++                hint: 'Shape of the path in the cwd segment/field. NOT statusBar.compact (that one kills the powerline row entirely).',
+             },
+             {
+                 path: ['hub', 'effect', 'sparkTps'],
+-                label: 'sparkTps (спарклайн t/s)',
++                label: 'sparkTps (t/s sparkline)',
+                 kind: 'custom',
+                 group: 'status-bar',
+                 custom: { type: 'effect', key: 'sparkTps', demoLines: 1 },
+-                hint: `${getEffectDescription('sparkTps')}. OPT-IN: включается только явно (реестр эффектов, effectEnabled).`,
++                hint: `${getEffectDescription('sparkTps')}. OPT-IN: enabled only explicitly (effect registry, effectEnabled).`,
+             },
+             {
+                 path: ['hub', 'effect', 'sparkCache'],
+-                label: 'sparkCache (спарклайн кеша)',
++                label: 'sparkCache (cache sparkline)',
+                 kind: 'custom',
+                 group: 'status-bar',
+                 custom: { type: 'effect', key: 'sparkCache', demoLines: 1 },
+-                hint: `${getEffectDescription('sparkCache')}. OPT-IN: включается только явно (реестр эффектов, effectEnabled).`,
++                hint: `${getEffectDescription('sparkCache')}. OPT-IN: enabled only explicitly (effect registry, effectEnabled).`,
+             },
+             // dsh-overrides 47: our statusrow blocks — first-class toggles
+             // in the native status-bar group (with live demos).
+             {
+                 path: ['statusBar', 'timer'],
+-                label: 'Таймер хода (сегмент)',
++                label: 'Turn timer (segment)',
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'timer',
+-                hint: 'Сегмент [⏱ время хода] в powerline-ряду — монтируется только пока идёт ход (патч 29). Выключение убирает сегмент, не трогая остальные.',
++                hint: 'The [⏱ turn time] segment in the powerline row — mounted only while a turn is running (patch 29). Turning it off removes the segment and leaves the rest untouched.',
+             },
+             {
+                 path: ['appearance', 'sparkWidth'],
+-                label: 'Ширина спарклайнов',
++                label: 'Sparkline width',
+                 kind: 'select',
+                 group: 'status-bar',
+                 demo: 'sparkWidth',
+                 options: [
+-                    { value: '8', label: '8 ячеек' },
+-                    { value: '16', label: '16 ячеек (дефолт)' },
+-                    { value: '24', label: '24 ячейки' },
+-                    { value: '32', label: '32 ячейки' },
++                    { value: '8', label: '8 cells' },
++                    { value: '16', label: '16 cells (default)' },
++                    { value: '24', label: '24 cells' },
++                    { value: '32', label: '32 cells' },
+                 ],
+-                hint: 'Ширина брайль-графиков спарклайнов (в ячейках). Применяется живьём.',
++                hint: 'Width of the braille sparkline charts (in cells). Applied live.',
+             },
+             {
+                 path: ['statusBar', 'spending'],
+-                label: 'Расходы mini-key-switcher',
++                label: 'mini-key-switcher spending',
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'spending',
+-                hint: 'Поле ⇄ ($ за 24ч по приложению + счётчик запросов) в левой группе статуса (патч 17). Скрыто, пока трафика нет.',
++                hint: 'The ⇄ field ($ per 24h by application + a request counter) in the left status group (patch 17). Hidden while there is no traffic.',
+             },
+             {
+                 path: ['statusBar', 'realModel'],
+-                label: 'Фактическая модель mks',
++                label: 'mks actual model',
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'realModel',
+-                hint: 'Подмена «запрошенная → фактическая» модель, когда mini-key-switcher маршрутизировал на другую (патч 17; до патча 47 ключ существовал без консьюмера).',
++                hint: 'Substitutes the "requested → actual" model when mini-key-switcher routed to a different one (patch 17; before patch 47 the key existed with no consumer).',
+             },
+             {
+                 path: ['statusBar', 'compactProgress'],
+-                label: 'Прогресс до автокомпакции',
++                label: 'Auto-compact progress',
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'compactProgress',
+-                hint: 'Поле «⇣ N токенов до порога + %» с эскалацией цвета у порога (патч 17).',
++                hint: 'The "⇣ N tokens to threshold + %" field with color escalation near the threshold (patch 17).',
+             },
+             {
+                 path: ['statusBar', 'compactThresholdRatio'],
+-                label: 'Порог компакции (доля окна)',
++                label: 'Compact threshold (window fraction)',
+                 kind: 'number',
+                 group: 'status-bar',
+                 demo: 'compactThresholdRatio',
+-                hint: 'Доля контекстного окна (0…1), по которой считается порог автокомпакции в поле прогресса. Дефолт 0.8.',
++                hint: 'Fraction of the context window (0…1) the auto-compact threshold is computed from in the progress field. Default 0.8.',
+             },
+             {
+                 path: ['statusBar', 'subagentRows'],
+-                label: 'Строки субагентов (◐)',
++                label: 'Subagent rows (◐)',
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'subagentRows',
+-                hint: 'Зеркальные ◐-строки задач субагентов в todo-дереве + счётчик «◐ agents N» в заголовке фолда (патчи 13/14). Выключение убирает их, не ломая дерево.',
++                hint: 'Mirrored ◐ rows of subagent tasks in the todo tree + the "◐ agents N" counter in the fold header (patches 13/14). Turning it off removes them without breaking the tree.',
+             },
+             {
+                 path: ['statusBar', 'subagentAutoExpand'],
+-                label: 'Авто-разворот субагентов',
++                label: 'Subagent auto-expand',
+                 kind: 'boolean',
+                 group: 'status-bar',
+                 demo: 'subagentAutoExpand',
+-                hint: 'Первый live-субагент сессии один раз раскрывает todo-фолд (патч 27). Ручное сворачивание после — уважается.',
++                hint: 'The first live subagent of the session expands the todo fold once (patch 27). Manual collapsing afterwards is respected.',
+             },
+             // ── Прогресс ──
+             {
+                 path: ['hub', 'effect', 'toolProgressBars'],
+-                label: 'toolProgressBars (мини-бары инструментов)',
++                label: 'toolProgressBars (tool mini-bars)',
+                 kind: 'custom',
+                 group: 'hub-progress',
+                 custom: { type: 'effect', key: 'toolProgressBars', demoLines: 1 },
+-                hint: `${getEffectDescription('toolProgressBars')}. Важно: канал не стримит вывод работающего инструмента — бар появляется ПОСЛЕ завершения (итоговый разбор curl/wget/tqdm).`,
++                hint: `${getEffectDescription('toolProgressBars')}. Note: the channel does not stream the output of a running tool — the bar appears AFTER completion (the final curl/wget/tqdm parse).`,
+             },
+         ],
+     };
+@@ -293,7 +298,7 @@
+         kind: 'custom',
+         group,
+         custom: { type: 'effect', key, demoLines: 1 },
+-        hint: `${getEffectDescription(key)} — enter/space переключает (реестр эффектов, effectEnabled; дубли гейтов не создаются).`,
++        hint: `${getEffectDescription(key)} — enter/space toggles (effect registry, effectEnabled; no duplicate gates are created).`,
+     };
+ }
+ /**
+@@ -408,7 +413,7 @@
+     const shown = candidate ?? themeName;
+     const theme = getTheme(shown);
+     const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: shown }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" }), candidate !== null ? _jsx(Text, { color: "warning", children: " *" }) : null] })] }));
+-    const demo = (_jsxs(Text, { children: [...SWATCH_KEYS.map(key => _jsx(Text, { color: theme?.[key], children: "██" }, key)), _jsx(Text, { dimColor: true, children: "  ←/→ живой превью · enter закрепить (theme.json)" })] }));
++    const demo = (_jsxs(Text, { children: [...SWATCH_KEYS.map(key => _jsx(Text, { color: theme?.[key], children: "██" }, key)), _jsx(Text, { dimColor: true, children: "  ←/→ live preview · enter commits (theme.json)" })] }));
+     return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
+ }
+ /** Спиннер: ←/→ cycles the catalog (live frames), Enter writes spinner.<place>. */
+@@ -449,10 +454,10 @@
+     const frame = style !== undefined
+         ? style.frames[Math.floor(time / style.interval) % style.frames.length]
+         : undefined;
+-    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: `${frame ?? '·'} ${shown === '' ? '(встроенный)' : shown}` }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" }), candidate !== null && candidate !== current ? _jsx(Text, { color: "warning", children: " *" }) : null] })] }));
++    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: `${frame ?? '·'} ${shown === '' ? '(built-in)' : shown}` }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" }), candidate !== null && candidate !== current ? _jsx(Text, { color: "warning", children: " *" }) : null] })] }));
+     const demo = style !== undefined
+-        ? (_jsxs(Text, { children: [_jsx(Text, { color: "claude", children: style.frames.slice(0, 12).join('') }), _jsxs(Text, { dimColor: true, children: ["  ", style.frames.length, " кадров · ", style.interval, "ms/кадр"] })] }))
+-        : _jsx(Text, { dimColor: true, children: "встроенный вид спиннера (глагол + glimmer); ←/→ — листать каталог, enter — закрепить" });
++        ? (_jsxs(Text, { children: [_jsx(Text, { color: "claude", children: style.frames.slice(0, 12).join('') }), _jsxs(Text, { dimColor: true, children: ["  ", style.frames.length, " frames · ", style.interval, "ms/frame"] })] }))
++        : _jsx(Text, { dimColor: true, children: "built-in spinner look (verb + glimmer); ←/→ — page the catalog, enter — commit" });
+     return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: demo }) : null] }));
+ }
+ /**
+@@ -535,7 +540,7 @@
+     const [themeName] = useTheme();
+     const theme = getTheme(themeName);
+     if (value === 'off') {
+-        return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "стоковый ряд: " }), _jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" }), _jsx(Text, { dimColor: true, children: " · " }), _jsx(Text, { color: "inactiveShimmer", children: "~/…/deepseek_harness" })] }));
++        return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "stock row: " }), _jsx(Text, { color: "inactiveShimmer", children: "glm-5.3" }), _jsx(Text, { dimColor: true, children: " · " }), _jsx(Text, { color: "inactiveShimmer", children: "~/…/deepseek_harness" })] }));
+     }
+     if (value === 'plain') {
+         return (_jsxs(Text, { children: [_jsx(Text, { color: "claude", children: " ✦ glm-5.3 " }), _jsx(Text, { dimColor: true, children: "❯" }), _jsx(Text, { color: "text", children: " ~/…/deepseek_harness " }), _jsx(Text, { dimColor: true, children: "❯" }), _jsx(Text, { color: "text", children: " ⎇ main " })] }));
+@@ -546,20 +551,20 @@
+ function BackgroundDemo({ value }) {
+     const valid = typeof value === 'string' && value.trim() !== '' && isValidThemeColor(value.trim());
+     if (!valid)
+-        return _jsx(Text, { dimColor: true, children: "пусто = фон темы (appBackground); формы: #rrggbb, rgb(), ansi256()" });
+-    return _jsx(Text, { backgroundColor: value.trim(), children: "  фон приложения:████████████  " });
++        return _jsx(Text, { dimColor: true, children: "empty = theme background (appBackground); forms: #rrggbb, rgb(), ansi256()" });
++    return _jsx(Text, { backgroundColor: value.trim(), children: "  app background:████████████  " });
+ }
+ /** Animations mode sample: the breathing input frame, live when allowed. */
+ function AnimationsDemo() {
+     const [, time] = useAnimationFrame(120);
+-    return (_jsxs(Text, { dimColor: true, children: ["сэмпл: ", _jsx(EffectDemo, { effect: "inputBorderBreath", time: time })] }));
++    return (_jsxs(Text, { dimColor: true, children: ["sample: ", _jsx(EffectDemo, { effect: "inputBorderBreath", time: time })] }));
+ }
+ /** Input frame sample in the chosen color. */
+ function InputBorderDemo({ value }) {
+     const valid = typeof value === 'string' && value.trim() !== '' && isValidThemeColor(value.trim());
+     return (_jsxs(Text, { children: ["╭────────────╮  ", valid
+             ? _jsx(Text, { color: value.trim(), children: "╭────────────╮" })
+-            : _jsx(Text, { dimColor: true, children: "пусто = цвет темы (promptBorder)" })] }));
++            : _jsx(Text, { dimColor: true, children: "empty = theme color (promptBorder)" })] }));
+ }
+ /** Ctx-bar sample in the selected mode (subCells smoothing included). */
+ function CtxBarModeDemo({ value }) {
+@@ -585,19 +590,19 @@
+ function TimerDemo() {
+     const [, time] = useAnimationFrame(120);
+     const elapsed = 64_000 + time;
+-    return (_jsxs(Text, { children: [_jsx(Text, { color: "toolCardBackgroundDim", children: " " }), _jsx(Text, { color: "claude", children: ` ${demoDuration(elapsed)} ` }), _jsx(Text, { dimColor: true, children: "  тикает только в ходе; ширина стабильна" })] }));
++    return (_jsxs(Text, { children: [_jsx(Text, { color: "toolCardBackgroundDim", children: " " }), _jsx(Text, { color: "claude", children: ` ${demoDuration(elapsed)} ` }), _jsx(Text, { dimColor: true, children: "  ticks only during a turn; width is stable" })] }));
+ }
+ /** Sparkline width demo: braille samples at the selected width. */
+ function SparkWidthDemo({ value }) {
+     const cells = Number(value) >= 8 && Number(value) <= 32 ? Number(value) : 16;
+     const series = Array.from({ length: 40 }, (_, i) => 20 + 18 * Math.sin(i / 4) + 6 * Math.cos(i / 1.7));
+-    return (_jsxs(Text, { dimColor: true, children: ["⎇ ", _jsx(Text, { color: "claude", children: sparklineValues(series, cells) }), ` ${(40 + cells / 8).toFixed(1)} t/s  (ячеек: ${cells})`] }));
++    return (_jsxs(Text, { dimColor: true, children: ["⎇ ", _jsx(Text, { color: "claude", children: sparklineValues(series, cells) }), ` ${(40 + cells / 8).toFixed(1)} t/s  (cells: ${cells})`] }));
+ }
+ /** mks spending field demo (on/off preview). */
+ function SpendingDemo({ value }) {
+     return value === 'true'
+         ? (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⇄ " }), _jsx(Text, { color: "inactiveShimmer", children: "$0.42" }), _jsx(Text, { dimColor: true, children: " · 128r" })] }))
+-        : _jsx(Text, { dimColor: true, children: "выкл: поле расходов не рендерится" });
++        : _jsx(Text, { dimColor: true, children: "off: the spending field is not rendered" });
+ }
+ /** realModel substitution demo. */
+ function RealModelDemo({ value }) {
+@@ -608,8 +613,8 @@
+ /** compactProgress reading demo. */
+ function CompactProgressDemo({ value }) {
+     if (value !== 'true')
+-        return _jsx(Text, { dimColor: true, children: "выкл: поля «до порога компакции» нет" });
+-    return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⇣ " }), _jsx(Text, { color: "warning", children: "48k" }), _jsx(Text, { dimColor: true, children: " осталось · 76%" })] }));
++        return _jsx(Text, { dimColor: true, children: "off: no compact-threshold field is rendered" });
++    return (_jsxs(Text, { children: [_jsx(Text, { dimColor: true, children: "⇣ " }), _jsx(Text, { color: "warning", children: "48k" }), _jsx(Text, { dimColor: true, children: " left · 76%" })] }));
+ }
+ /** compactThresholdRatio demo: the reading at the staged ratio. */
+ function CompactThresholdRatioDemo({ value }) {
+@@ -617,7 +622,7 @@
+     const safe = Number.isFinite(ratio) && ratio > 0 && ratio <= 1 ? ratio : 0.8;
+     const threshold = Math.floor(262_144 * safe);
+     const pct = Math.round((200_000 / threshold) * 100);
+-    return (_jsxs(Text, { dimColor: true, children: [`порог ${safe}: `, _jsx(Text, { color: pct >= 85 ? 'warning' : 'inactiveShimmer', children: `${Math.round((threshold - 200_000) / 1000)}k осталось · ${pct}%` })] }));
++    return (_jsxs(Text, { dimColor: true, children: [`threshold ${safe}: `, _jsx(Text, { color: pct >= 85 ? 'warning' : 'inactiveShimmer', children: `${Math.round((threshold - 200_000) / 1000)}k left · ${pct}%` })] }));
+ }
+ /** Subagent rows demo: the fold header with/without the ◐ counter. */
+ function SubagentRowsDemo({ value }) {
+@@ -628,8 +633,8 @@
+ /** Auto-expand demo: a one-line explanation with the toggle state. */
+ function SubagentAutoExpandDemo({ value }) {
+     return (_jsxs(Text, { dimColor: true, children: [value === 'true'
+-                ? 'фолд раскроется сам при первом live-субагенте (один раз за канал; ручное сворачивание уважается)'
+-                : 'фолд остаётся свернутым — раскрытие только руками (alt+m / ctrl+q)'] }));
++                ? 'the fold auto-expands on the first live subagent (once per channel; manual collapsing is respected)'
++                : 'the fold stays collapsed — expand it manually (alt+m / ctrl+q)'] }));
+ }
+ /** Braille sparkline over a static series (no buffer churn in the demo). */
+ function sparklineValues(values, cells) {

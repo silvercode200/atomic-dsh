@@ -1,0 +1,79 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -331,6 +331,43 @@
+ 	if (header.adapterDefaults.maxTokens === true) delete proposal.maxTokens;
+ 	return proposal;
+ }
++/** dsh-overrides core 07: max-tokens auto-continue — см. step() ниже. */
++/**
++* Лимит авто-продолжений хода, обрезанного лимитом вывода (finish "max-tokens").
++* Env DSH_TUI_MAX_TOKENS_CONTINUE: отсутствие/пусто → 3 (умолчание),
++* число ≥ 0 → floor, битое/отрицательное → 0 (запрещено молча угадывать
++* намерение — безопасный фоллбек = прежнее поведение). 0 = полностью выключено.
++*
++* @returns {number} сколько продолжений допустимо на один TURN
++*/
++function dshPatchMaxTokensContinueLimit() {
++	const raw = process.env.DSH_TUI_MAX_TOKENS_CONTINUE;
++	if (raw === void 0 || raw === null || raw === "") return 3;
++	const parsed = Number(String(raw).trim());
++	if (!Number.isFinite(parsed) || parsed < 0) return 0;
++	return Math.floor(parsed);
++}
++/** dsh-overrides core 07: max-tokens auto-continue — см. step() ниже. */
++/**
++* Синтетическое user-сообщение для авто-продолжения: та же форма, что у
++* плагин-контекста (runtime-context), — "opaque content" без ContextFormed,
++* существующий путь в MessageSourceMap. Идентичность id создаёт createUserMessage
++* (UUID), поэтому повторные продолжения не конфликтуют по инварианту уникальности.
++*
++* @returns {import("@deepseek-ai/dsh-llm").Message} замороженное сообщение "continue"
++*/
++function dshPatchContinueMessage() {
++	return createUserMessage({
++		content: [{
++			type: "text",
++			text: "continue"
++		}],
++		source: {
++			kind: "plugin",
++			plugin: "@deepseek-ai/dsh-agent-loop"
++		}
++	});
++}
+ /** Drives one session through turn and step boundaries. */
+ var ReactLoopAgent = class {
+ 	loopCtx;
+@@ -679,7 +716,31 @@
+ 				surfaceOp: "append",
+ 				sourceEventSeqs: chunkSeqs
+ 			});
+-			if (finish.kind === "max-tokens") return { kind: "max-tokens" };
++			// dsh-overrides core 07: max-tokens auto-continue — ход, обрезанный
++			// лимитом вывода, НЕ завершаем молча: в inbox next-step кладётся
++			// синтетическое user-сообщение "continue" (механика tool-результатов:
++			// inbox.append → agent/inbox/spliced → claim на следующем preStep →
++			// user/message), шаг возвращает null и цикл хода продолжается.
++			// Бюджет — по durable-событиям agent/max-tokens-continue текущего
++			// turn (переживают crash/replay; своя сессия у каждого агента —
++			// субагенты получают собственный бюджет). Ассемблер на max-tokens
++			// отбрасывает tool-call блоки (dsh-llm/lib/types/index.js:931) —
++			// сообщение чисто текстовое, продолжение безопасно. Пустой контент
++			// не продолжаем: assistant+user оба пустые = 400 от API. Исчерпан
++			// бюджет / контент пуст / env выключен — прежний return.
++			if (finish.kind === "max-tokens") {
++				const usedContinues = this.session.events.filter((event) => event.type === "agent/max-tokens-continue" && event.data.turn === turn).length;
++				if (message.content.length > 0 && usedContinues < dshPatchMaxTokensContinueLimit()) {
++					this.session.append("agent/max-tokens-continue", {
++						turn,
++						step,
++						attempt: usedContinues + 1
++					});
++					this.inbox.append("next-step", dshPatchContinueMessage());
++					return null;
++				}
++				return { kind: "max-tokens" };
++			}
+ 			const toolCalls = message.content.filter((block) => block.type === "tool-call");
+ 			if (toolCalls.length === 0) return { kind: "completed" };
+ 			const { concluded } = await executeToolCalls(this.loopCtx, turn, step, toolCalls, signal, (context) => this.inbox.splice("next-step", this.inbox.nextStep.length, 0, [context]));

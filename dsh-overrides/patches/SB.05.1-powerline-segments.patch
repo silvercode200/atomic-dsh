@@ -1,0 +1,251 @@
+# Goal:      powerline/fish-статус-ряд: сегменты, клинья, таймер
+# Family:    SB.05
+# Status:    live
+# Files:     lib/types/screens/StatusLine.js,
+#            lib/types/components/Spinner/SpinnerAnimationRow.js
+# Evidence:  facts/patches-B.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (style wave)
+
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -1,7 +1,11 @@
+ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+ import React from 'react';
+-import { Box, Text, useTerminalSize, useTheme } from '../ui.js';
+-import { formatTokens } from '../cc/format.js';
++import { Box, Text, useTerminalSize, useTheme, useAnimationFrame } from '../ui.js';
++import { formatTokens, formatDuration } from '../cc/format.js';
++import { getTheme } from '../theme.js';
++import { stringWidth } from '../ink/stringWidth.js';
++import { sweep } from '../components/shimmer.js';
++import { parseRGB } from '../components/Spinner/spinnerUtils.js';
+ import { t } from '../i18n.js';
+ import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar } from '../tuiDisplayPrefs.js';
+ import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js';
+@@ -68,6 +72,130 @@
+     const visible = parts.filter(part => part.node !== null && part.node !== undefined && part.node !== false);
+     return (_jsx(_Fragment, { children: visible.map((part, index) => (_jsxs(React.Fragment, { children: [index > 0 ? _jsx(Text, { dimColor: true, children: " \u00B7 " }) : null, _jsx(Box, { flexShrink: 1, ...(part.id === undefined ? {} : hoverProps(part.id)), children: part.tooltip === undefined || part.tooltip === '' ? (_jsx(Text, { wrap: "truncate", children: part.node })) : (_jsx(TooltipTarget, { content: part.tooltip, children: _jsx(Text, { wrap: "truncate", children: part.node }) })) })] }, part.key))) }));
+ }
++// dsh-overrides 29: powerline segments — powerlevel/fish-style status row.
++//
++// The full (non-compact) field row is rebuilt as a chain of filled segments:
++//   [✦ model][~/cwd][⎇ branch][⚡ ctx-bar][timer]  ·  <dim tail fields>
++// separated by the powerline wedge (U+E0B0; DSH_TUI_POWERLINE=plain swaps it
++// for the font-safe ❯ and drops the fills, =off restores the stock row).
++// bg/fg pairs resolve through theme keys, so user themes restyle the row.
++// The row stays ONE line: no wrapping, segments auto-size, overflow drops
++// segments right-to-left (tail first — it is flex-shrunk like before) so the
++// leftmost (identity) segments always survive. The timer segment mounts only
++// while a turn runs and sweeps the brand claude→claudeShimmer pair through
++// the shared ClockContext (same 60ms mechanism ActivityLine uses — no new
++// timer source; unmounted while idle, so the idle bar costs nothing).
++const POWERLINE_SEP = '';
++const POWERLINE_PLAIN_SEP = '❯';
++const powerlineStyle = () => process.env.DSH_TUI_POWERLINE ?? 'full';
++const PRESSURE_WARN_PCT = 80;
++const PRESSURE_DANGER_PCT = 95;
++const CTX_BAR_CELLS = 6;
++const CTX_HBLOCKS = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
++/** One powerline segment: auto-sized filled box, hoverable like a field. */
++function PowerlineSegment({ bg, fg, id, hoverProps, children, plain, }) {
++    const boxProps = plain
++        ? {}
++        : { backgroundColor: bg };
++    const textProps = plain
++        ? { color: fg }
++        : { color: fg };
++    return (_jsx(Box, { flexShrink: 0, ...(id === undefined ? {} : hoverProps(id)), ...boxProps, children: _jsx(Text, { wrap: "truncate", ...textProps, children: children }) }));
++}
++/** The wedge between two filled segments (or trailing the last one). */
++function PowerlineSeparator({ from, to, plain, }) {
++    if (plain) {
++        return (_jsx(Text, { dimColor: true, children: ` ${POWERLINE_PLAIN_SEP} ` }));
++    }
++    return (_jsx(Text, { ...(to === undefined ? {} : { backgroundColor: to }), color: from, children: POWERLINE_SEP }));
++}
++/** Fill/track blocks for the ctx segment's pressure bar (fraction 0..1). */
++function ctxBarCells(frac) {
++    const eighths = Math.round(frac * CTX_BAR_CELLS * 8);
++    const full = Math.min(CTX_BAR_CELLS, Math.floor(eighths / 8));
++    const rem = full < CTX_BAR_CELLS ? eighths % 8 : 0;
++    const fill = '█'.repeat(full) + (rem > 0 ? CTX_HBLOCKS[rem] : '');
++    return { fill, track: '·'.repeat(Math.max(0, CTX_BAR_CELLS - fill.length)) };
++}
++/**
++ * The live turn-timer segment. Mounted only while `working`, so the
++ * animation clock subscription exists exactly for the turn's duration.
++ */
++function TurnTimerSegment({ turnStart }) {
++    const [, time] = useAnimationFrame(60);
++    const [themeName] = useTheme();
++    const theme = getTheme(themeName);
++    const elapsed = Math.max(0, Date.now() - (turnStart > 0 ? turnStart : Date.now()));
++    const text = formatDuration(elapsed);
++    // The brand shimmer pair (restored by dsh-overrides 28 under any theme):
++    // base mist blue, highlight Border Blue — same sweep ActivityLine runs.
++    const base = parseRGB(theme.claude) ?? { r: 125, g: 161, b: 222 };
++    const highlight = parseRGB(theme.claudeShimmer) ?? { r: 171, g: 194, b: 236 };
++    return (_jsx(Text, { wrap: "truncate", children: ` ${sweep(text, time, base, highlight, 60)} ` }));
++}
++/**
++ * Assemble the segment chain. Each entry: { key, width, node } where `node`
++ * renders the segment INCLUDING its leading separator, so the chain is a
++ * flat list of flexShrink:0 boxes that never wrap or reflow.
++ */
++function buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual, hoverProps, columns, }) {
++    const plain = powerlineStyle() === 'plain';
++    const sepWidth = plain ? 3 : 1;
++    const modelSuffix = mksActual !== undefined && mksActual !== channel.model
++        ? ` → ${mksActual}`
++        : '';
++    const modelText = ` ✦ ${channel.model}${modelSuffix} `;
++    const segments = [];
++    const add = (key, bgKey, width, node) => {
++        segments.push({ key, bgKey, width, node });
++    };
++    add('model', 'claude', stringWidth(modelText), _jsx(PowerlineSegment, { bg: "claude", fg: "inverseText", id: "model", hoverProps: hoverProps, plain: plain, children: modelText }, "model"));
++    if (statusBar.cwd) {
++        const cwdText = ` ${displayCwd} `;
++        add('cwd', 'toolCardBackground', stringWidth(cwdText), _jsx(PowerlineSegment, { bg: "toolCardBackground", fg: "text", id: "cwd", hoverProps: hoverProps, plain: plain, children: cwdText }, "cwd"));
++    }
++    if (statusBar.gitBranch && channel.gitBranch) {
++        const gitText = ` ⎇ ${channel.gitBranch} `;
++        add('git', 'success', stringWidth(gitText), _jsx(PowerlineSegment, { bg: "success", fg: "inverseText", plain: plain, children: gitText }, "git"));
++    }
++    if (contextUsed !== undefined && channel.contextWindow !== undefined) {
++        const threshold = Math.round(channel.contextWindow * (statusBar.compactThresholdRatio ?? 1));
++        const frac = threshold > 0 ? Math.min(1, Math.max(0, contextUsed / threshold)) : 0;
++        const pct = Math.round(frac * 100);
++        const { fill, track } = ctxBarCells(frac);
++        const fillKey = pct >= PRESSURE_DANGER_PCT ? 'error' : pct >= PRESSURE_WARN_PCT ? 'warning' : 'inverseText';
++        const ctxWidth = 3 + CTX_BAR_CELLS + 1 + stringWidth(`${pct}%`) + 1;
++        add('ctx', 'toolDotWrite', ctxWidth, _jsxs(PowerlineSegment, { bg: "toolDotWrite", fg: "inverseText", id: "ctx", hoverProps: hoverProps, plain: plain, children: [" ⚡", _jsx(Text, { color: fillKey, wrap: "truncate", children: fill }), _jsx(Text, { dimColor: true, wrap: "truncate", children: track }), ` ${pct}% `] }, "ctx"));
++    }
++    if (channel.working && channel.turnStart > 0) {
++        const elapsed = Math.max(0, Date.now() - channel.turnStart);
++        const timerWidth = 2 + stringWidth(formatDuration(elapsed)) + 2;
++        add('timer', 'toolCardBackgroundDim', timerWidth, _jsx(PowerlineSegment, { bg: "toolCardBackgroundDim", fg: "claude", plain: plain, children: _jsx(TurnTimerSegment, { turnStart: channel.turnStart }) }, "timer"));
++    }
++    // Overflow: drop segments right-to-left (timer, ctx, git, cwd — the model
++    // identity always survives; the row itself clips via overflow:hidden).
++    // The budget counts every wedge plus the trailing wedge of the chain.
++    const budget = columns - 2;
++    const chainWidth = (list) => list.reduce((sum, s) => sum + s.width + sepWidth, 0);
++    while (segments.length > 1 && chainWidth(segments) > budget) {
++        segments.pop();
++    }
++    return { segments, plain, sepWidth };
++}
++/**
++ * Render the powerline chain: a wedge leads every segment after the first,
++ * painted fg=previous fill over bg=next fill (the wedge look); the chain
++ * closes with a trailing wedge onto the terminal background.
++ */
++function PowerlineChain({ segments, plain, sepWidth, }) {
++    if (segments.length === 0)
++        return null;
++    const nodes = segments.map((segment, index) => (_jsxs(React.Fragment, { children: [index > 0 ? (_jsx(PowerlineSeparator, { from: segments[index - 1].bgKey, to: segment.bgKey, plain: plain })) : null, segment.node] }, segment.key)));
++    if (!plain) {
++        nodes.push(_jsx(PowerlineSeparator, { from: segments[segments.length - 1].bgKey, plain: plain }, "trailing"));
++    }
++    return (_jsx(Box, { flexShrink: 0, flexDirection: "row", overflow: "hidden", children: nodes }));
++}
+ export function StatusLine({ channel, selectionActive = false, helpOpen = false, wake, fullscreen = false, }) {
+     const { columns } = useTerminalSize();
+     const [themeName] = useTheme();
+@@ -340,9 +468,14 @@
+         activity.phase !== 'idle';
+     const showTrajectory = statusBar.trajectory && wake !== undefined;
+     const barWidth = columns - 4;
++    // dsh-overrides 29: the context bar's free-segment pair comes from the
++    // theme palette (was hardcoded #2E3440/#8D95A6): the dim card substrate
++    // fills the track and the inactive gray-blue carries the readout, so
++    // user themes restyle it like every other surface. Light keeps the
++    // component's light defaults (the old branch's behavior).
+     const barColors = themeName === 'light'
+         ? undefined
+-        : { freeFill: '#2E3440', freeText: '#8D95A6' };
++        : { freeFill: getTheme(themeName).toolCardBackgroundDim, freeText: getTheme(themeName).inactive };
+     const barVisible = statusBar.contextBar &&
+         channel.contextBarEnabled &&
+         barWidth >= 14 &&
+@@ -362,6 +495,23 @@
+         ...(ctxNode !== undefined ? [{ key: 'context', id: 'ctx', node: ctxNode }] : []),
+     ];
+     const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined;
++    // dsh-overrides 29: assemble the powerline chain for the full (non-compact)
++    // row. The model field and the git/cwd right fields fold into segments;
++    // the ctx hover field folds into the ⚡ segment; everything else stays a
++    // plain dim tail field after the chain (fish-style hierarchy: filled
++    // blocks carry identity, dim text carries telemetry).
++    const powerlineOn = hasStatusFields && !statusBar.compact && powerlineStyle() !== 'off';
++    const powerline = powerlineOn
++        ? buildPowerlineSegments({ channel, statusBar, displayCwd, contextUsed, mksActual: mks.actualModel, hoverProps, columns })
++        : undefined;
++    const powerlineTailParts = powerlineOn
++        ? leftFields.filter(part => part.key !== 'model')
++        : leftFields;
++    const powerlineRightParts = powerlineOn
++        ? rightFields.filter(part => part.key !== 'git' && part.key !== 'cwd')
++        : rightFields;
++    const powerlineHasContent = powerlineOn &&
++        (powerline.segments.length > 0 || powerlineTailParts.length > 0 || powerlineRightParts.length > 0);
+     // Supplemental row mounts only when it carries real content (hover
+     // detail, hint, activity, trajectory). The upstream build kept it
+     // permanently reserved (height 1) whenever the footer had hoverable
+@@ -380,7 +530,7 @@
+     const mountSupplementalRow = fullscreen && showSupplementalRow;
+     return (_jsx(Box, { paddingX: 1, width: columns, flexShrink: 0, children: _jsxs(Box, { flexDirection: "column", width: "100%", children: [barVisible ? (_jsx(ContextBarView, { segments: channel.contextSegments, usedTokens: contextUsed ?? 0, contextWindow: channel.contextWindow ?? 0, width: barWidth, colors: barColors, onHover: segment => setHover(current => segment === null
+                         ? (current !== null && current.startsWith('segment:') ? null : current)
+-                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] })) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
++                        : `segment:${segment}`) })) : null, hasStatusFields ? statusBar.compact ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: compactFields, hoverProps: hoverProps }) }), ctxNode !== undefined ? (_jsx(Box, { flexShrink: 0, ...hoverProps('ctx'), children: _jsx(Text, { wrap: "truncate", children: ctxNode }) })) : null] })) : (powerlineHasContent && powerline !== undefined ? (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: [_jsx(PowerlineChain, { segments: powerline.segments, plain: powerline.plain, sepWidth: powerline.sepWidth }), _jsx(Box, { flexShrink: 1, flexDirection: "row", overflow: "hidden", marginLeft: powerline.segments.length > 0 ? 1 : 0, children: _jsx(FieldLine, { parts: powerlineTailParts, hoverProps: hoverProps }) })] }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: powerlineRightParts, hoverProps: hoverProps }) })] })) : (_jsxs(Box, { flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsx(Box, { flexGrow: 1, flexShrink: 1, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: fullLeftFields, hoverProps: hoverProps }) }), _jsx(Box, { justifyContent: "flex-end", flexShrink: 2, flexDirection: "row", overflow: "hidden", children: _jsx(FieldLine, { parts: rightFields, hoverProps: hoverProps }) })] }))) : null, mountSupplementalRow ? _jsxs(Box, { height: 1, overflow: "hidden", flexDirection: "row", justifyContent: "space-between", gap: 2, children: [_jsxs(Box, { flexDirection: "row", flexGrow: 1, justifyContent: showActivity && trailer !== null ? 'space-between' : 'flex-start', gap: 2, children: [showActivity && activity !== undefined ? (_jsx(ActivityLine, { activity: activity, activityFrames: channel.activityFrames, warnPct: contextPressurePct(usage, channel.contextWindow), warnDanger: (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95 })) : trailer, showActivity ? trailer : null] }), showTrajectory && wake !== undefined ? (_jsx(MiniWake, { band: wake.band, hint: wake.hint, tick: wake.tick })) : null] }) : null] }) }));
+ }
+ /**
+  * The supplemental-row readout for a hovered footer field. Technical label
+--- a/lib/types/components/Spinner/SpinnerAnimationRow.js
++++ b/lib/types/components/Spinner/SpinnerAnimationRow.js
+@@ -10,13 +10,16 @@
+ import { GlimmerMessage } from './GlimmerMessage.js';
+ import { SpinnerGlyph } from './SpinnerGlyph.js';
+ import { useStalledAnimation } from './useStalledAnimation.js';
+-import { interpolateColor, toRGBColor } from './spinnerUtils.js';
++import { getTheme } from '../../theme.js';
++import { useTheme } from '../design-system/ThemeProvider.js';
++import { interpolateColor, parseRGB, toRGBColor } from './spinnerUtils.js';
+ const SEP_WIDTH = stringWidth(' · ');
+ const THINKING_BARE_WIDTH = stringWidth('thinking');
+ const SHOW_TOKENS_AFTER_MS = 30_000;
+-// Thinking shimmer constants (same as Claude Code).
+-const THINKING_INACTIVE = { r: 153, g: 153, b: 153 };
+-const THINKING_INACTIVE_SHIMMER = { r: 185, g: 185, b: 185 };
++// Thinking shimmer fallbacks (Claude Code's original grays) — used when the
++// active palette has no parseable RGB pair (ANSI themes).
++const THINKING_FALLBACK_INACTIVE = { r: 153, g: 153, b: 153 };
++const THINKING_FALLBACK_SHIMMER = { r: 185, g: 185, b: 185 };
+ const THINKING_DELAY_MS = 3000;
+ const THINKING_GLOW_PERIOD_S = 2;
+ /**
+@@ -28,6 +31,13 @@
+  */
+ export function SpinnerAnimationRow({ mode, reducedMotion, hasActiveTools, responseLengthRef, uploadTokensRef, message, messageColor, shimmerColor, loadingStartTimeRef, totalPausedMsRef, pauseStartTimeRef, spinnerSuffix, verbose, columns, thinkingStatus, }) {
+     const [viewportRef, time] = useAnimationFrame(reducedMotion ? null : 50);
++    // dsh-overrides 29: the thinking pulse breathes the theme's inactive
++    // ladder (dark: #8D95A6 → #AAB2C2) instead of CC's hardcoded grays;
++    // ANSI palettes fall back to the original pair.
++    const [themeName] = useTheme();
++    const themePalette = getTheme(themeName);
++    const thinkingInactive = parseRGB(themePalette.inactive) ?? THINKING_FALLBACK_INACTIVE;
++    const thinkingShimmerRgb = parseRGB(themePalette.inactiveShimmer) ?? THINKING_FALLBACK_SHIMMER;
+     // === Elapsed time (wall-clock, derived from refs each frame) ===
+     const now = Date.now();
+     const elapsedTimeMs = pauseStartTimeRef.current !== null
+@@ -127,7 +137,7 @@
+         : (Math.sin((thinkingElapsedSec * Math.PI * 2) / THINKING_GLOW_PERIOD_S) +
+             1) /
+             2;
+-    const thinkingShimmerColor = toRGBColor(interpolateColor(THINKING_INACTIVE, THINKING_INACTIVE_SHIMMER, thinkingOpacity));
++    const thinkingShimmerColor = toRGBColor(interpolateColor(thinkingInactive, thinkingShimmerRgb, thinkingOpacity));
+     // === Build status parts ===
+     const parts = [
+         ...(spinnerSuffix

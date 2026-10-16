@@ -1,0 +1,27 @@
+# Goal:      fullscreen: пустота под статус-баром (root flex-end)
+# Family:    IL.05
+# Status:    live
+# Files:     lib/types/screens/Chat.js
+# Evidence:  facts/patches-B.md; dsh-overrides/patches/repro-24-fs-layout.mjs
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 (fullscreen-путь)
+
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -3376,7 +3376,15 @@
+     const anchorUserText = anchorUserRowId === null
+         ? null
+         : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null;
+-    return (_jsxs(Box, { ref: wakeTickRef, flexDirection: "column", flexGrow: 1, width: "100%", ...(inlinePinned ? { height: terminalRows, flexShrink: 0, justifyContent: "flex-end" } : {}), children: [!isSticky && anchorUserText && (_jsx(StickyPromptHeader, { text: anchorUserText, onClick: () => {
++    // dsh-overrides 24: fullscreen bottom-anchor. In fullscreen the root Box
++    // grows inside AlternateScreen's height=rows frame; without justifyContent
++    // the free rows (short transcript, patch 01's flexGrow 0 while rows=0)
++    // collected UNDER the statusline — a floating footer with blank space
++    // below the status bar that grew/shrank as chrome mounted (the start-of-
++    // session "breathing"). Anchoring the column to flex-end pins the footer
++    // block to the last terminal row in fullscreen exactly like patch 11's
++    // inline pinned frame (which keeps its height/flexShrink constraints).
++    return (_jsxs(Box, { ref: wakeTickRef, flexDirection: "column", flexGrow: 1, width: "100%", ...(inlinePinned || fullscreen ? { justifyContent: "flex-end", ...(inlinePinned ? { height: terminalRows, flexShrink: 0 } : {}) } : {}), children: [!isSticky && anchorUserText && (_jsx(StickyPromptHeader, { text: anchorUserText, onClick: () => {
+                     // Click snaps the pinned prompt to the viewport top (CC's
+                     // StickyPromptHeader). Jump by the SAME content coordinate the
+                     // rail's tick uses (timeline turn top = the prompt TEXT top):

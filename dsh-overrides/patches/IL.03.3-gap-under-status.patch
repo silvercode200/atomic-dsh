@@ -1,0 +1,120 @@
+# Goal:      щель под статус-баром: cursor clamp + pin-latch
+# Family:    IL.03
+# Status:    live
+# Files:     lib/types/ink/renderer.js, lib/types/screens/Chat.js
+# Evidence:  TG-DSH-THEMEDEMO-20260926 узел 2;
+#            reports/colab-themedemo-golden-20260926T181149Z/
+# Upstream:  not-applicable
+# Added:     2026-09-26 (TG-DSH-THEMEDEMO-20260926 узел 2)
+
+# 70-gap-under-status (TG-DSH-THEMEDEMO-20260926, node 2, 2026-09-26)
+# Goal:      закрыть «щель под статус-баром» (пустой ряд под StatusLine в
+#            inline-режиме, RCA .tmp-probes/schel-rca-20260926/RCA.md):
+#            (1) renderer.js паркует курсор НИЖЕ переполненного кадра
+#            (cursor.y = screen.height) — cursor-restore log-update
+#            материализует пустой park-ряд на дне терминала, а
+#            viewportRepaintPatches резервирует под него contentRows=V-1
+#            и бланкует нижний физический ряд (RCA fix-1);
+#            (2) Chat pin-latch читает contentHeight ScrollBox'а на коммите
+#            (re)морта — свежая yoga-нода меряет 0 pre-layout, 0 изометричен,
+#            и unpinned-решение ложно пинит высокий транскрипт (user f881:
+#            усилитель щели — false-pin порождает unpin-flip, который
+#            запускает pinUnpin COMMIT — amplification-петлю щели; RCA fix-2
+#            заменён handle-identity guard'ом: measuredViewport-гард сломан —
+#            пустой scrollbox НИКОГДА не получает scrollViewportHeight,
+#            рендерер не спускается в нулевой бокс, boot-кадры scroll=[]).
+# Family:    E (visual/render); порядковая схема 01-65 — миграция SUBSYS.FF.B
+#            утверждена отдельной big-bang волной, до неё новые патчи
+#            порядковые. Сцепление: renderer.js/Chat.js строки в зоне хунков
+#            патча 11 (inline-bottom-anchor) — применяется ПОСЛЕ 11,
+#            контекст = post-11.
+# Status:    live (RED→GREEN gap-pinflip 4/4: batch-30 22×59, batch-25
+#            43×120, batch-9 22×59 + 43×120; gap-resize 2/2: 26→22×59,
+#            47→43×120; 0 ED*/2J)
+# Files:     lib/types/ink/renderer.js (cursor clamp, post11 ~154),
+#            lib/types/screens/Chat.js (lastHandleRef + handleFresh, post68
+#            ~439/~485)
+# Evidence:  .tmp-probes/schel-fix-20260926/gap-pinflip-red-22x59.txt (RED),
+#            gap-pinflip-g70e30-22x59.txt (GREEN), gap-resize-g70r-22x59.txt,
+#            gap-resize-g70r43-43x120.txt, diag-frame.log (патч-дамп кадров:
+#            f22 COMMIT чист, f25 shrink = механизм щели) — TaskGate
+#            TG-DSH-THEMEDEMO-20260926 node 2. ЗАВИСИМОСТЬ: правки
+#            log-update.js этого фикса живут в 55b (v2).
+# Upstream:  not-applicable
+# Added:     2026-09-26, волна TG-DSH-THEMEDEMO-20260926 (узел 2).
+#
+--- a/lib/types/ink/renderer.js
++++ b/lib/types/ink/renderer.js
+@@ -151,8 +151,25 @@
+                 // cursor-restore LF at the last row, scrolling one row off the top
+                 // of the alt buffer and desyncing the diff's cursor model. The
+                 // cursor is hidden so its position only matters for diff coords.
+-                y: options.altScreen || yogaHeight === terminalRows
+-                    ? Math.max(0, Math.min(screen.height, terminalRows) - 1)
++                // dsh-overrides 70: clamp for OVERFLOW frames too (yogaHeight >
++                // terminalRows). Parking the cursor at screen.height (below the
++                // frame) made log-update's cursor-restore materialize a blank
++                // park row at the terminal bottom — and viewportRepaintPatches'
++                // park-row reservation (contentRows = V-1) then BLANKED the last
++                // physical row under the StatusLine: the "gap under the status
++                // bar" (user f957 pin→unpin flip; probe gap-pinflip RED).
++                // Clamping onto the frame's LAST row keeps the cursor physically
++                // reachable (a plain move — no LF, no park row) and lets the
++                // pinUnpin COMMIT detector in log-update (55b v2) recognize the
++                // unpin structurally (prev V−H===1) instead of by the parked
++                // cursor. terminalRows-1 would be wrong for overflow frames —
++                // that virtual row lives in scrollback (viewportY ≈ H−V) and is
++                // unreachable by moveCursorTo; screen.height−1 is the frame's
++                // own tail. Short frames (yogaHeight < terminalRows) keep the
++                // below-frame park — the cursor stays inside the terminal, so
++                // no park row is ever materialized.
++                y: options.altScreen || yogaHeight >= terminalRows
++                    ? Math.max(0, screen.height - 1)
+                     : screen.height,
+                 // Hide cursor when there's dynamic output to render (only in TTY mode)
+                 visible: !isTTY || screen.height === 0,
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -436,6 +436,19 @@
+     // belt-and-braces (React bails out on identical setState, but be
+     // explicit about intent).
+     const lastPinFlipRef = React.useRef(0);
++    // dsh-overrides 70: ScrollBox handle identity seen by the previous latch
++    // run. A handle change means the ScrollBox (re)mounted on THIS commit;
++    // its yoga subtree has not been laid out yet — fresh nodes measure 0
++    // pre-layout and 0 is isFinite — so the unpinned pin decision on that
++    // commit reads a tall transcript as "empty" and false-pins it (user
++    // f881: 0+6<21 latched a pin over a 20-row remount for 2.7s because no
++    // Chat commit followed while the hub was open; the eventual unpin flip
++    // fired log-update's pinUnpin COMMIT — the gap's amplifier). The null
++    // handle (first boot commit, ScrollBox ref not yet attached) is NOT
++    // treated as fresh: minimal empty chats pin on that commit today and
++    // must keep doing it. Skipping only the non-null identity change lets
++    // the next latch run read the laid-out heights and converge.
++    const lastHandleRef = React.useRef(null);
+     React.useEffect(() => {
+         const setPinned = (next) => {
+             if (next === inlinePinned)
+@@ -454,6 +467,8 @@
+                 setPinned(false);
+             return;
+         }
++        const handleFresh = handle !== null && handle !== lastHandleRef.current;
++        lastHandleRef.current = handle;
+         if (inlinePinned) {
+             // Pinned: the ScrollBox viewport is clamped to what remains of
+             // terminalRows after the footer. Content taller than that viewport
+@@ -470,6 +485,13 @@
+                 setPinned(false);
+         }
+         else {
++            // dsh-overrides 70: skip the pin decision on the (re)mount commit
++            // (handleFresh, see lastHandleRef) — the fresh node measures 0
++            // pre-layout, so contentHeight would read "empty" for tall
++            // content and false-pin the frame (user f881). The next Chat
++            // commit measures the laid-out subtree and converges.
++            if (handleFresh)
++                return;
+             // Unpinned: the ScrollBox is unconstrained, so its content box IS
+             // the natural transcript height (logo + rows); the footer Box
+             // keeps flexShrink 0, so its yoga height is natural too.

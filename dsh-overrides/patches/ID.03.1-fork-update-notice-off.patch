@@ -1,0 +1,77 @@
+# Goal:      update-notice форка отключён
+# Family:    ID.03
+# Status:    live
+# Files:     lib/types/update.js
+# Evidence:  TG-DSH-REBUILD-20260921 (волна 4);
+#            reports/colab-w4green-20260922T170736Z/
+# Upstream:  not-applicable
+# Added:     2026-09-22 (TG-DSH-REBUILD-20260921 волна 4)
+
+# 59-fork-update-notice-off (TG-DSH-REBUILD-20260921, волна 4 E4):
+# стартовый update-notice («update available») не показывается на форке.
+# Сток: plugin.js void checkForTuiUpdate().then(...) → channel.notify(
+# t('update-available')) на каждом старте сессии. Эта установка = патч-стек
+#   форк: версия юзера = base 0.10.0-beta.4 + суффикс +pNN (LogoV2, патч 49),
+#   которого нет в апстрим-registry. Для престижа gt(latest, current) верен,
+#   для форка сравнение бессмысленно: notice «доступно обновление» ложен
+#   (об обновлении ПАТЧ-СТЕКА registry не знает), плюс каждый старт несёт
+#   лишний network-roundtrip к registry.
+# Фикс (минимальный, update.js):
+#   1) dshForkPatchDepth(): createRequire + require(esm) читает генерируемый
+#      ./components/forkVersion.js (тот же способ, что LogoV2/патч 49; пакет
+#      ESM — голого require нет). Файл отсутствует (престиж) / битый → 0.
+#   2) Гейт первой строкой checkForTuiUpdate: depth > 0 ИЛИ строка версии
+#      содержит '+p' (дубль-канал на случай ручного бампа package.json) →
+#      return undefined — notice-путь получает «нет результата», как при
+#      offline-старте. Ручной /update (resolveTuiUpdateTarget) НЕ тронут —
+#      юзер по-прежнему может обновить base-версию осознанно.
+# Инварианты: рендер/высота футера не участвуют (гейт ДО notify — тост
+# просто не рождается); формат ответа undefined = существующий «no result»
+# контракт (plugin.js уже обрабатывает update === undefined как молчание).
+--- a/lib/types/update.js
++++ b/lib/types/update.js
+@@ -1,6 +1,8 @@
+ import { execFileSync, spawn } from 'node:child_process';
+ import { createHash } from 'node:crypto';
+ import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
++// dsh-overrides 59: fork update-notice off — см. dshForkPatchDepth() ниже.
++import { createRequire } from 'node:module';
+ import { homedir } from 'node:os';
+ import { dirname, join, resolve, sep } from 'node:path';
+ import { fileURLToPath } from 'node:url';
+@@ -797,12 +799,35 @@
+     const authoritative = official !== undefined && gt(official, latest) ? official : undefined;
+     return { kind: 'update', current: currentVersion, latest, ...(authoritative === undefined ? {} : { authoritative }) };
+ }
++// dsh-overrides 59: fork update-notice off — глубина патч-стека форка.
++// forkVersion.js генерируется scripts/apply-dsh-overrides.sh (не входит в
++// реестр патчей); читается тем же способом, что в LogoV2 (патч 49):
++// createRequire + require(esm) — пакет ESM (type:module), голого require в
++// ESM нет. Файл отсутствует (престиж) или unreadable → 0 = прежнее поведение.
++function dshForkPatchDepth() {
++    try {
++        const req = createRequire(import.meta.url);
++        const patchDepth = req('./components/forkVersion.js').patch;
++        return typeof patchDepth === 'number' && patchDepth > 0 ? patchDepth : 0;
++    }
++    catch {
++        return 0;
++    }
++}
+ /**
+  * Check npm for a newer published TUI version. Network and registry errors
+  * are intentionally treated as "no result" so an offline launch never delays
+  * or blocks the interactive TUI.
+  */
+ export async function checkForTuiUpdate() {
++    // dsh-overrides 59: fork update-notice off — эта установка = патч-стек-форк
++    // (+pNN из forkVersion.js; дубль-канал: суффикс '+p' в строке версии).
++    // Апстрим-registry ничего не знает о суффиксе: gt(latest, current) верен
++    // только для престижа, а notice «доступно обновление» для форка всегда
++    // ложен — плюс это лишний registry-roundtrip на каждом старте. Гасим всю
++    // проверку целиком; ручной /update (resolveTuiUpdateTarget) не тронут.
++    if (dshForkPatchDepth() > 0 || (installedTuiVersion() ?? '').includes('+p'))
++        return undefined;
+     const target = await resolveTuiUpdateTarget();
+     return target.kind === 'update'
+         ? {

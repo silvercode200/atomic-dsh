@@ -1,0 +1,214 @@
+# Goal:      Consolidated MS.01 MessageList: per-kind spacer estimate (26b) +
+#            streaming-height retention (54) + post-streaming heightsRef invalidation (77) +
+#            unmount-time height capture (79) — scroll-geometry K5-line on MessageList.js
+# Family:    MS.01
+# Status:    live
+# Files:     lib/types/components/MessageList.js
+# Evidence:  facts/patches-B.md (26b);
+#            TG-DSH-PATCH54-20260920 узел 2; facts/patches-C.md (54);
+#            TG-DSH-MKS4-20260928 узел 5 (77 revised clamp→invalidation, 79 unmount-capture);
+#            RCA memories: dsh-saw-451-heightsref-stale-residual, dsh-flicker-b1b2-root-cause
+# Upstream:  not-applicable
+# Added:     2026-09-17 (26b); 2026-09-20 (54); 2026-10-08 (77); 2026-10-10 (79)
+# Squash:    MS.01.1+MS.01.2+MS.01.5+MS.01.7 → MS.01.1 (3D big-bang, TG-DSH-BIGBANG-20261016)
+# Regen:     diff(pristine MessageList.js, applied 80-patch stack) — byte-identity preserved
+
+--- a/lib/types/components/MessageList.js
++++ b/lib/types/components/MessageList.js
+@@ -284,6 +284,9 @@
+     /** Geometry version: bumped at EVERY heightsRef mutation so downstream
+      *  memos (timeline tops) can key on it instead of re-deriving offsets. */
+     const heightsVersionRef = React.useRef(0);
++    // DSH-P77-SAW-INVALIDATE: track streaming row IDs to invalidate stale
++    // heightsRef entries on the streaming→false transition (dsh-overrides 77).
++    const prevStreamingRef = React.useRef(new Set());
+     const localRefs = React.useRef(new Map());
+     /** Row ids that have been mounted (and therefore painted into the
+      *  terminal) at least once. The sticky window may skip a row ONLY after
+@@ -371,6 +374,10 @@
+     const sigRef = React.useRef(new Map());
+     {
+         const sigs = sigRef.current;
++        // DSH-P77-SAW-INVALIDATE: streaming→false transition tracking
++        const prevStreaming = prevStreamingRef.current;
++        const p77Next = new Set();
++        let p77Changed = false;
+         for (let i = 0; i < visibleRows.length; i++) {
+             const row = visibleRows[i];
+             // Per-kind signature: only the inputs that row's OWN renderer consumes.
+@@ -391,6 +398,20 @@
+                     }
+                 }
+             }
++            // DSH-P77-SAW-INVALIDATE: invalidate stale heightsRef when a row
++            // transitions from streaming to non-streaming. Patch 54 retains
++            // streaming heights across sig changes, but after the stream stops
++            // (C-c / turn end) the content freezes — no more sig changes — so
++            // a stale entry (measured mid-reveal before the row grew) persists
++            // until scroll-induced remount, causing the ±1 scrollHeight saw.
++            // Deleting on the transition forces kindAvg fallback (close to
++            // real) and the tail-side extension re-mounts for re-measure.
++            if (row.streaming !== true && prevStreaming.has(row.id)) {
++                heightsRef.current.delete(row.id);
++                p77Changed = true;
++            }
++            if (row.streaming === true)
++                p77Next.add(row.id);
+             if (same)
+                 continue;
+             if (sigs.size >= HEIGHTS_CACHE_MAX) {
+@@ -400,9 +421,27 @@
+             }
+             // Copy out of the module-level scratch buffer — the next row reuses it.
+             sigs.set(row.id, parts.slice());
+-            heightsRef.current.delete(row.id);
++            // dsh-overrides 54: a row that is actively STREAMING keeps its
++            // measured height through signature changes. The streaming
++            // signature invalidates on every smooth-reveal tick
++            // (revealDisplayLen feeds signatureParts), so the delete dropped
++            // the measured ~74-line height to the ~38-line kindAvg estimate,
++            // floor-walk recomputed start/topPad, the measure effect restored
++            // the measured value, and the next reveal tick deleted again — a
++            // ~33ms estimate↔measured oscillation (geo-r1: 677 window jumps,
++            // 704 list.total decreases per stream, flicker_toggle_rows=38).
++            // The measure effect still updates the height as the row grows;
++            // the settle (streaming→false) invalidates through this same path
++            // and remeasures exactly once. Width changes clear the whole
++            // cache above regardless.
++            if (row.streaming !== true)
++                heightsRef.current.delete(row.id);
+             heightsVersionRef.current++;
+         }
++        // DSH-P77-SAW-INVALIDATE: commit streaming transition invalidation
++        prevStreamingRef.current = p77Next;
++        if (p77Changed)
++            heightsVersionRef.current++;
+     }
+     // Scrolling bypasses React (imperative DOM scrollTop): subscribe so the
+     // window follows the viewport.
+@@ -415,11 +454,22 @@
+     // Cached rail/header preview per user row (see the timeline block for why
+     // the length guard exists alongside the id key).
+     const previewCacheRef = React.useRef(new Map());
+-    const heightOf = (row) => heightsRef.current.get(row.id) ?? DEFAULT_ROW_HEIGHT;
++    // dsh-overrides 26: kind-aware spacer estimate. A never-measured row
++    // (history replay past MAX_RENDERED_ROWS, loadOlder reveals, FAR jumps)
++    // falls back to DEFAULT_ROW_HEIGHT=2, but a bash tool card measures ~6 —
++    // the spacer model then undershoots the real extent by 4 lines per card
++    // and the scroll geometry jumps as rows measure on entry. A running
++    // per-kind average of already-measured rows (updated by the measure
++    // effect below) is a far tighter prior; DEFAULT_ROW_HEIGHT remains the
++    // cold-start value before any row of that kind has ever mounted.
++    const heightOf = (row) => heightsRef.current.get(row.id) ?? (Math.round(kindAvgRef.current.get(row.kind)?.avg ?? 0) || DEFAULT_ROW_HEIGHT);
+     // Reused offsets buffer: the prefix-scan itself must run every render
+     // (heightsRef mutates in the measure effect), but the ARRAY need not be
+     // fresh — offsets never escapes this render scope. A new 3200-slot array
+     // per scroll tick was pure GC fodder.
++    // dsh-overrides 26: per-kind running average of measured row heights
++    // (spacer estimate for never-measured rows — see heightOf).
++    const kindAvgRef = React.useRef(new Map());
+     const offsetsBufRef = React.useRef([]);
+     const offsets = offsetsBufRef.current;
+     offsets.length = visibleRows.length;
+@@ -825,6 +875,31 @@
+                 changed = true;
+             }
+         }
++        // dsh-overrides 26: refresh the per-kind height averages feeding the
++        // never-measured spacer estimate (see heightOf). Incremental: each
++        // newly measured row nudges its kind's average; the first 64 samples
++        // build a plain mean, afterwards an exponential drift so a changed
++        // layout (theme/terminal width) re-converges instead of freezing.
++        {
++            const kindAvg = kindAvgRef.current;
++            for (let i = 0; i < visibleRows.length; i++) {
++                const h = heightsRef.current.get(visibleRows[i].id);
++                if (h === undefined)
++                    continue;
++                const agg = kindAvg.get(visibleRows[i].kind);
++                if (agg === undefined) {
++                    kindAvg.set(visibleRows[i].kind, { sum: h, n: 1, avg: h });
++                }
++                else if (agg.n < 64) {
++                    agg.sum += h;
++                    agg.n++;
++                    agg.avg = agg.sum / agg.n;
++                }
++                else {
++                    agg.avg = agg.avg * 0.98 + h * 0.02;
++                }
++            }
++        }
+         const firstMounted = visibleRows[start];
+         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: empty list window
+         const firstEl = firstMounted ? localRefs.current.get(firstMounted.id) : undefined;
+@@ -894,10 +969,39 @@
+     // useCallback: the reference feeds MemoRow's shallow compare; a fresh
+     // closure per render would defeat every row's memo.
+     const setRowRef = React.useCallback((rowId, el) => {
+-        if (el)
++        if (el) {
+             localRefs.current.set(rowId, el);
+-        else
++        } else {
++            // DSH-P79-SCROLL-SAW-UNMOUNT-CAPTURE: capture the row's yoga
++            // height at unmount time. The measure effect reads the PREVIOUS
++            // calculateLayout pass (useLayoutEffect runs before writeOutput's
++            // calculateLayout), so a row that mounts in frame N and unmounts
++            // in frame N+1 never gets measured — heightsRef stays missing or
++            // stale, heightOf returns kindAvg (±1 off), and the bottomPad
++            // spacer diverges from the row's real yoga height → scrollHeight
++            // saws ±1 (418↔417) when the row enters/leaves the mount window
++            // during scroll. At unmount the previous element's yogaNode still
++            // holds the LAST calculateLayout result (removeChildNode detaches
++            // from parent but does NOT clear yogaNode; cleanupYogaNode runs
++            // later, after ref callbacks). Capture it before deleting.
++            // Patch 77 handles streaming rows (deletes on streaming→false
++            // transition); this handles the settle-and-scroll case.
++            const prev = localRefs.current.get(rowId);
++            if (prev !== undefined) {
++                const h = prev.yogaNode?.getComputedHeight();
++                if (h !== undefined && h > 0 &&
++                    heightsRef.current.get(rowId) !== h) {
++                    if (heightsRef.current.size >= HEIGHTS_CACHE_MAX) {
++                        const oldest = heightsRef.current.keys().next().value;
++                        if (oldest !== undefined)
++                            heightsRef.current.delete(oldest);
++                    }
++                    heightsRef.current.set(rowId, h);
++                    heightsVersionRef.current++;
++                }
++            }
+             localRefs.current.delete(rowId);
++        }
+         registerRowRef?.(rowId, el);
+     }, [registerRowRef]);
+     return (_jsxs(_Fragment, { children: [rows.some(row => row.folded) && (_jsx(ClickableDivider, { title: t('load-earlier'), onClick: onLoadOlder })), !showAll && hiddenCount > 0 && (_jsx(ClickableDivider, { title: t('show-previous-messages', { n: hiddenCount }), onClick: onToggleAll })), topPad > 0 && _jsx(Box, { height: topPad, flexShrink: 0 }), visibleRows
+@@ -973,7 +1077,14 @@
+         case 'user':
+             return (_jsx(Box, { flexDirection: "column", ref: ref, children: _jsx(UserPromptMessage, { text: text, addMargin: addMargin, isSelected: isSelected }) }));
+         case 'assistant':
+-            return streaming ? (_jsxs(Box, { alignItems: "flex-start", flexDirection: "row", marginTop: addMargin ? 1 : 0, width: "100%", backgroundColor: background, ref: ref, children: [_jsx(Box, { minWidth: 2, children: _jsx(Text, { color: "text", children: "\u25CF" }) }), _jsx(Box, { flexDirection: "column", children: _jsx(StreamingMarkdown, { children: stripNarration(text) }) })] })) : (_jsxs(Box, { width: "100%", flexDirection: "column", backgroundColor: background, ref: ref, children: [expanded && (_jsx(Box, { flexDirection: "row", justifyContent: "flex-end", gap: 1, marginTop: 1, children: _jsx(MessageMetadata, { timestamp: time, model: model }) })), _jsx(AssistantTextMessage, { text: stripNarration(text), addMargin: addMargin, isSelected: isSelected, isExpanded: isExpanded })] }));
++            // dsh-overrides 26: the margin lives INSIDE the ref'd wrapper
++            // (an inner Box), matching every other row kind — the measured
++            // wrapper height then includes the margin, so the virtualization
++            // spacer that replaces this row while it is unmounted covers the
++            // full row extent. With the margin on the wrapper itself the
++            // spacer was one line short and the transcript jumped a line on
++            // every mount/unmount crossing.
++            return streaming ? (_jsx(Box, { flexDirection: "column", width: "100%", backgroundColor: background, ref: ref, children: [_jsxs(Box, { alignItems: "flex-start", flexDirection: "row", marginTop: addMargin ? 1 : 0, width: "100%", children: [_jsx(Box, { minWidth: 2, children: _jsx(Text, { color: "text", children: "\u25CF" }) }), _jsx(Box, { flexDirection: "column", children: _jsx(StreamingMarkdown, { children: stripNarration(text) }) })] })] })) : (_jsxs(Box, { width: "100%", flexDirection: "column", backgroundColor: background, ref: ref, children: [expanded && (_jsx(Box, { flexDirection: "row", justifyContent: "flex-end", gap: 1, marginTop: 1, children: _jsx(MessageMetadata, { timestamp: time, model: model }) })), _jsx(AssistantTextMessage, { text: stripNarration(text), addMargin: addMargin, isSelected: isSelected, isExpanded: isExpanded })] }));
+         case 'reasoning': {
+             // The setting chooses the live default; a row click reverses it. Global
+             // or per-row transcript expansion always wins and shows the full text.
+@@ -1023,7 +1134,10 @@
+             // The post-compaction summary defaults to a folded one-liner with a
+             // text preview; Ctrl+O (global), message-selection Enter, or a click
+             // reveals the full summary.
+-            return (_jsx(Box, { marginTop: addMargin ? 1 : 0, paddingLeft: 2, backgroundColor: background, ref: ref, onClick: foldOnClick, onMouseEnter: () => setCompactHovered(true), onMouseLeave: () => setCompactHovered(false), children: expanded || isExpanded ? (_jsx(Text, { dimColor: true, children: text })) : (_jsxs(Text, { dimColor: true, italic: true, color: compactHovered ? 'text' : undefined, children: [_jsx(Text, { color: compactHovered ? 'text' : undefined, children: "\u2234" }), ' ', t('compact-summary-folded'), " \u00B7 ", compactPreview(text), ' ', t('hint-expand-ctrl-o')] })) }));
++            // dsh-overrides 26: margin inside the ref'd wrapper (see the
++            // streaming-assistant row above) so the measured height feeds
++            // the spacer model with the full row extent.
++            return (_jsx(Box, { backgroundColor: background, ref: ref, onClick: foldOnClick, onMouseEnter: () => setCompactHovered(true), onMouseLeave: () => setCompactHovered(false), children: _jsx(Box, { marginTop: addMargin ? 1 : 0, paddingLeft: 2, children: expanded || isExpanded ? (_jsx(Text, { dimColor: true, children: text })) : (_jsxs(Text, { dimColor: true, italic: true, color: compactHovered ? 'text' : undefined, children: [_jsx(Text, { color: compactHovered ? 'text' : undefined, children: "\u2234" }), ' ', t('compact-summary-folded'), " \u00B7 ", compactPreview(text), ' ', t('hint-expand-ctrl-o')] })) }) }));
+         case 'subagent':
+             if (!subagent)
+                 return null;

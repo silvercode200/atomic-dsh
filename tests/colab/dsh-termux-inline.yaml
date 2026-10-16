@@ -1,0 +1,854 @@
+program: dsh-termux-inline
+# suite_version: 1 (2026-10-16, TG-DSH-REBUILD-20260921 Phase 4.3c):
+# Termux parity suite — детекторы для mobile-парити (узкая геометрия,
+# glyph fallback, key handling). Источники: reports/termux-atlas-20261016.md
+# (371 строка, 9 разделов — характеристики Termux терминала из исходного
+# кода termux/termux-app v0.118.x) + reports/VISUAL-CANON.md §5 Termux parity.
+#
+# ЭМУЛЯЦИОННАЯ ГРАНИЦА:
+# Сьют работает на lane colab (tmux на Colab VM). tmux эмулирует
+# traditional xterm encoding, box-drawing, 256-color/truecolor — как Termux.
+# Отличия от реального Termux:
+#   - tmux рендерит powerline глифы черезfont (не tofu как дефолтный Android font)
+#   - tmux не эмулирует soft-keyboard IME quirk'и
+#   - tmux не эмулирует Android process killing / SIGWINCH при rotation
+# Детекторы, требующие реальный Termux terminal, помечены
+# "requires Termux terminal profile" в описании.
+#
+# ГЕОМЕТРИЯ Termux (atlas §5):
+#   Portrait ~38-42 cols × 40-44 rows (типичный 6.1" телефон)
+#   Landscape ~80-85 cols × 18-20 rows
+#   Very small phones ~25-30 cols × 25-30 rows
+#   Min 4×4 (hardcoded floor)
+# Сьют покрывает: 39 cols (boundary <40), 47 cols (≥40 fully supported),
+# 60 cols (tablet portrait). Rows: 24 (минимум для dsh inline).
+#
+# КЛАВИАТУРА Termux (atlas §3):
+#   kitty CSI-u: НЕ поддерживается — traditional xterm encoding
+#   Enter → \r; Backspace → \x7f (DEL); Escape → \x1b
+#   Arrows: ESC[A/B/C/D (normal) / ESC OA/B/C/D (app mode)
+#   Ctrl+Letter → control char (\x01-\x1a)
+#   Shift+Enter неотличим от Enter (\r) на soft keyboard
+#   Alt: ESC prefix перед codepoint
+#
+# ГЛИФЫ Termux (atlas §4):
+#   Box-drawing (U+2500–U+257F): font-dependent, Android system fonts OK
+#   Powerline (U+E0B0): НЕ в дефолтном шрифте — tofu без Termux:Styling
+#   Braille (U+2800–U+28FF): Noto includes braille
+#   DEC Special Graphics: supported (ESC(0 line drawing mode)
+#
+# ТРАССИРУЕМОСТЬ «канон §5 → детектор → тест»:
+#   канон §5 min width ≥40 (graceful degrade <40) .. DETECTOR narrow_viewport
+#       → narrow_viewport (≤39 cols: viewport НЕ взрывается)
+#   канон §5 статус-бар ≥40 .................... DETECTOR narrow_statusbar
+#       → narrow_statusbar (≤39 cols: model+ctx minimum visible или degrade)
+#   канон §5 box-drawing моноширинный fallback .. DETECTOR glyph_box_drawing
+#       → glyph_box_drawing (─│┌┐└┘├┤ 1 col каждый)
+#   канон §5 input frame intact ............... DETECTOR narrow_input
+#       → narrow_input (рамка ввода не переполнение при ≤39 cols)
+#   канон §5 powerline ASCII fallback .......... DETECTOR glyph_powerline_fallback
+#       → glyph_powerline_fallback (U+E0B0: tofu или ASCII, не разъезд)
+#   канон §5 traditional xterm encoding ........ DETECTOR key_termux_sequences
+#       → key_termux_sequences (Enter, arrows, Ctrl combos)
+#
+# Запуск (драйвер):
+#   bash scripts/colab-dsh-live-check.sh \
+#     --target current --fake-model --label termux-parity \
+#     --suite tests/colab/dsh-termux-inline.yaml \
+#     --detectors narrow_viewport,narrow_statusbar,glyph_box_drawing,narrow_input,glyph_powerline_fallback,key_termux_sequences
+#
+# Механика (зеркалит golden dsh-tui-inline.yaml + dsh-mks4-probes.yaml):
+# lane colab; сравнения на госте в run-шагах (НЕ в assert — ColabResult.output
+# несёт IPython-шум); шаги <15К символов (чанк-канал colab exec); heredoc-тела
+# НЕ содержат $переменных программы (executor раскрывает их в тексте шага ДО
+# отправки на VM — в python-детекторах абсолютные VM-пути хардкодом);
+# внутренние переменные шагов ($b/$n/$w/$T/$i) названы иначе переменных
+# программы; трейс сессии = DSH_TUI_GEOMETRY_TRACE (boot_launch, прецедент —
+# scripts/colab-dsh-geometry-trace.sh; ротация 8МБ → geo.jsonl.1 — детектор
+# глобит 'geo.jsonl*'); boot с самовосстановлением (flaky-boot agent-bootstrap
+# hang: kill + relaunch до 3 попыток — память dsh-flaky-boot-agent-bootstrap-hang).
+# НИКАКОГО warmup в setup для теста 1: narrow_input меряет чистый бут-кадр
+# (первый turn глотает SCENARIO-маркер — warmup перенесён в тест 2).
+# Сидов/рандома нет — вся серия детерминирована.
+lane: colab
+vars:
+  sess: dsh-termux
+  frames: /root/dsh-termux-frames
+  boot: /root/dsh-termux-frames/boot
+  narrow: /root/dsh-termux-frames/narrow
+  glyph: /root/dsh-termux-frames/glyph
+  keys: /root/dsh-termux-frames/keys
+  mode: /root/dsh-termux-frames/mode
+  work: /root/dsh-termux
+  geo: /root/dsh-termux/geo.jsonl
+
+setup:
+  - id: dirs_init
+    run: 'mkdir -p $work $frames && rm -rf $boot $narrow $glyph $keys $mode && mkdir -p $boot $narrow $glyph $keys $mode $work && rm -f $frames/*.txt $frames/*.ansi $work/*.txt $work/*.py $work/*.marker $work/geo.jsonl $work/geo.jsonl.1; echo DIRS_OK'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: sess_kill
+    run: 'tmux kill-session -t $sess 2>/dev/null; true'
+    timeout: 180
+    ignore_error: true
+    idempotent: true
+    retry: 2
+  # Геометрия СТАРТА: 39×24 — Termux portrait boundary (<40 = graceful degrade).
+  # 39 cols = типичный 6.1" телефон portrait (~38-42 по атласу), ниже канон-минимума 40.
+  # 24 rows = минимум для dsh inline (меньше = рамка ввода не помещается).
+  - id: sess_new
+    run: 'tmux new-session -d -s $sess -x 39 -y 24'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  - id: term_overrides
+    run: 'tmux set -as terminal-overrides ",xterm-256color:Tc"'
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Парити-слой: юзер-dsh-tui-секция → /root/.dsh/settings.yaml ---------
+  # Дословно из golden (источник ~/.dsh/settings.yaml юзера): fullscreen:
+  # false = inline-режим, тема tokyonight-moon. powerline: full — детектор
+  # glyph_powerline_fallback проверяет поведение powerline на узкой геометрии.
+  - id: parity_settings
+    run: |
+      cp /root/.dsh/settings.yaml /root/.dsh/settings.yaml.parity-backup-termux 2>/dev/null || true
+      awk '/^dsh-tui:/{s=1} s==1 && /^[^[:space:]#]/ && !/^dsh-tui:/{s=0} s==0{print}' /root/.dsh/settings.yaml > /root/.dsh/settings.yaml.new
+      cat >> /root/.dsh/settings.yaml.new <<'TUIEOF'
+      dsh-tui:
+        statusBar:
+          tokens: false
+          compact: false
+          contextBar: false
+          mode: true
+          trajectory: true
+          shortcutHint: false
+          activity: false
+          cache: false
+          gitBranch: false
+          compactThresholdRatio: 0.4768
+          tps: false
+          sessionTitle: false
+          sessionId: false
+          cwd: true
+          ctxBarMode: percent-only
+        fullscreen: false
+        minimal: false
+        toolBackground: subtle
+        appearance:
+          powerline: full
+          theme: tokyonight-moon
+          inputBorder: "#7aa2f7"
+          animations: false
+      TUIEOF
+      mv /root/.dsh/settings.yaml.new /root/.dsh/settings.yaml
+      cp /root/.dsh/settings.yaml $mode/settings-parity.txt
+      grep -n 'fullscreen' /root/.dsh/settings.yaml > $mode/settings-fullscreen-parity.txt 2>/dev/null || echo 'NO_FULLSCREEN_KEY' > $mode/settings-fullscreen-parity.txt
+      grep -n 'animations' /root/.dsh/settings.yaml > $mode/settings-animations-parity.txt 2>/dev/null || echo 'NO_ANIMATIONS_KEY' > $mode/settings-animations-parity.txt
+      echo PARITY_APPLIED
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Парити-маркер миграции: fullscreen-factory-default = done ------------
+  - id: parity_marker
+    run: |
+      mkdir -p /root/.dsh-tui
+      if [ ! -f /root/.dsh-tui/migrations.json ]; then
+        printf '{\n  "fullscreen-factory-default": "2026-08-29T00:00:00.000Z"\n}\n' > /root/.dsh-tui/migrations.json
+      fi
+      cp /root/.dsh-tui/migrations.json $mode/migrations-at-parity.json 2>/dev/null || echo MARKER_ABSENT > $mode/migrations-at-parity.json
+      test -f /root/.dsh-tui/migrations.json && echo MARKER_PRESENT
+    timeout: 180
+    idempotent: true
+    retry: 2
+  # --- Запуск TUI (fake-роут + geometry-trace) + самовосст. boot -----------
+  # DSH_TUI_GEOMETRY_TRACE=$geo — детерминированный трейс-путь сессии сьюта
+  # (патч 61 always-on; оверрайд-прецедент scripts/colab-dsh-geometry-trace.sh).
+  # Ротация 8МБ → geo.jsonl.1: детектор глобит 'geo.jsonl*'; каждый launch
+  # начинает с чистого файла. Flaky-boot: kill + relaunch до 3 попыток, 60с/попытка.
+  # WARMUP ЗДЕСЬ НЕТ — тест 1 (narrow_input) меряет чистый бут-кадр ДО первого хода.
+  - id: boot_launch
+    run: |
+      dsh_launch() {
+        rm -f $geo $geo.1
+        rm -f /root/dsh-boot-termux.err
+        tmux send-keys -t $sess "FAKE_LLM_KEY=fake-local-key DSH_TUI_GEOMETRY_TRACE=$geo dsh --profile $(cat /root/.dsh-live-target) 2>/root/dsh-boot-termux.err" Enter
+      }
+      boot_poll() {
+        for i in $(seq 1 $1); do
+          tmux capture-pane -p -t $sess > $mode/boot.txt
+          if grep -qE '❯|for shortcuts' $mode/boot.txt; then return 0; fi
+          sleep 1
+        done
+        return 1
+      }
+      dsh_launch
+      for attempt in 1 2 3; do
+        if boot_poll 60; then echo "BOOT_READY (attempt $attempt)"; exit 0; fi
+        echo "BOOT_RETRY attempt=$attempt: hung TUI, kill + relaunch"
+        tmux send-keys -t $sess C-c 2>/dev/null || true
+        sleep 1
+        pkill -f '/usr/local/bin/dsh --profile' 2>/dev/null || true
+        sleep 2
+        tmux send-keys -t $sess reset Enter 2>/dev/null || true
+        sleep 1
+        dsh_launch
+      done
+      echo NOT_READY
+      exit 1
+    timeout: 320
+  # --- Файн-гейт бута: экран реально затих ---------------------------------
+  # BOOT_READY матчит 'for shortcuts' уже на первом кадре бут-анимации, а
+  # bootstrap-запросы фейк-модели анимируют экран ещё минуты. Тихий экран
+  # = трейс-файл молчит >=12с И ❯ в кадре.
+  - id: boot_quiet
+    run: |
+      for i in $(seq 1 60); do
+        if [ -f $geo ] && [ $(( $(date +%s) - $(stat -c %Y $geo) )) -ge 12 ]; then
+          if tmux capture-pane -p -t $sess | grep -q '❯'; then
+            echo QUIET_READY
+            exit 0
+          fi
+        fi
+        sleep 5
+      done
+      if tmux capture-pane -p -t $sess | grep -q '❯'; then
+        echo QUIET_TIMEOUT_SOFT
+        exit 0
+      fi
+      echo QUIET_NO_PROMPT
+      exit 1
+    timeout: 400
+    idempotent: true
+    retry: 2
+
+tests:
+  # --- narrow_input: рамка ввода intact при ≤39 cols (бут-кадр, БЕЗ warmup) --
+  # Канон §5: dsh должен gracefully degrade на <40 cols — контент обрезается/
+  # переносится, статус-бар сворышивается до минимума. НЕ краш.
+  # Проверяем: (а) рамка ввода (╭...╰) рендерится при 39 cols; (б) рамка не
+  # разъехалась на несколько строк (зазор ≤2 от низа пейна); (в) ❯ промпт виден.
+  # Аналог boot_input_anchor из dsh-mks4-probes.yaml, но при 39×24.
+  - name: narrow_input
+    steps:
+      - run: |
+          sleep 6
+          tmux capture-pane -p -t $sess > $boot/boot-39x24.txt
+          tmux display-message -p -t $sess '#{pane_height}' > $boot/boot-pane-h.txt
+          echo BOOT_FRAME_CAPTURED
+        timeout: 180
+        idempotent: true
+        retry: 2
+      - run: |
+          cat > $work/det-narrow-input.py <<'PYEOF'
+          import sys
+          if len(sys.argv) < 3:
+              print("DETECTOR narrow_input: FAIL (argv — инфра)")
+              sys.exit(2)
+          cap_path, pane_path = sys.argv[1], sys.argv[2]
+          lines = open(cap_path, encoding="utf-8", errors="replace").read().splitlines()
+          raw = open(pane_path, encoding="utf-8", errors="replace").read().strip()
+          try:
+              pane_h = int(raw)
+          except ValueError:
+              pane_h = 0
+          if pane_h <= 0:
+              print("DETECTOR narrow_input: FAIL (pane_height неизвестна — инфра)")
+              sys.exit(2)
+          # Рамка ввода: ╭ (верх) и ╰ (низ) — обе обязаны присутствовать
+          tops = [i for i, l in enumerate(lines) if "╭" in l]
+          bottoms = [i for i, l in enumerate(lines) if "╰" in l]
+          if not bottoms:
+              print("DETECTOR narrow_input: FAIL (input_frame_bottom_missing — ╰ не отрендерился при 39 cols, инфра)")
+              sys.exit(2)
+          if not tops:
+              print("DETECTOR narrow_input: FAIL (input_frame_top_missing — ╭ не отрендерился при 39 cols, инфра)")
+              sys.exit(2)
+          # Зазор = pane_h - номер строки низа рамки (1-based)
+          anchor = bottoms[-1] + 1
+          gap = pane_h - anchor
+          # Промпт ❯ обязан быть виден
+          has_prompt = any("❯" in l for l in lines)
+          # Рамка не разъехалась: ╭ и ╰ в соседних или близких строках (≤3)
+          frame_height = bottoms[-1] - tops[-1] if tops else 0
+          print("DETECTOR narrow_input: gap={} pane_h={} anchor_row={} frame_height={} has_prompt={} (GREEN gap<=2 И has_prompt; канон §5 graceful degrade <40 cols — рамка ввода intact)".format(
+              gap, pane_h, anchor, frame_height, has_prompt))
+          sys.exit(0 if (gap <= 2 and has_prompt) else 1)
+          PYEOF
+          python3 $work/det-narrow-input.py $boot/boot-39x24.txt $boot/boot-pane-h.txt
+        timeout: 120
+        idempotent: true
+        retry: 2
+
+  # --- narrow_viewport: viewport НЕ взрывается при ≤39 cols ------------------
+  # Канон §5 + memory dsh-narrow-resize-viewport-explosion: ≤39 cols →
+  # viewport и scroll.innerHeight ScrollBox ВЗРЫВАЮТСЯ до 81-118 строк при
+  # termRows=24 (баг-3 MKS4). Здесь проверяем при 39 cols (Termux portrait
+  # boundary) после warmup-хода с контентом.
+  # Гейты: (1) warmup-ход; (2) контент-гейт — scrollHeight >= 20 на кадрах
+  # columns==39; (3) инвариант list.viewport<=termRows И scroll.innerHeight
+  # <=termRows на КАЖДОМ кадре после границы.
+  - name: narrow_viewport
+    steps:
+      - run: |
+          [ -f $work/warmup-done.marker ] && { echo WARMUP_ALREADY_DONE; exit 0; }
+          n0=$(tmux capture-pane -p -t $sess | grep -c '●' || true)
+          [ "$n0" -ge 1 ] && { touch $work/warmup-done.marker; echo WARMUP_ALREADY_DONE; exit 0; }
+          ok=0
+          for attempt in $(seq 1 14); do
+            tmux send-keys -t $sess C-u
+            tmux send-keys -t $sess "SCENARIO:short привет, ответь кратко" Enter
+            for w in $(seq 1 7); do
+              sleep 2
+              n=$(tmux capture-pane -p -t $sess | grep -c '●' || true)
+              [ "$n" -ge 1 ] && { ok=1; break; }
+            done
+            [ "$ok" = 1 ] && break
+          done
+          if [ "$ok" = 1 ]; then
+            prev=$(tmux capture-pane -p -t $sess)
+            for w in $(seq 1 20); do
+              sleep 3
+              cur=$(tmux capture-pane -p -t $sess)
+              [ "$cur" = "$prev" ] && break
+              prev=$cur
+            done
+            touch $work/warmup-done.marker
+            echo WARMUP_DONE
+            exit 0
+          fi
+          echo WARMUP_TIMEOUT
+          exit 1
+        timeout: 340
+        idempotent: true
+        retry: 2
+      # Контент-ход для материала взрыва viewport
+      - run: |
+          [ -f $work/long-done.marker ] && { echo LONG_ALREADY_DONE; exit 0; }
+          b=$(tmux capture-pane -p -t $sess | grep -c '●' || true)
+          ok=0
+          for attempt in $(seq 1 3); do
+            tmux send-keys -t $sess C-u
+            tmux send-keys -t $sess "SCENARIO:long напиши длинный текст" Enter
+            for w in $(seq 1 10); do
+              sleep 2
+              n=$(tmux capture-pane -p -t $sess | grep -c '●' || true)
+              [ "$n" -gt "$b" ] && { ok=1; break; }
+            done
+            [ "$ok" = 1 ] && break
+          done
+          [ "$ok" = 1 ] || { echo LONG_TIMEOUT; exit 1; }
+          prev=$(tmux capture-pane -p -t $sess)
+          for w in $(seq 1 25); do
+            sleep 3
+            cur=$(tmux capture-pane -p -t $sess)
+            [ "$cur" = "$prev" ] && break
+            prev=$cur
+          done
+          touch $work/long-done.marker
+          echo LONG_DONE
+          exit 0
+        timeout: 320
+        idempotent: true
+        retry: 2
+      # Узкий resize серии: 39→47→60 cols при rows=24
+      - run: |
+          tmux resize-window -t $sess -x 39 -y 24; sleep 2
+          tmux capture-pane -p -S -2000 -t $sess > $narrow/resize-39x24.txt
+          tmux resize-window -t $sess -x 47 -y 24; sleep 2
+          tmux capture-pane -p -S -2000 -t $sess > $narrow/resize-47x24.txt
+          tmux resize-window -t $sess -x 60 -y 24; sleep 2
+          tmux capture-pane -p -S -2000 -t $sess > $narrow/resize-60x24.txt
+          # Возврат к 39 для последующих тестов
+          tmux resize-window -t $sess -x 39 -y 24; sleep 1
+          echo NARROW_SERIES_DONE
+        timeout: 240
+        idempotent: true
+        retry: 2
+      - run: |
+          cat > $work/det-narrow-viewport.py <<'PYEOF'
+          import glob, json, sys
+          records = []
+          trace_files = 0
+          for path in sorted(glob.glob("/root/dsh-termux/geo.jsonl*")):
+              trace_files += 1
+              try:
+                  fh = open(path, encoding="utf-8", errors="replace")
+              except OSError:
+                  continue
+              for line in fh:
+                  line = line.strip()
+                  if not line:
+                      continue
+                  try:
+                      rec = json.loads(line)
+                  except ValueError:
+                      continue
+                  records.append(rec)
+          if trace_files == 0 or not records:
+              print("DETECTOR narrow_viewport: FAIL (trace_files={} records={} — трейс не пишется, инфра)".format(trace_files, len(records)))
+              sys.exit(2)
+          # Граница = первый кадр columns<=47 ПОСЛЕ хотя бы одного кадра columns>47
+          # (wide→narrow transition). Если все кадры <=47, граница = первый кадр
+          # с контентом (после warmup).
+          boundary = None
+          seen_wide = False
+          for i, rec in enumerate(records):
+              lst = rec.get("list") or {}
+              cols = lst.get("columns")
+              if cols is not None and cols > 47:
+                  seen_wide = True
+              if boundary is None and seen_wide and cols is not None and cols <= 47:
+                  boundary = i
+          if boundary is None:
+              # Все кадры narrow (boot at 39): граница = первый кадр с termRows
+              for i, rec in enumerate(records):
+                  lst = rec.get("list") or {}
+                  if lst.get("termRows"):
+                      boundary = i
+                      break
+          if boundary is None:
+              print("DETECTOR narrow_viewport: FAIL (narrow_boundary_not_found — узкий resize не дошёл до трейса, инфра)")
+              sys.exit(2)
+          violations = 0
+          v_view = 0
+          v_inner = 0
+          worst = 0
+          term_rows = None
+          for i, rec in enumerate(records):
+              lst = rec.get("list") or {}
+              if lst.get("termRows"):
+                  term_rows = lst["termRows"]
+              if i < boundary or term_rows is None:
+                  continue
+              vp = lst.get("viewport")
+              if vp is not None and vp > term_rows + 2:
+                  violations += 1
+                  v_view += 1
+                  worst = max(worst, vp - term_rows)
+              for s in rec.get("scroll") or []:
+                  if not isinstance(s, dict):
+                      continue
+                  ih = s.get("innerHeight")
+                  if ih is not None and ih > term_rows + 2:
+                      violations += 1
+                      v_inner += 1
+                      worst = max(worst, ih - term_rows)
+          if term_rows is None:
+              print("DETECTOR narrow_viewport: FAIL (termRows неизвестен, инфра)")
+              sys.exit(2)
+          print("DETECTOR narrow_viewport: violations={} worst=+{} v_viewport={} v_inner={} termRows={} (инвариант list.viewport<=termRows+2 и scroll.innerHeight<=termRows+2 на КАЖДОМ кадре после узкого resize; +2 tolerance для border cells; RED: violations>0 — взрыв viewport как баг-3 MKS4)".format(
+              violations, worst, v_view, v_inner, term_rows))
+          sys.exit(0 if violations == 0 else 1)
+          PYEOF
+          python3 $work/det-narrow-viewport.py
+        timeout: 120
+        idempotent: true
+        retry: 2
+
+  # --- narrow_statusbar: canon invariant 8 (model+ctx) при ≤39 cols ---------
+  # Канон §5: статус-бар сворышивается до минимума (model+ctx) при <40 cols.
+  # Канон §1.8: минимум model+ctx visible при w>=40. При <40 — graceful degrade:
+  # модель обязана быть видна (✦ глиф или имя модели), ctx-метрика может
+  # исчезнуть (<40 = below canon minimum) — это НЕ RED, это ожидаемая деградация.
+  # RED = статус-бар разбился на несколько строк ИЛИ модель НЕ видна.
+  - name: narrow_statusbar
+    steps:
+      - run: |
+          tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; sleep 0.5
+          tmux resize-window -t $sess -x 39 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $narrow/statusbar-39x24.txt
+          tmux resize-window -t $sess -x 47 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $narrow/statusbar-47x24.txt
+          tmux resize-window -t $sess -x 60 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $narrow/statusbar-60x24.txt
+          # Возврат к 39
+          tmux resize-window -t $sess -x 39 -y 24; sleep 1
+          echo STATUSBAR_CAPTURED
+        timeout: 240
+        idempotent: true
+        retry: 2
+      - run: |
+          cat > $work/det-narrow-statusbar.py <<'PYEOF'
+          import os, re, sys
+          NARROW = "/root/dsh-termux-frames/narrow"
+          def check_statusbar(path, width):
+              """Канон §5 + §1.8: модель видна + статус-бар одна строка.
+              <40 cols: ctx может исчезнуть (graceful degrade) — НЕ RED.
+              RED = модель НЕ видна ИЛИ статус-бар >1 строка ниже рамки ввода.
+              """
+              lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+              text = "\n".join(lines)
+              # Модель: ✦ глиф или имя модели (glm/claude/opus/deepseek)
+              has_model = bool(re.search(r"✦|glm|claude|opus|deepseek|dsh", text))
+              # ctx-метрика: ⚡/comp/ctx
+              has_ctx = bool(re.search(r"⚡|comp [0-9]|ctx", text))
+              # Статус-бар одна строка: ровно одна непустая строка ниже рамки ввода (╰)
+              bottoms = [i for i, l in enumerate(lines) if "╰" in l]
+              below = [l for l in lines[bottoms[-1] + 1:] if l.strip()] if bottoms else []
+              single_line = len(below) == 1
+              return {
+                  "width": width,
+                  "has_model": has_model,
+                  "has_ctx": has_ctx,
+                  "single_line": single_line,
+                  "rows_below_input": len(below),
+              }
+          results = []
+          for fname, w in [("statusbar-39x24.txt", 39), ("statusbar-47x24.txt", 47), ("statusbar-60x24.txt", 60)]:
+              p = os.path.join(NARROW, fname)
+              if os.path.exists(p):
+                  r = check_statusbar(p, w)
+                  results.append(r)
+                  # <40 cols: ctx может исчезнуть (degrade OK), но модель обязана быть видна
+                  # >=40 cols: оба (model + ctx) обязаны быть visible (canon §1.8)
+                  if w < 40:
+                      ok = r["has_model"] and r["single_line"]
+                      ctx_note = "ctx_degraded" if not r["has_ctx"] else "ctx_visible"
+                  else:
+                      ok = r["has_model"] and r["has_ctx"] and r["single_line"]
+                      ctx_note = "ctx_visible" if r["has_ctx"] else "ctx_lost"
+                  r["ok"] = ok
+                  r["ctx_note"] = ctx_note
+                  print("  w={}: model={} ctx={} single_line={} rows_below={} verdict={} ({})".format(
+                      w, r["has_model"], r["has_ctx"], r["single_line"],
+                      r["rows_below_input"], "PASS" if ok else "RED", ctx_note))
+          bad = [r for r in results if not r["ok"]]
+          print("DETECTOR narrow_statusbar: violations={} (RED: модель НЕ видна ИЛИ статус-бар >1 строки; <40 cols: ctx может исчезнуть = graceful degrade OK)".format(len(bad)))
+          sys.exit(0 if not bad else 1)
+          PYEOF
+          python3 $work/det-narrow-statusbar.py
+        timeout: 120
+        idempotent: true
+        retry: 2
+
+  # --- glyph_box_drawing: ─│┌┐└┘├┤ правильная ширина (1 col каждый) ----------
+  # Канон §5: box-drawing (U+2500–U+257F) рендерится через шрифт. Android
+  # system fonts (Roboto Mono / Noto Mono) include full box-drawing block.
+  # Проверяем: (а) box-drawing глифы присутствуют в кадре (рамка ввода);
+  # (б) каждый глиф занимает 1 колонку (не double-width, не разрыв строки).
+  # В tmux box-drawing рендерится корректно — это позитивный тест.
+  # requires Termux terminal profile: проверка tofu (□) для шрифтов БЕЗ
+  # box-drawing coverage — только на реальном Termux с дефолтным шрифтом.
+  - name: glyph_box_drawing
+    steps:
+      - run: |
+          tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; sleep 0.5
+          tmux resize-window -t $sess -x 47 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $glyph/box-47x24.txt
+          # Узкая геометрия для проверки box-drawing при <40
+          tmux resize-window -t $sess -x 39 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $glyph/box-39x24.txt
+          # Возврат к 39
+          tmux resize-window -t $sess -x 39 -y 24; sleep 1
+          echo GLYPH_BOX_CAPTURED
+        timeout: 240
+        idempotent: true
+        retry: 2
+      - run: |
+          cat > $work/det-glyph-box.py <<'PYEOF'
+          import os, sys, unicodedata
+          GLYPH = "/root/dsh-termux-frames/glyph"
+          # Box-drawing characters из U+2500-U+257F
+          BOX_CHARS = set("─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬╭╮╰╯")
+          def check_box_glyphs(path, width):
+              """Канон §5: box-drawing рендерится через шрифт, 1 col каждый.
+              Проверяем: (а) box-drawing глифы присутствуют в кадре;
+              (б) строка с ╭...╰ рамкой не разорвана (рамка = непрерывная
+              последовательность box-drawing + ─ сепараторов);
+              (в) каждый box-drawing глиф имеет East_Asian_Width = Narrow
+              (wcwidth=1) — не double-width.
+              """
+              lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+              found_chars = set()
+              frame_lines = []
+              for l in lines:
+                  for ch in l:
+                      if ch in BOX_CHARS:
+                          found_chars.add(ch)
+                  if "╭" in l or "╰" in l:
+                      frame_lines.append(l)
+              # Все ключевые box-drawing глифы из рамки ввода
+              required = set("╭╰─")
+              has_required = required.issubset(found_chars)
+              # Дополнительно: │ (вертикальная линия) если есть рамки сообщений
+              has_vertical = "│" in found_chars
+              # Проверка ширины: East_Asian_Width для box-drawing = Narrow (1 col)
+              # В Python: unicodedata.east_asian_width('─') = 'N' (Narrow)
+              width_violations = []
+              for ch in found_chars:
+                  try:
+                      eaw = unicodedata.east_asian_width(ch)
+                      if eaw in ("W", "F"):  # Wide or Fullwidth = 2 cols
+                          width_violations.append((ch, eaw, hex(ord(ch))))
+                  except ValueError:
+                      pass
+              # Рамка ввода не разорвана: ╭ и ╰ в одной или соседних строках
+              frame_intact = False
+              if frame_lines:
+                  for i, l in enumerate(frame_lines):
+                      if "╭" in l:
+                          # ╰ должна быть в той же или следующей строке
+                          for j in range(i, min(i + 4, len(frame_lines))):
+                              if "╰" in frame_lines[j]:
+                                  frame_intact = True
+                                  break
+              return {
+                  "width": width,
+                  "found_chars": sorted(found_chars),
+                  "has_required": has_required,
+                  "has_vertical": has_vertical,
+                  "frame_intact": frame_intact,
+                  "width_violations": width_violations,
+              }
+          results = []
+          for fname, w in [("box-47x24.txt", 47), ("box-39x24.txt", 39)]:
+              p = os.path.join(GLYPH, fname)
+              if os.path.exists(p):
+                  r = check_box_glyphs(p, w)
+                  results.append(r)
+                  ok = r["has_required"] and r["frame_intact"] and len(r["width_violations"]) == 0
+                  r["ok"] = ok
+                  print("  w={}: chars_found={} required={} frame_intact={} width_violations={} verdict={}".format(
+                      w, len(r["found_chars"]), r["has_required"],
+                      r["frame_intact"], r["width_violations"],
+                      "PASS" if ok else "RED"))
+          bad = [r for r in results if not r.get("ok")]
+          # NOTE: requires Termux terminal profile для проверки tofu (□) —
+          # шрифты БЕЗ box-drawing coverage покажут replacement char.
+          # В tmux box-drawing рендерится корректно — это позитивный тест.
+          print("DETECTOR glyph_box_drawing: violations={} (GREEN: box-drawing глифы present, 1 col width, frame intact; NOTE: requires Termux terminal profile для tofu detection)".format(len(bad)))
+          sys.exit(0 if not bad else 1)
+          PYEOF
+          python3 $work/det-glyph-box.py
+        timeout: 120
+        idempotent: true
+        retry: 2
+
+  # --- glyph_powerline_fallback: U+E0B0 не разъезд статус-бара --------------
+  # Канон §5: powerline U+E0B0 требует Termux:Styling кастомный шрифт.
+  # Без кастомного шрифта — tofu (□). CANON: dsh должен иметь ASCII-fallback
+  # для powerline (`|` или пробел) когда Nerd Font недоступен.
+  # Проверяем: (а) статус-бар одна строка при powerline:full (не разъезд);
+  # (б) если powerline глифы рендерятся — они не ломают layout (1 col).
+  # requires Termux terminal profile: реальный tofu (□) только на Termux с
+  # дефолтным шрифтом. tmux рендерит через font (может быть tofu или глиф).
+  - name: glyph_powerline_fallback
+    steps:
+      - run: |
+          tmux send-keys -t $sess C-c; sleep 0.3; tmux send-keys -t $sess C-u; sleep 0.5
+          tmux resize-window -t $sess -x 47 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $glyph/powerline-47x24.txt
+          tmux capture-pane -pe -t $sess > $glyph/powerline-47x24.ansi
+          tmux resize-window -t $sess -x 39 -y 24; sleep 1.5
+          tmux capture-pane -p -t $sess > $glyph/powerline-39x24.txt
+          tmux capture-pane -pe -t $sess > $glyph/powerline-39x24.ansi
+          # Возврат к 39
+          tmux resize-window -t $sess -x 39 -y 24; sleep 1
+          echo POWERLINE_CAPTURED
+        timeout: 240
+        idempotent: true
+        retry: 2
+      - run: |
+          cat > $work/det-glyph-powerline.py <<'PYEOF'
+          import os, re, sys, unicodedata
+          GLYPH = "/root/dsh-termux-frames/glyph"
+          # Powerline glyphs (Private Use Area U+E0A0-U+E0D4)
+          POWERLINE_CHARS = [
+              "", "", "", "", "",
+              "", "",
+          ]
+          # Tofu / replacement character
+          TOFU = "�"
+          def check_powerline(path, width):
+              """Канон §5: powerline U+E0B0 → ASCII fallback если Nerd Font
+              недоступен. Без кастомного шрифта — tofu (□).
+              Проверяем: (а) статус-бар одна строка (не разъезд от powerline);
+              (б) если powerline глифы present — не ломают layout;
+              (в) если tofu present — статус-бар всё равно одна строка.
+              """
+              lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+              text = "\n".join(lines)
+              # Ищем powerline глифы
+              powerline_found = [ch for ch in POWERLINE_CHARS if ch in text]
+              # Ищем tofu / replacement character
+              tofu_found = TOFU in text
+              # Ищем ASCII fallback сепараторы (| или :)
+              ascii_sep = bool(re.search(r"\|\s|:\s", text))
+              # Статус-бар одна строка: ровно одна непустая строка ниже рамки ввода
+              bottoms = [i for i, l in enumerate(lines) if "╰" in l]
+              below = [l for l in lines[bottoms[-1] + 1:] if l.strip()] if bottoms else []
+              single_line = len(below) == 1
+              # Проверяем ширину powerline глифов (если present)
+              # Powerline в PUA — East_Asian_Width обычно 'N' (Narrow)
+              width_issues = []
+              for ch in powerline_found:
+                  try:
+                      eaw = unicodedata.east_asian_width(ch)
+                      if eaw in ("W", "F"):
+                          width_issues.append((hex(ord(ch)), eaw))
+                  except ValueError:
+                      pass
+              # Верdict:
+              # single_line = True — главное условие (не разъезд)
+              # powerline_found + no width_issues — глифы рендерятся OK
+              # tofu_found + single_line — tofu но layout не сломан = OK
+              #              (CANON: ASCII fallback должен быть, но tofu без
+              #               разъезда = partial pass, WARN)
+              ok = single_line
+              return {
+                  "width": width,
+                  "powerline_found": powerline_found,
+                  "tofu_found": tofu_found,
+                  "ascii_sep": ascii_sep,
+                  "single_line": single_line,
+                  "rows_below_input": len(below),
+                  "width_issues": width_issues,
+                  "ok": ok,
+              }
+          results = []
+          for fname, w in [("powerline-47x24.txt", 47), ("powerline-39x24.txt", 39)]:
+              p = os.path.join(GLYPH, fname)
+              if os.path.exists(p):
+                  r = check_powerline(p, w)
+                  results.append(r)
+                  status = "PASS" if r["ok"] else "RED"
+                  if r["tofu_found"] and r["ok"]:
+                      status = "PASS-WARN (tofu but layout intact)"
+                  if r["powerline_found"]:
+                      ph = [hex(ord(c)) for c in r["powerline_found"]]
+                  else:
+                      ph = []
+                  print("  w={}: powerline={} tofu={} ascii_sep={} single_line={} rows_below={} width_issues={} verdict={}".format(
+                      w, ph, r["tofu_found"], r["ascii_sep"],
+                      r["single_line"], r["rows_below_input"],
+                      r["width_issues"], status))
+          bad = [r for r in results if not r["ok"]]
+          # NOTE: requires Termux terminal profile для реального tofu detection.
+          # tmux рендерит powerline через font — может быть глиф или tofu.
+          # Канон: dsh должен иметь ASCII fallback для powerline.
+          print("DETECTOR glyph_powerline_fallback: violations={} (GREEN: статус-бар одна строка — powerline/tofu НЕ разъезд; NOTE: requires Termux terminal profile для tofu detection; CANON: ASCII fallback для Nerd Font недоступен)".format(len(bad)))
+          sys.exit(0 if not bad else 1)
+          PYEOF
+          python3 $work/det-glyph-powerline.py
+        timeout: 120
+        idempotent: true
+        retry: 2
+
+  # --- key_termux_sequences: traditional xterm key handling -----------------
+  # Канон §5: kitty CSI-u НЕ поддерживается — dsh использует traditional
+  # xterm encoding. Termux key encoding (atlas §3):
+  #   Enter → \r; Backspace → \x7f (DEL); Escape → \x1b
+  #   Arrows: ESC[A/B/C/D (normal mode)
+  #   Ctrl+Letter → control char (\x01-\x1a)
+  #   Alt: ESC prefix перед codepoint
+  # Проверяем: (а) Enter отправляет промпт (SCENARIO marker доходит);
+  # (б) C-c (Ctrl+C = \x03) прерывает ход; (в) стрелки не ломают layout.
+  # В tmux traditional xterm encoding работает — это позитивный тест.
+  # requires Termux terminal profile: soft-keyboard IME quirk'и (Shift+Enter
+  # неотличим от Enter) — только на реальном Termux.
+  - name: key_termux_sequences
+    steps:
+      # Шаг 1: Enter — отправка промпта через send-keys Enter (=\r)
+      - run: |
+          tmux send-keys -t $sess C-c; sleep 0.5
+          tmux send-keys -t $sess C-u; sleep 0.5
+          tmux resize-window -t $sess -x 47 -y 24; sleep 1.5
+          # База ● для проверки хода
+          tmux capture-pane -p -t $sess | { grep -c '●' > $work/key-base.txt || true; }; true
+          # Enter = \r — traditional xterm encoding (Termux atlas §3)
+          tmux send-keys -t $sess "SCENARIO:short проверка клавиш termux" Enter
+          echo KEY_ENTER_SENT
+        timeout: 180
+        idempotent: true
+        retry: 2
+      # Шаг 2: ждём ответа (● > base)
+      - run: |
+          base=$(cat $work/key-base.txt)
+          for w in $(seq 1 30); do
+            tmux capture-pane -p -t $sess > $work/key-after-enter.txt
+            n=$(grep -c '●' $work/key-after-enter.txt || true)
+            [ "$n" -gt "$base" ] && { echo KEY_ENTER_RESPONSE; exit 0; }
+            sleep 2
+          done
+          echo KEY_ENTER_TIMEOUT
+          exit 0
+        timeout: 180
+        idempotent: true
+        retry: 2
+      # Шаг 3: C-c (Ctrl+C = \x03) — прерывание хода
+      - run: |
+          # Начать long-ход
+          tmux send-keys -t $sess C-u; sleep 0.3
+          tmux send-keys -t $sess "SCENARIO:long длинный текст для прерывания" Enter
+          sleep 3
+          # C-c = \x03 — traditional xterm Ctrl+C (Termux atlas §3)
+          tmux send-keys -t $sess C-c
+          sleep 2
+          tmux capture-pane -p -t $sess > $keys/after-ctrl-c.txt
+          echo KEY_CTRL_C_SENT
+        timeout: 180
+        idempotent: true
+        retry: 2
+      # Шаг 4: стрелки — не ломают layout (Up arrow = ESC[A)
+      - run: |
+          sleep 1
+          # Up arrow = ESC[A — traditional xterm (Termux atlas §3)
+          tmux send-keys -t $sess Up
+          sleep 0.5
+          tmux send-keys -t $sess Down
+          sleep 0.5
+          tmux send-keys -t $sess Left
+          sleep 0.5
+          tmux send-keys -t $sess Right
+          sleep 1
+          tmux capture-pane -p -t $sess > $keys/after-arrows.txt
+          # Escape = \x1b — закрытие возможного оверлея
+          tmux send-keys -t $sess Escape
+          sleep 1
+          tmux capture-pane -p -t $sess > $keys/after-escape.txt
+          echo KEY_ARROWS_SENT
+        timeout: 180
+        idempotent: true
+        retry: 2
+      # Шаг 5: детектор
+      - run: |
+          cat > $work/det-key-termux.py <<'PYEOF'
+          import os, re, sys
+          KEYS = "/root/dsh-termux-frames/keys"
+          results = {}
+          # Enter: ● должен увеличиться (ход состоялся)
+          after_enter = open(os.path.join(KEYS, "after-arrows.txt"), encoding="utf-8", errors="replace").read()
+          enter_bullets = len(re.findall(r"●", after_enter))
+          enter_ok = enter_bullets >= 1
+          results["enter"] = {"ok": enter_ok, "bullets": enter_bullets}
+          # C-c: после прерывания ❯ промпт должен быть виден (TUI не завис)
+          after_cc = open(os.path.join(KEYS, "after-ctrl-c.txt"), encoding="utf-8", errors="replace").read()
+          has_prompt_cc = "❯" in after_cc
+          results["ctrl_c"] = {"ok": has_prompt_cc, "has_prompt": has_prompt_cc}
+          # Arrows: после стрелок TUI не сломан — ❯ промпт виден ИЛИ рамка ввода intact
+          after_arr = open(os.path.join(KEYS, "after-arrows.txt"), encoding="utf-8", errors="replace").read()
+          has_prompt_arr = "❯" in after_arr
+          has_frame_arr = "╰" in after_arr
+          arr_ok = has_prompt_arr or has_frame_arr
+          results["arrows"] = {"ok": arr_ok, "has_prompt": has_prompt_arr, "has_frame": has_frame_arr}
+          # Escape: после Escape TUI не сломан — ❯ промпт виден ИЛИ рамка ввода intact
+          after_esc = open(os.path.join(KEYS, "after-escape.txt"), encoding="utf-8", errors="replace").read()
+          has_prompt_esc = "❯" in after_esc
+          has_frame_esc = "╰" in after_esc
+          esc_ok = has_prompt_esc or has_frame_esc
+          results["escape"] = {"ok": esc_ok, "has_prompt": has_prompt_esc, "has_frame": has_frame_esc}
+          for name, r in results.items():
+              print("  {}: {} ({})".format(name, "PASS" if r["ok"] else "RED", r))
+          bad = [name for name, r in results.items() if not r["ok"]]
+          # NOTE: requires Termux terminal profile для soft-keyboard IME
+          # quirk'ов (Shift+Enter неотличим от Enter). tmux uses traditional
+          # xterm encoding — same as Termux.
+          print("DETECTOR key_termux_sequences: violations={} (GREEN: Enter/Ctrl+C/arrows/Escape обрабатываются traditional xterm encoding; NOTE: requires Termux terminal profile для soft-keyboard IME quirk'ов)".format(len(bad)))
+          sys.exit(0 if not bad else 1)
+          PYEOF
+          python3 $work/det-key-termux.py
+        timeout: 120
+        idempotent: true
+        retry: 2

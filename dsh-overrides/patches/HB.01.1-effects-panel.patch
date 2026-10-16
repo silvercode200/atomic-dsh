@@ -1,0 +1,300 @@
+# Goal:      команда /effects: дашборд эффектов LIVE42
+# Family:    HB.01
+# Status:    live
+# Files:     lib/types/effectsPrefs.js, lib/types/components/EffectsPanel.js,
+#            lib/types/screens/chatOverlay.js,
+#            lib/types/dsh-adapter/channel.js, lib/types/screens/Chat.js,
+#            lib/types/dsh-adapter/plugin.js
+# Evidence:  reports/live42-frames/; facts/patches-C.md
+# Upstream:  not-applicable
+# Added:     2026-09-17, W4 LIVE42
+
+--- a/lib/types/effectsPrefs.js
++++ b/lib/types/effectsPrefs.js
+@@ -0,0 +1,55 @@
++/**
++ * dsh-overrides 38: persisted per-effect toggles for the /effects panel
++ * (~/.dsh-tui/effects.json, the same best-effort JSON pattern as
++ * themePrefs' theme.json). The panel writes here; the plugin's apply chain
++ * merges this interactive layer OVER the settings.yaml `appearance.effects`
++ * map (the file is the fresher, interactive source — same relation /theme's
++ * theme.json has to the boot default).
++ */
++import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
++import { join } from 'node:path';
++import { EFFECT_KEYS } from './animationsMode.js';
++import { DATA_DIR } from './utils/paths.js';
++const PREFS_DIR = DATA_DIR;
++/**
++ * The persisted effect map ({key: boolean}), unknown keys dropped.
++ * @param dir - Prefs directory (injectable for tests).
++ */
++export function readEffectsPref(dir = PREFS_DIR) {
++    try {
++        const parsed = JSON.parse(readFileSync(join(dir, 'effects.json'), 'utf8'));
++        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
++            return {};
++        const effects = parsed.effects;
++        if (effects === null || typeof effects !== 'object' || Array.isArray(effects))
++            return {};
++        const out = {};
++        for (const key of EFFECT_KEYS) {
++            if (typeof effects[key] === 'boolean')
++                out[key] = effects[key];
++        }
++        return out;
++    }
++    catch {
++        return {};
++    }
++}
++/**
++ * Persist the full effect map (best effort).
++ * @returns True when the file was written.
++ */
++export function writeEffectsPref(effects, dir = PREFS_DIR) {
++    try {
++        mkdirSync(dir, { recursive: true });
++        const clean = {};
++        for (const key of EFFECT_KEYS) {
++            if (typeof effects[key] === 'boolean')
++                clean[key] = effects[key];
++        }
++        writeFileSync(join(dir, 'effects.json'), JSON.stringify({ effects: clean }, null, 2));
++        return true;
++    }
++    catch {
++        return false;
++    }
++}
+--- a/lib/types/components/EffectsPanel.js
++++ b/lib/types/components/EffectsPanel.js
+@@ -0,0 +1,99 @@
++import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
++import React from 'react';
++import { Box, Text, useAnimationFrame, useTheme } from '../ui.js';
++import { Pane } from './design-system/Pane.js';
++import { getTheme } from '../theme.js';
++import { parseRGB } from './Spinner/spinnerUtils.js';
++import { GlimmerMessage } from './Spinner/GlimmerMessage.js';
++import { SpinnerGlyph } from './Spinner/SpinnerGlyph.js';
++import { breathingColor, effectEnabled, EFFECT_KEYS, animationsMode } from '../animationsMode.js';
++/**
++ * dsh-overrides 38: the /effects dashboard — one row per LIVE42 effect:
++ * name, a LIVE mini-demo (the same animation code the real component runs,
++ * so the row shows exactly what toggling does), and the on/off state.
++ * Enter/Space toggles the focused effect (persisted through effectsPrefs,
++ * the theme.json-style mechanism); Esc closes. The demo of a DISABLED effect
++ * renders static — the panel never lies about what is on.
++ */
++/** Human labels for the registry keys. */
++const EFFECT_LABELS = {
++    inputBorderBreath: 'Input border breathing',
++    todoPulse: 'Live todo pulse',
++    todoProgressBar: 'Todo progress bar',
++    headerGlimmer: 'Panel header glimmer',
++    ctxBarBreath: 'Ctx bar breathing',
++    toolCardShimmer: 'Tool card shimmer',
++    spinnerRainbow: 'Spinner rainbow',
++    spinnerGlimmer: 'Spinner verb glimmer',
++};
++const DEMO_TEXTS = {
++    inputBorderBreath: 'input frame',
++    todoPulse: 'live',
++    todoProgressBar: 'todo progress',
++    headerGlimmer: 'glancing',
++    ctxBarBreath: 'ctx',
++    toolCardShimmer: 'bash output',
++    spinnerRainbow: 'spinner',
++    spinnerGlimmer: 'verb glimmer',
++};
++/** Each demo drives the SAME effect gate it demonstrates. */
++function EffectDemo({ effect, time }) {
++    const [themeName] = useTheme();
++    const theme = getTheme(themeName);
++    const on = effectEnabled(effect);
++    const breathe = (baseKey, period = 1600) => {
++        const base = parseRGB(theme[baseKey]);
++        const crest = parseRGB(theme[baseKey === 'toolDotTask' ? 'todoActiveShimmer' : `${baseKey}Shimmer`] ?? theme.promptBorderShimmer);
++        if (base === null || crest === null || base === crest)
++            return theme[baseKey];
++        return breathingColor(base, crest, time, period);
++    };
++    switch (effect) {
++        case 'inputBorderBreath': {
++            const color = on
++                ? (() => { const base = parseRGB(theme.promptBorder); const crest = parseRGB(theme.promptBorderShimmer); return base !== null && crest !== null && base !== crest ? breathingColor(base, crest, time, 2400) : 'promptBorder'; })()
++                : 'promptBorder';
++            return _jsxs(Text, { children: ["╭", "─".repeat(10), "╮ ", _jsx(Text, { color: color, children: "╭────╮" })] });
++        }
++        case 'todoPulse':
++            return _jsx(Text, { color: on ? breathe('toolDotTask') : 'toolDotTask', children: "◐ working" });
++        case 'todoProgressBar': {
++            const fill = on ? breathe('toolDotTask') : 'toolDotTask';
++            return _jsxs(Text, { color: fill, children: ["████████▎", _jsx(Text, { dimColor: true, children: "···" })] });
++        }
++        case 'headerGlimmer':
++            return _jsx(Text, { color: on ? breathe('claude', 1200) : 'claude', children: "✓ header glimmer" });
++        case 'ctxBarBreath': {
++            const base = parseRGB(theme.inverseText);
++            const lift = base === null ? null : { r: Math.round(base.r + (255 - base.r) * 0.3), g: Math.round(base.g + (255 - base.g) * 0.3), b: Math.round(base.b + (255 - base.b) * 0.3) };
++            const color = on && base !== null && lift !== null ? breathingColor(base, lift, time, 1400) : 'inverseText';
++            return _jsxs(Text, { color: color, children: ["⚡", "████████", _jsx(Text, { dimColor: true, children: "·· 69%" })] });
++        }
++        case 'toolCardShimmer': {
++            const base = parseRGB(theme.bashBorder);
++            const lift = base === null ? null : { r: Math.round(base.r + (255 - base.r) * 0.3), g: Math.round(base.g + (255 - base.g) * 0.3), b: Math.round(base.b + (255 - base.b) * 0.3) };
++            const color = on && base !== null && lift !== null ? breathingColor(base, lift, time, 1200) : 'bashBorder';
++            return _jsxs(Text, { color: color, children: ["(bash command)"] });
++        }
++        case 'spinnerRainbow':
++            return _jsx(SpinnerGlyph, { frame: Math.floor(time / 120), messageColor: "claude", stalledIntensity: 0, reducedMotion: false, time: time });
++        case 'spinnerGlimmer':
++            return _jsx(GlimmerMessage, { message: DEMO_TEXTS[effect], mode: "requesting", messageColor: "claude", shimmerColor: "claudeShimmer", glimmerIndex: on ? Math.floor(time / 60) % (DEMO_TEXTS[effect].length + 20) - 10 : -1, flashOpacity: 1, stalledIntensity: 0 });
++        default:
++            return null;
++    }
++}
++/**
++ * The effects dashboard panel.
++ * @param focusIndex - Cursor row (keyboard handling lives in Chat's overlay).
++ * @param onToggle - (key, next) => void; Chat persists via effectsPrefs.
++ */
++export function EffectsPanel({ focusIndex, onToggle }) {
++    const [, time] = useAnimationFrame(120);
++    const mode = animationsMode();
++    return (_jsx(Pane, { color: "permission", children: _jsxs(Box, { flexDirection: "column", children: [_jsx(Box, { marginBottom: 1, children: _jsxs(Text, { color: "remember", bold: true, children: ["Effects dashboard (mode: ", mode, ") — /effects"] }) }), EFFECT_KEYS.map((key, index) => {
++                const on = effectEnabled(key);
++                const focused = index === focusIndex;
++                return (_jsxs(Box, { key: key, flexDirection: "row", children: [_jsx(Text, { color: focused ? 'remember' : undefined, bold: focused, children: focused ? '❯ ' : '  ' }), _jsx(Box, { width: 24, flexShrink: 0, children: _jsx(Text, { color: focused ? 'remember' : undefined, wrap: "truncate-end", children: EFFECT_LABELS[key] ?? key }) }), _jsx(Box, { width: 26, flexShrink: 0, children: _jsx(EffectDemo, { effect: key, time: time }) }), _jsx(Text, { color: on ? 'success' : 'inactive', bold: focused, children: on ? ' on' : ' off' })] }, key));
++            }), _jsx(Box, { marginTop: 1, children: _jsx(Text, { dimColor: true, children: "enter/space toggles · esc exits · reduced-motion/env gates override" }) })] }) }));
++}
+--- a/lib/types/screens/chatOverlay.js
++++ b/lib/types/screens/chatOverlay.js
+@@ -46,6 +46,7 @@
+                 || state.kind === 'effort'
+                 || state.kind === 'preset'
+                 || state.kind === 'theme'
++                || state.kind === 'effects'
+                 || state.kind === 'permission'
+                 || state.kind === 'plan'
+                 || state.kind === 'lang'
+--- a/lib/types/dsh-adapter/channel.js
++++ b/lib/types/dsh-adapter/channel.js
+@@ -2298,7 +2298,8 @@
+         todos: [],
+         loadedContext: undefined,
+         pending: [],
+-        commandList: LOCAL_COMMANDS,
++        // dsh-overrides 38: /effects — the LIVE42 effects dashboard.
++        commandList: [...LOCAL_COMMANDS, { name: 'effects', description: 'Toggle UI effects (dsh-overrides 38)' }],
+         commandCompletions(input) {
+             // Warm the async vocabularies as soon as the input could be heading
+             // for their commands (`/m`, `/pre`, …) — by the time a trailing space
+--- a/lib/types/screens/Chat.js
++++ b/lib/types/screens/Chat.js
+@@ -71,6 +71,10 @@
+ import { PlanPicker } from '../components/PlanPicker.js';
+ import { LangPicker } from '../components/LangPicker.js';
+ import { ThemePicker, getThemeOptions, filterThemeOptions } from '../components/ThemePicker.js';
++// dsh-overrides 38: /effects dashboard + registry access.
++import { EffectsPanel } from '../components/EffectsPanel.js';
++import { EFFECT_KEYS, animationsMode, effectEnabled, setAnimationsMode, setEffectsMode } from '../animationsMode.js';
++import { readEffectsPref, writeEffectsPref } from '../effectsPrefs.js';
+ import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js';
+ import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js';
+ import { ThinkingToggle } from '../components/ThinkingToggle.js';
+@@ -1285,6 +1289,26 @@
+                 });
+                 return true;
+             }
++            case 'effects': {
++                // dsh-overrides 38: /effects — dashboard of the LIVE42
++                // animation effects: live demo per row, Enter/Space toggles
++                // (persisted through ~/.dsh-tui/effects.json — the same
++                // best-effort pref-file mechanism /theme uses), Esc exits.
++                setHelpOpen(false);
++                const parts = rawInput.trim().split(/\s+/).filter(Boolean);
++                if (parts[0] === 'status') {
++                    channel.pushLocal('/effects', [
++                        `mode: ${animationsMode()}`,
++                        ...EFFECT_KEYS.map(key => `  ${key}: ${effectEnabled(key) ? 'on' : 'off'}`),
++                    ]);
++                    return true;
++                }
++                dispatchOverlay({
++                    type: 'open',
++                    overlay: { kind: 'effects', index: 0 },
++                });
++                return true;
++            }
+             case 'color': {
+                 // `/color`（CC accent，按会话持久化）：无参打开调色板选择器，
+                 // `/color <name>` 直接设置，`/color status` 显示当前，`/color
+@@ -2839,6 +2863,30 @@
+             }
+             return;
+         }
++        if (overlay.kind === 'effects') {
++            // dsh-overrides 38: ↑/↓ move, Enter/Space toggle (persist +
++            // live-apply through the process-wide registry), Esc exits.
++            const count = EFFECT_KEYS.length;
++            if (key.upArrow || key.downArrow) {
++                dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count });
++            }
++            else if (plainReturn || (input === ' ' && !key.ctrl)) {
++                const keyName = EFFECT_KEYS[overlay.index];
++                if (keyName !== undefined) {
++                    const next = !effectEnabled(keyName);
++                    const merged = { ...readEffectsPref(), [keyName]: next };
++                    writeEffectsPref(merged);
++                    // custom mode honors per-key maps; full/off ignore
++                    // them — switching a toggle switches to custom.
++                    setEffectsMode({ ...merged });
++                    setAnimationsMode('custom');
++                }
++            }
++            else if (key.escape) {
++                dispatchOverlay({ type: 'close' });
++            }
++            return;
++        }
+         if (overlay.kind === 'lang') {
+             if (key.upArrow || key.downArrow) {
+                 dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: 2 });
+@@ -3608,7 +3656,7 @@
+                                             return;
+                                         dispatchOverlay({ type: 'close' });
+                                         applyLang(lang);
+-                                    } }) })), overlay.kind === 'theme' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(ThemePicker, { focusIndex: overlay.index, currentTheme: themeName, themeHost: themeHost, query: overlay.query ?? '', onPick: (index) => {
++                                    } }) })), overlay.kind === 'effects' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(EffectsPanel, { focusIndex: overlay.index, onToggle: undefined }) })), overlay.kind === 'theme' && (_jsx(Box, { flexDirection: "column", marginTop: 1, children: _jsx(ThemePicker, { focusIndex: overlay.index, currentTheme: themeName, themeHost: themeHost, query: overlay.query ?? '', onPick: (index) => {
+                                         dispatchOverlay({ type: 'close' });
+                                         const name = filterThemeOptions(getThemeOptions(themeHost), overlay.query ?? '')[index]?.value;
+                                         if (name !== undefined) {
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -18,6 +18,7 @@
+ import { setSettingsThemePref } from '../themePrefs.js';
+ // dsh-overrides 33: the effect registry drives the schema's effects map.
+ import { EFFECT_KEYS } from '../animationsMode.js';
++import { readEffectsPref } from '../effectsPrefs.js';
+ import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js';
+ import { readModelPref } from '../modelPrefs.js';
+ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js';
+@@ -661,7 +662,15 @@
+         // written here at boot (before the tree mounts), hot-swapped
+         // in-session by /theme.
+         const applyAppearance = (value) => {
+-            channel.setAppearance(value.appearance ?? {});
++            // dsh-overrides 38: the /effects panel's interactive toggles
++            // persist to ~/.dsh-tui/effects.json (the theme.json mechanism);
++            // that fresher layer merges OVER the settings.yaml effects map.
++            const settingsAppearance = value.appearance ?? {};
++            const interactive = readEffectsPref();
++            const merged = Object.keys(interactive).length > 0
++                ? { ...settingsAppearance, effects: { ...(settingsAppearance.effects ?? {}), ...interactive } }
++                : settingsAppearance;
++            channel.setAppearance(merged);
+             // dsh-overrides 35: verb customization rides the same apply.
+             channel.setSpinnerVerbs(value.spinnerVerbs);
+             const theme = value.appearance?.theme;

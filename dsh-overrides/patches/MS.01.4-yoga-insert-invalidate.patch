@@ -1,0 +1,121 @@
+# Goal:      Consolidated MS.01 Engine: insertChild basis-cache invalidation (76) +
+#            extent overestimation clamp (78) + getComputedTop rounding hysteresis (80) —
+#            scroll-geometry K5-line on yoga-layout + render-node-to-output
+# Family:    MS.01
+# Status:    live
+# Files:     lib/types/native-ts/yoga-layout/index.js, lib/types/ink/render-node-to-output.js
+# Evidence:  TG-DSH-MKS4-20260928 узел 5 (76 basis-cache, 78 extent clamp, 80 top-clamp rev7);
+#            RCA memories: dsh-saw-451-heightsref-stale-residual,
+#            dsh-saw-4th-channel-getcomputedtop-rounding, dsh-p80-rev7-hysteresis-threshold2-gw-only
+# Upstream:  not-applicable
+# Added:     2026-10-02 (76); 2026-10-08 (78); 2026-10-10 (80); rev7 2026-10-13
+# Squash:    MS.01.4+MS.01.6+MS.01.8 → MS.01.4 (3D big-bang, TG-DSH-BIGBANG-20261016)
+# Regen:     diff(pristine yoga-layout/index.js + render-node-to-output.js, applied 80-patch stack) — byte-identity preserved
+
+--- a/lib/types/native-ts/yoga-layout/index.js
++++ b/lib/types/native-ts/yoga-layout/index.js
+@@ -471,6 +471,14 @@
+     insertChild(child, index) {
+         child.parent = this;
+         this.children.splice(index, 0, child);
++        // DSH-P76-YOGA-INSERT-INVALIDATE: invalidate the inserted child's
++        // subtree (dsh-overrides 76). Parent-only markDirty() left a
++        // re-inserted child clean, so computeFlexBasis served it a
++        // previous-generation basis (measure-pass
++        // height) that can disagree with its final layout by a row — the
++        // wrapper-vs-extent ±1 behind the scrollHeight saw. Upstream
++        // YGNodeInsertChild semantics: insertion dirties the inserted node.
++        child.markDirty();
+         this.markDirty();
+     }
+     /**
+--- a/lib/types/ink/render-node-to-output.js
++++ b/lib/types/ink/render-node-to-output.js
+@@ -665,16 +665,84 @@
+                 // message). The children's real extent is the authoritative floor.
+                 // O(direct children) — the windowed list keeps this tiny, and the
+                 // painter walks the same nodes right below.
++                //
++                // DSH-P78-SCROLL-SAW-BASIS-CLAMP: the extent floor only caught
++                // UNDERESTIMATION (basis < final → wrapperHeight < childBottoms;
++                // max() picks childBottoms, the documented 286-vs-287 case).
++                // But the symmetric OVERESTIMATION (basis > final → wrapperHeight
++                // > childBottoms) inflated scrollHeight by ±1: when a row whose
++                // flex-basis measure pass exceeds its final layout height
++                // enters/leaves the mount window during manual scroll
++                // (sticky=false, rows settled), max() picks the inflated
++                // wrapperHeight, oscillating scrollHeight 423↔422. Third channel
++                // after patch 76 (moving-basis underestimation via insertChild
++                // markDirty) and patch 77 (streaming→false heightsRef
++                // invalidation). The children's real extent (maxChildBottom,
++                // from the LAYOUT pass) is authoritative in BOTH directions:
++                // it floors underestimation AND caps overestimation. Use it
++                // exclusively when children exist; wrapperHeight is only a
++                // fallback for an empty wrapper.
++                let maxChildBottom = 0;
++                let hasChildYoga = false;
++                let _maxChildTop = 0;
++                let _maxChildHeight = 0;
++                let _childCount = 0;
+                 if (content !== undefined) {
+                     for (const child of content.childNodes) {
+                         const childYoga = child.yogaNode;
+                         if (childYoga === undefined)
+                             continue;
+-                        const bottom = childYoga.getComputedTop() + childYoga.getComputedHeight();
+-                        if (bottom > scrollHeight)
+-                            scrollHeight = bottom;
++                        hasChildYoga = true;
++                        const _h = childYoga.getComputedHeight();
++                        const _top = childYoga.getComputedTop();
++                        _childCount++;
++                        const bottom = _top + _h;
++                        if (bottom > maxChildBottom) {
++                            maxChildBottom = bottom;
++                            _maxChildTop = _top;
++                            _maxChildHeight = _h;
++                        }
+                     }
++                    // DSH-P80-SCROLL-SAW-TOP-CLAMP: yoga's roundLayout can shift
++                    // a child's getComputedTop() by +-=1 across consecutive
++                    // calculateLayout() passes during structural transitions
++                    // (child mount + height growth). The bottomPad spacer's top
++                    // oscillates 69<->68 while its height stays constant (1),
++                    // causing scrollHeight to saw +-=1 (70<->69).
++                    // Option C-rev7: hysteresis threshold=2, gW-only gate.
++                    // rev5 (childCount+gW gate, threshold=1): saw_flips=5 —
++                    // childCount changes during virtual scroll → stable resets.
++                    // rev6 (gW-only gate, threshold=1): saw_flips=1 — improved!
++                    // But 1 remaining flip was delta=2 (417→415) not blocked by
++                    // threshold=1. rev7 raises threshold to 2: blocks |delta|<=2.
++                    // Yoga rounding can accumulate ±1 across multiple children,
++                    // producing delta=2 (not just ±1). Threshold=2 blocks both.
++                    // Legitimate changes (new message: +rowHeight ~20px, deleted
++                    // message: -rowHeight, width change: rewrap) are >=3 or
++                    // accompanied by gW change (stable resets). gW = terminal
++                    // width = stable during scroll, changes during sweep/resize.
++                    // yogaNode is the outer node's yoga (already in scope above).
++                    const _geomW = yogaNode.getComputedWidth();
++                    let _stable;
++                    if (node._sawClamp !== undefined) {
++                        const _c = node._sawClamp;
++                        if (_geomW === _c.gW) {
++                            if (Math.abs(maxChildBottom - _c.stable) <= 2) {
++                                _stable = _c.stable;
++                                maxChildBottom = _c.stable;
++                            } else {
++                                _stable = maxChildBottom;
++                            }
++                        } else {
++                            _stable = maxChildBottom;
++                        }
++                    } else {
++                        _stable = maxChildBottom;
++                    }
++                    node._sawClamp = { stable: _stable, n: _childCount, gW: _geomW };
+                 }
++                if (hasChildYoga)
++                    scrollHeight = maxChildBottom;
+                 // Capture previous scroll bounds BEFORE overwriting — the at-bottom
+                 // follow check compares against last frame's max.
+                 const prevScrollHeight = node.scrollHeight ?? scrollHeight;

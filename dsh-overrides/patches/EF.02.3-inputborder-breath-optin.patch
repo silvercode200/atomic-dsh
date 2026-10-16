@@ -1,0 +1,53 @@
+# Goal:      inputBorderBreath → OPT-IN (full→OFF, custom true→ON)
+# Family:    EF.02
+# Status:    live
+# Files:     lib/types/animationsMode.js
+# Evidence:  TG-DSH-HANDOFF-20260926 узел 2
+# Upstream:  not-applicable
+# Added:     2026-09-26 (TG-DSH-HANDOFF-20260926 узел 2)
+
+# 69-inputborder-breath-optin (TG-DSH-HANDOFF-20260926 node 2, 2026-09-26)
+# Goal:      inputBorderBreath → OPT-IN эффект. Юзер попросил убрать
+#            «мигание/дыхание» рамки ввода НАВСЕГДА, даже при включённых
+#            анимациях («выглядит стремно»). Патч 33 вводил дыхание
+#            (default ON), патч 66 закрыл boolean-легаси ручки, но в
+#            full-режиме дыхание оставалось ON. Механизм уже был —
+#            OPT_IN_EFFECTS (патч 42, семантика effectEnabled): opt-in
+#            эффект OFF даже в 'full', включается только явным true в
+#            custom. Патч добавляет ключ в набор: full → OFF, custom
+#            без ключа → OFF, custom true → ON, custom false → OFF.
+#            Тумблер /settings-группы Эффекты (патч 46) семантически
+#            валиден как раньше: host-write ставит effects.<key>=true +
+#            animations='custom' — этим же путём opt-in и включается.
+#            Дыхание цвета (breathingColor) и остальные 13 эффектов
+#            реестра не тронуты.
+# Family:    UI.33 (LIVE42 animation-wave; delta к патчу 33 — эффект
+#            переведён из default-ON в opt-in по юзер-запросу)
+# Status:    live (RED→GREEN tests/appearance-animations.test.js:
+#            3 ассерта inputBorderBreath; fresh-apply стека 01-69
+#            failed=0; forkVersion +p69)
+# Files:     lib/types/animationsMode.js (OPT_IN_EFFECTS + маркер 69)
+# Evidence:  .tmp-probes/69-work/red.log (RED 16/19: full/custom-unset/
+#            opt-in-кейс — expected false, actual true),
+#            .tmp-probes/69-work/green.log (GREEN 19/19),
+#            .tmp-probes/69-work/fresh-apply.log (revert 68 clean +
+#            apply 01-69, failed=0) — TaskGate TG-DSH-HANDOFF-20260926
+#            node 2
+# Upstream:  not-applicable
+# Added:     2026-09-26, волна TG-DSH-HANDOFF-20260926 (узел 2).
+
+--- a/lib/types/animationsMode.js
++++ b/lib/types/animationsMode.js
+@@ -48,7 +48,11 @@
+ // dsh-overrides 42: OPT-IN effects are OFF unless explicitly enabled —
+ // they change layout (the sparkline row) or are niche, so `full` does
+ // NOT imply them; custom requires an explicit true.
+-const OPT_IN_EFFECTS = new Set(['sparkTps', 'sparkCache']);
++// dsh-overrides 69: input-border breath is opt-in — the breathing input
++// frame reads as visual noise (the user asked to kill it for good, even
++// with animations on: «рамка мигает, выглядит стремно»), so `full` does
++// NOT imply it either; custom enables it only with an explicit true.
++const OPT_IN_EFFECTS = new Set(['sparkTps', 'sparkCache', 'inputBorderBreath']);
+ let animationsSetting; // 'full' | 'custom' | 'off' | undefined
+ let effectsSetting; // {key: boolean} partial (custom mode)
+ /** @internal channel-owned setter; also called once at boot. */

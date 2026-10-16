@@ -1,0 +1,111 @@
+# Goal:      scrollHeight-пила manual-scroll: wheel-гейт у дна
+# Family:    MS.01
+# Status:    live
+# Files:     lib/types/ink/components/ScrollBox.js
+# Evidence:  TG-DSH-VISUAL-20260925 узел 6;
+#            reports/colab-golden68-run3-20260925T230933Z/;
+#            reports/scrolljitter-contract-v7-20260926/
+# Upstream:  not-applicable
+# Added:     2026-09-26 (TG-DSH-VISUAL-20260925 узел 6)
+
+# DEP-3 header — dsh-overrides 67
+# Goal: kill the 3-row scrollHeight saw 39↔42↔39 (20 flips/15 s, sticky=false,
+#   innerHeight=39; user trace 24.09 2026-09-24 20:56 UTC, report 2026-09-25
+#   «при скролле вниз экран мигает и дёргается») in the MANUAL-SCROLL branch.
+# Root cause (verified against the user trace, NOT hypothesized): scrollBy
+#   broke stickyScroll unconditionally on every wheel notch at the bottom;
+#   Chat's isSticky subscribers mounted StickyPromptHeader (1 row) +
+#   NewMessagesPill (2 rows: paddingTop 1 + text row) = the +3 rows; the
+#   fixed-height pinned frame took them from the ScrollBox viewport
+#   (innerHeight 42→39; flexGrow content wrapper mirrored scrollHeight); the
+#   renderer's positional at-bottom restore re-pinned sticky next frame →
+#   chrome unmounted → −3 rows → saw. What added/removed the 3 rows:
+#   StickyPromptHeader+NewMessagesPill mount at sticky=false, unmount at the
+#   at-bottom re-pin.
+# Disproven hypothesis: MessageList/smoothReveal reveal→delete→переоценка→
+#   floor-walk is NOT the driver — in the user trace innerHeight and
+#   scrollHeight flip IN LOCKSTEP (42/42 ↔ 39/39, maxScroll=0 both) and
+#   base = ih−total is constant: content height never changed, the viewport
+#   chrome oscillated. smoothReveal uninvolved; patch 54 pinned only the
+#   sticky=true streaming branch and never covered this scroll branch.
+# Fix: wheelCannotLeaveBottom gate in ScrollBox.scrollBy — a wheel that
+#   cannot move the view away from the bottom (maxScroll<=0, or already at
+#   the bottom wheeling down) is a visual no-op: sticky/pending/anchor
+#   untouched. Stabilization for sticky=false achieved preventively: the
+#   spurious sticky flip never happens, so scrollHeight never saws. Reading
+#   history (wheel-up from bottom, tall content) still breaks sticky and
+#   shows the chrome — feature preserved.
+# Family: scroll-geometry (B1/B2 height-stability lineage: 48 footer, 54
+#   streaming rows; this closes the manual-scroll bottom-edge branch).
+# Status: applied to 67-work probe, pending main apply to live + VM detector
+#   scroll_jitter (golden v6) for the on-render proof.
+# Files: lib/types/ink/components/ScrollBox.js (no overlap with 66/68).
+# Evidence: .tmp-probes/67-work/analyze*.py + scan-saw.py (trace forensics),
+#   tests/scroll-height-stabilize.test.js (RED→GREEN), fresh-apply probe
+#   .tmp-probes/67-work/verify-apply.log (failed=0).
+#
+--- a/lib/types/ink/components/ScrollBox.js
++++ b/lib/types/ink/components/ScrollBox.js
+@@ -7,6 +7,47 @@
+ import { markCommitStart } from '../reconciler.js';
+ import { swallowNestedUpdateOverflow } from '../update-overflow-guard.js';
+ import Box from './Box.js';
++// dsh-overrides 67: wheel-at-bottom sticky gate (scroll-height saw). A wheel
++// notch fired while the view CANNOT move away from the bottom (nothing
++// scrollable, or already at the bottom scrolling further down) used to break
++// stickyScroll unconditionally; Chat's isSticky subscribers then mounted the
++// StickyPromptHeader (1 row) + NewMessagesPill (2 rows) chrome, the fixed-
++// height pinned frame took those 3 rows from the ScrollBox viewport
++// (innerHeight 42→39; the flexGrow content wrapper mirrored scrollHeight),
++// and the renderer's positional at-bottom restore re-pinned sticky one frame
++// later — chrome unmounted, viewport back to 42. A full +3/−3 layout saw per
++// wheel notch at the bottom: the screen "flickers and jolts while scrolling
++// down" (user trace 2026-09-24 20:56 UTC: 20 scrollHeight flips in 15 s,
++// amplitude exactly 3, zero flips in the sticky control window).
++// NOT the MessageList/smoothReveal reveal→delete→re-estimate floor-walk
++// family: in the user trace (24.09, 20:56 UTC) innerHeight and scrollHeight
++// flip IN LOCKSTEP (42/42 ↔ 39/39, maxScroll 0 in both) and base = ih−total
++// is constant — the message content height never changed, the viewport
++// chrome did. smoothReveal is uninvolved; this is the manual-scroll branch
++// patch 54 never covered (it pinned the sticky=true streaming branch).
++// Gated
++// wheels are a visual no-op: sticky stays untouched, no pendingScrollDelta,
++// no notify, no frame — matching native terminals, which no-op a wheel at
++// the bottom edge.
++export function wheelCannotLeaveBottom(dy, scrollTop, scrollHeight, viewportHeight) {
++    const maxScroll = Math.max(0, (scrollHeight ?? 0) - (viewportHeight ?? 0));
++    // Nothing scrollable: every position IS the bottom — up or down wheels
++    // have nowhere to go (and the renderer trivially at-bottom-restores any
++    // broken sticky here, so breaking it only bought the one-frame chrome
++    // flash).
++    if (maxScroll <= 0)
++        return true;
++    // Wheeling further DOWN while at/below the bottom: the drain would clamp
++    // straight back to maxScroll. +0.5 absorbs fractional Yoga dust so an
++    // integer scrollTop reads as at-bottom against a fractional maxScroll.
++    if (dy > 0 && (scrollTop ?? 0) + 0.5 >= maxScroll)
++        return true;
++    // Every other wheel (up from the bottom, down mid-content) really moves
++    // the view away from the bottom — sticky must break so the scrolled-up
++    // affordances (pinned prompt header, back-to-bottom pill) appear. Reading
++    // history is the feature; only the bottom-edge tremor was the bug.
++    return false;
++}
+ /**
+  * A Box with `overflow: scroll` and an imperative scroll API.
+  *
+@@ -137,6 +178,14 @@
+                 const el = domRef.current;
+                 if (!el)
+                     return;
++                // dsh-overrides 67: a wheel that cannot leave the bottom is a
++                // visual no-op — breaking sticky here mounted the sticky header
++                // + pill chrome for a single frame (3-row viewport saw per
++                // notch; see wheelCannotLeaveBottom above). Keep sticky and
++                // pendingScrollDelta untouched: nothing below to drain to, and
++                // an in-flight anchor seek survives tremor at the bottom edge.
++                if (wheelCannotLeaveBottom(dy, el.scrollTop, el.scrollHeight, el.scrollViewportHeight))
++                    return;
+                 el.stickyScroll = false;
+                 // Wheel input cancels any in-flight anchor seek — user override.
+                 el.scrollAnchor = undefined;

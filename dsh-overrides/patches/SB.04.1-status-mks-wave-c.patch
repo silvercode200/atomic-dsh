@@ -1,0 +1,425 @@
+# Goal:      MKS спенд/реал-модель/comp-прогресс в статус-баре + дрейф-захват Wave C: statusbar-схема plugin.js
+# Family:    SB.04
+# Status:    live
+# Files:     lib/types/mksClient.js, lib/types/tuiDisplayPrefs.js,
+#            lib/types/i18n.js, lib/types/i18n.d.ts,
+#            lib/types/screens/StatusLine.js,
+#            lib/types/dsh-adapter/plugin.js
+# Evidence:  reports/wavec-c/; facts/patches-B.md;
+#            TG-DSH-REBUILD-20260921 узел 7.5;
+#            reports/patch-stack-revision-20260921/
+# Upstream:  not-applicable
+# Added:     2026-09-12, W3C Wave C (status bar); Wave C schema 2026-09-23
+# Squash:    3C consolidation of SB.04.1-status-mks + SB.04.2-wave-c-statusbar-schema
+--- /dev/null
++++ b/lib/types/mksClient.js
+@@ -0,0 +1,140 @@
++// dsh-overrides 17: mini-key-switcher status sources (spending + active model).
++// Pure helpers + a thin fetch layer for the dsh-tui status bar.
++//
++// Secret-safe by contract: tokens are read from local config files / env only,
++// are carried exclusively in the Authorization header, and are never logged,
++// rendered, or embedded in error messages.
++//
++// Sources (first match wins):
++//   token  — env MKS_SYNC_TOKEN | env SWITCHER_SYNC_TOKEN
++//          | refs.MKS_SYNC_TOKEN in ~/.dsh/.credentials.yaml
++//          | sync_token in ~/.config/mks/config.json
++//   base   — env MKS_BASE_URL | http://127.0.0.1:8350 (cli provider router)
++//   app    — env MKS_APP | 'dsh' (registered via POST /api/apps)
++import { readFileSync } from 'fs';
++import { homedir } from 'os';
++import { join } from 'path';
++
++const DEFAULT_BASE_URL = 'http://127.0.0.1:8350';
++const DEFAULT_APP = 'dsh';
++
++/** Read refs.MKS_SYNC_TOKEN from the .credentials.yaml without a YAML dep. */
++function readRefsToken(path) {
++    try {
++        const m = /^\s*MKS_SYNC_TOKEN:\s*(.+?)\s*$/m.exec(readFileSync(path, 'utf8'));
++        return m === null ? '' : m[1].replace(/^['"]|['"]$/g, '');
++    }
++    catch {
++        return '';
++    }
++}
++
++/** Read sync_token from the mks CLI config (JSON). */
++function readJsonSyncToken(path) {
++    try {
++        const parsed = JSON.parse(readFileSync(path, 'utf8'));
++        return typeof parsed.sync_token === 'string' ? parsed.sync_token : '';
++    }
++    catch {
++        return '';
++    }
++}
++
++/**
++ * Resolve the mini-key-switcher client config. Never throws: a missing or
++ * unreadable source simply degrades to an empty token (the status bar then
++ * renders no spending/actual-model field instead of failing).
++ */
++export function loadMksConfig(env = process.env, home = homedir()) {
++    return {
++        baseUrl: env.MKS_BASE_URL || DEFAULT_BASE_URL,
++        app: env.MKS_APP || DEFAULT_APP,
++        syncToken: env.MKS_SYNC_TOKEN
++            || env.SWITCHER_SYNC_TOKEN
++            || readRefsToken(join(home, '.dsh', '.credentials.yaml'))
++            || readJsonSyncToken(join(home, '.config', 'mks', 'config.json'))
++            || '',
++    };
++}
++
++/**
++ * Parse a GET /api/apps/{name}/spending payload into the flat shape the
++ * status bar needs. Returns undefined on any malformed payload so a half
++ * response can never render a wrong number.
++ */
++export function parseSpending(payload) {
++    if (payload === null || typeof payload !== 'object')
++        return undefined;
++    const summary = payload.summary;
++    if (summary === null || typeof summary !== 'object')
++        return undefined;
++    const requests = Number(summary.requests);
++    const costUsd = Number(summary.cost_usd);
++    if (!Number.isFinite(requests) || !Number.isFinite(costUsd))
++        return undefined;
++    const perModel = new Map();
++    const rows = Array.isArray(payload.rows) ? payload.rows : [];
++    for (const row of rows) {
++        if (row === null || typeof row !== 'object')
++            continue;
++        const key = typeof row.key === 'string' ? row.key : undefined;
++        if (key === undefined)
++            continue;
++        const count = Number(row.requests);
++        if (Number.isFinite(count))
++            perModel.set(key, count);
++    }
++    return { requests, costUsd, perModel };
++}
++
++/**
++ * Pick the currently active model from two consecutive spending snapshots:
++ * the model whose request count grew is the one serving traffic now. The
++ * switcher logs no session id and exposes no X-Model via its admin API, so a
++ * monotone delta between polls is the honest proxy for "the model actually
++ * running this session". Ties keep the earlier pick (stable).
++ */
++export function pickActiveModel(previous, current) {
++    if (previous === undefined || current === undefined)
++        return undefined;
++    let best;
++    let bestDelta = 0;
++    for (const [model, count] of current.perModel) {
++        const delta = count - (previous.perModel.get(model) ?? 0);
++        if (delta > bestDelta) {
++            bestDelta = delta;
++            best = model;
++        }
++    }
++    return best;
++}
++
++/**
++ * Fetch the 24h spending aggregation for the configured app.
++ * Returns undefined on any HTTP/parse failure — the field just stays hidden.
++ */
++export async function fetchMksSpending(cfg, signal) {
++    if (cfg.syncToken === '')
++        return undefined;
++    try {
++        const url = `${cfg.baseUrl}/api/apps/${encodeURIComponent(cfg.app)}/spending?period=24h`;
++        const res = await fetch(url, {
++            headers: { Authorization: `Bearer ${cfg.syncToken}` },
++            signal,
++        });
++        if (!res.ok)
++            return undefined;
++        return parseSpending(await res.json());
++    }
++    catch {
++        return undefined;
++    }
++}
++
++/** Format the spending figure: sub-cent costs keep a third decimal. */
++export function formatSpendingCost(costUsd) {
++    if (!Number.isFinite(costUsd))
++        return undefined;
++    const digits = costUsd > 0 && costUsd < 0.01 ? (costUsd < 0.001 ? 4 : 3) : 2;
++    return `$${costUsd.toFixed(digits)}`;
++}
+--- a/lib/types/tuiDisplayPrefs.js
++++ b/lib/types/tuiDisplayPrefs.js
+@@ -18,7 +18,15 @@
+     activity: false,
+     trajectory: false,
+     shortcutHint: false,
+-});
++    // dsh-overrides 17: mini-key-switcher spending + compaction-progress
++    // fields. `compactThresholdRatio` mirrors the compaction-basic preset
++    // (thresholdTokens = floor(window * ratio)); a preset that changes the
++    // ratio should update this value with it.
++    spending: true,
++    realModel: true,
++    compactProgress: true,
++    compactThresholdRatio: 0.8,
++})
+ const TOOL_BACKGROUNDS = new Set(['none', 'subtle', 'strong']);
+ const SCROLL_GUTTERS = new Set(['timeline', 'scrollbar', 'hidden']);
+ const STATUS_BAR_KEYS = Object.keys(DEFAULT_STATUS_BAR);
+@@ -41,12 +49,17 @@
+         return normalized;
+     const input = value;
+     for (const key of STATUS_BAR_KEYS) {
++        // dsh-overrides 17: numeric settings (compactThresholdRatio) normalize
++        // like the booleans — a finite number is taken, anything else falls
++        // back to the default.
+         if (typeof input[key] === 'boolean')
+             normalized[key] = input[key];
++        else if (typeof input[key] === 'number' && Number.isFinite(input[key]) && typeof normalized[key] === 'number')
++            normalized[key] = input[key];
+     }
+     return normalized;
+ }
+-function formatTokenCount(value) {
++export function formatTokenCount(value) { // dsh-overrides 17: exported for StatusLine compact-left field
+     const rounded = Math.max(0, Math.round(value));
+     if (rounded < 1_000)
+         return String(rounded);
+@@ -55,6 +68,26 @@
+     return `${(rounded / 1_000_000).toFixed(rounded < 10_000_000 ? 1 : 0)}m`;
+ }
+ /**
++ * dsh-overrides 17: distance to the auto-compaction threshold. The threshold
++ * mirrors compaction-basic (floor(window * ratio)); the object carries both
++ * the remaining tokens and the threshold fill percentage for the status bar.
++ * Invalid or unavailable inputs intentionally produce no reading.
++ */
++export function compactProgressReading(used, contextWindow, ratio = 0.8) {
++    if (!Number.isFinite(used) || !Number.isFinite(contextWindow) || contextWindow <= 0)
++        return undefined;
++    const safeRatio = Number.isFinite(ratio) && ratio > 0 && ratio <= 1 ? ratio : 0.8;
++    const threshold = Math.floor(contextWindow * safeRatio);
++    if (threshold <= 0)
++        return undefined;
++    return {
++        threshold,
++        left: Math.max(0, threshold - Math.max(0, used)),
++        pct: Math.max(0, Math.min(100, Math.round((Math.max(0, used) / threshold) * 100))),
++    };
++}
++
++/**
+  * Format context-window usage for future status-line consumers.
+  * Invalid or unavailable inputs intentionally produce no field.
+  */
+@@ -66,6 +99,11 @@
+     // and misleads next to the cache field; the bare token counts are the
+     // unambiguous reading, so the percent is dropped entirely.
+     const safeUsed = Math.max(0, used);
++    // dsh-overrides 17: compact mode drops the window ceiling ("122k" not
++    // "122k/262k") — the user asked for the max size to disappear from the
++    // right side of the compact status bar.
++    if (compact)
++        return formatTokenCount(safeUsed);
+     const counts = `${formatTokenCount(safeUsed)}/${formatTokenCount(contextWindow)}`;
+     return counts;
+ }
+--- a/lib/types/i18n.js
++++ b/lib/types/i18n.js
+@@ -261,6 +261,12 @@
+     'theme-unknown': { zh: '未知主题「{{name}}」· /theme 查看全部', en: 'Unknown theme "{{name}}" · /theme to view all' },
+     'status-model': { zh: '模型   {{model}}', en: 'Model   {{model}}' },
+     'status-provider': { zh: '提供商   {{provider}}', en: 'Provider   {{provider}}' },
++    // dsh-overrides 17: mini-key-switcher spending + compact-progress labels
++    'status-spend-label': { zh: '支出 ', en: 'spend ' },
++    'status-spend-tooltip': { zh: '{{requests}} 个请求/24h · 应用 {{app}} (mini-key-switcher)', en: '{{requests}} requests/24h · app {{app}} (mini-key-switcher)' },
++    'status-compact-left': { zh: '压缩 ', en: 'comp ' },
++    'status-compact-left-unit': { zh: '剩余', en: 'left' },
++    'status-compact-tooltip': { zh: '压缩阈值 {{threshold}} · 已用 {{used}}', en: 'compaction threshold {{threshold}} · used {{used}}' },
+     'status-working': { zh: '工作中', en: 'working' },
+     'status-idle': { zh: '空闲', en: 'idle' },
+     'status-state': { zh: '状态   {{state}}', en: 'Status   {{state}}' },
+--- a/lib/types/i18n.d.ts
++++ b/lib/types/i18n.d.ts
+@@ -840,6 +840,26 @@
+         readonly zh: "提供商   {{provider}}";
+         readonly en: "Provider   {{provider}}";
+     };
++    readonly 'status-spend-label': {
++        readonly zh: "支出 ";
++        readonly en: "spend ";
++    };
++    readonly 'status-spend-tooltip': {
++        readonly zh: "{{requests}} 个请求/24h · 应用 {{app}} (mini-key-switcher)";
++        readonly en: "{{requests}} requests/24h · app {{app}} (mini-key-switcher)";
++    };
++    readonly 'status-compact-left': {
++        readonly zh: "压缩 ";
++        readonly en: "comp ";
++    };
++    readonly 'status-compact-left-unit': {
++        readonly zh: "剩余";
++        readonly en: "left";
++    };
++    readonly 'status-compact-tooltip': {
++        readonly zh: "压缩阈值 {{threshold}} · 已用 {{used}}";
++        readonly en: "compaction threshold {{threshold}} · used {{used}}";
++    };
+     readonly 'status-working': {
+         readonly zh: "工作中";
+         readonly en: "working";
+--- a/lib/types/screens/StatusLine.js
++++ b/lib/types/screens/StatusLine.js
+@@ -18,6 +18,45 @@
+ import { formatProject } from '../sessions/format.js';
+ import { homeDir } from '../utils/paths.js';
+ import { USED_SEGMENTS, renderMiniContextBar, renderTpsGauge, renderTpsSparkline, speedColor, tpsStats, } from './StatusMetrics.js';
++// dsh-overrides 17: mini-key-switcher status (spending + actually-routed model)
++import { loadMksConfig, fetchMksSpending, pickActiveModel, formatSpendingCost } from '../mksClient.js';
++import { compactProgressReading, formatTokenCount } from '../tuiDisplayPrefs.js';
++/**
++ * dsh-overrides 17: poll the mini-key-switcher spending endpoint and derive
++ * the actually-routed model from consecutive snapshots (the model whose
++ * request count grew is the one serving traffic). Polling is silent: any
++ * failure leaves the fields hidden instead of rendering zeros or errors.
++ */
++function useMksStatus() {
++    const [state, setState] = React.useState({});
++    React.useEffect(() => {
++        const cfg = loadMksConfig();
++        if (cfg.syncToken === '')
++            return undefined;
++        let alive = true;
++        let last = undefined; // previous spending snapshot (delta source)
++        let actualModel;
++        const tick = async () => {
++            try {
++                const current = await fetchMksSpending(cfg);
++                if (!alive || current === undefined)
++                    return;
++                if (current.requests > 0) {
++                    actualModel = pickActiveModel(last, current) ?? actualModel;
++                    last = current;
++                    setState({ spending: current, actualModel });
++                }
++            }
++            catch {
++                // network hiccups keep the previous reading on screen
++            }
++        };
++        void tick();
++        const id = setInterval(() => void tick(), 20000);
++        return () => { alive = false; clearInterval(id); };
++    }, []);
++    return state;
++}
+ /**
+  * Render field parts as sibling shrinkable Boxes joined by the Byline
+  * separator (` · `). The Box-per-field layout is what makes individual
+@@ -42,8 +81,13 @@
+     const statusBar = channel.minimal
+         // Minimal mode overrides every field switch: model + cwd only, so the
+         // footer can never grow decorations regardless of saved preferences.
+-        ? { ...DEFAULT_STATUS_BAR, compact: true, model: true, cwd: true }
++        // dsh-overrides 17: numeric settings are not decorations — the compact
++        // threshold ratio must follow the user's compaction preset even in
++        // minimal mode, so it is re-read past the minimal override.
++        ? { ...DEFAULT_STATUS_BAR, compact: true, model: true, cwd: true, compactThresholdRatio: normalizeStatusBar(channel.statusBar).compactThresholdRatio }
+         : normalizeStatusBar(channel.statusBar);
++    // dsh-overrides 17: one poller per status line, config-independent.
++    const mks = useMksStatus();
+     // Provider workspaces expose a remote display path alongside a host alias;
+     // only the local target has identical cwd/displayCwd values to fold.
+     const displayCwd = channel.displayCwd === channel.cwd
+@@ -116,6 +160,24 @@
+             });
+         }
+     }
++    // dsh-overrides 17: compaction-progress reading — tokens remaining before
++    // the auto-compact threshold plus the threshold fill percentage. Escalates
++    // color near the threshold (85% warning, 95% danger). Hidden until the
++    // first usage sample exists: a fresh session carries no context pressure.
++    if (statusBar.compactProgress) {
++        const progress = compactProgressReading(contextUsed, channel.contextWindow, statusBar.compactThresholdRatio);
++        if (progress !== undefined && progress.pct > 0) {
++            contextParts.push({
++                key: 'compactLeft',
++                id: 'compactLeft',
++                tooltip: t('status-compact-tooltip', {
++                    threshold: formatTokenCount(progress.threshold),
++                    used: formatTokenCount(Math.max(0, contextUsed ?? 0)),
++                }),
++                node: (_jsxs(Text, { color: progress.pct >= 95 ? 'error' : progress.pct >= 85 ? 'warning' : 'inactiveShimmer', children: [_jsx(Text, { dimColor: true, children: t('status-compact-left') }), formatTokenCount(progress.left), ' ', t('status-compact-left-unit'), _jsx(Text, { dimColor: true, children: ` ${progress.pct}%` })] })),
++            });
++        }
++    }
+     let tpsPart;
+     if (statusBar.tps && channel.tps !== undefined) {
+         if (channel.working && channel.tpsSamples.length === 0) {
+@@ -157,9 +219,35 @@
+             id: 'jobs',
+             node: (_jsxs(Text, { color: "toolDotTask", children: ['● ', liveJobs.length] })),
+         };
++    // dsh-overrides 17: mini-key-switcher session spending (per-app, 24h —
++    // the switcher keeps no per-session ledger). Hidden until real traffic
++    // exists so a fresh session renders no $0.00 noise.
++    const spendPart = statusBar.spending && mks.spending !== undefined && mks.spending.requests > 0
++        ? [{
++                key: 'spend',
++                id: 'spend',
++                tooltip: t('status-spend-tooltip', { requests: mks.spending.requests, app: loadMksConfig().app }),
++                node: (_jsxs(Text, { color: "inactiveShimmer", children: [_jsx(Text, { dimColor: true, children: t('status-spend-label') }), formatSpendingCost(mks.spending.costUsd), _jsx(Text, { dimColor: true, children: ` · ${mks.spending.requests}r` })] })),
++            }]
++        : [];
+     const leftFields = [
+         ...(statusBar.model
+-            ? [{ key: 'model', node: _jsx(Text, { color: "inactiveShimmer", children: channel.model }) }]
++            ? [{
++                    key: 'model',
++                    id: 'model',
++                    // dsh-overrides 17: when the switcher actually routed the
++                    // traffic to a different model than the requested alias,
++                    // show the substitution (requested → actual).
++                    tooltip: mks.actualModel !== undefined && mks.actualModel !== channel.model
++                        ? `${channel.model} → ${mks.actualModel} (mini-key-switcher)`
++                        : undefined,
++                    node: (_jsxs(Text, { color: "inactiveShimmer", children: [
++                            channel.model,
++                            mks.actualModel !== undefined && mks.actualModel !== channel.model
++                                ? _jsxs(Text, { dimColor: true, children: [' → ', mks.actualModel] })
++                                : null,
++                        ] })),
++                }]
+             : []),
+         ...(tpsPart !== undefined ? [tpsPart] : []),
+         ...(jobsPart !== undefined ? [jobsPart] : []),
+@@ -187,6 +275,8 @@
+                         }];
+             })()
+             : []),
++        // dsh-overrides 17: mini-key-switcher session spend joins the left group.
++        ...spendPart,
+     ];
+     const rightFields = [
+         // Goal chip first: session-level state outranks repo/location details.
+--- a/lib/types/dsh-adapter/plugin.js
++++ b/lib/types/dsh-adapter/plugin.js
+@@ -553,6 +553,11 @@
+                 activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
+                 trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
+                 shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
++                // dsh-overrides 17: Wave C status-bar fields + numeric threshold.
++                spending: Schema.boolean().default(DEFAULT_STATUS_BAR.spending),
++                realModel: Schema.boolean().default(DEFAULT_STATUS_BAR.realModel),
++                compactProgress: Schema.boolean().default(DEFAULT_STATUS_BAR.compactProgress),
++                compactThresholdRatio: Schema.number().default(DEFAULT_STATUS_BAR.compactThresholdRatio),
+             }).default({ ...DEFAULT_STATUS_BAR }),
+             // Header pixel whale art; on unless settings.yaml says otherwise.
+             whale: Schema.boolean().default(true),
