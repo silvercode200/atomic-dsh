@@ -129,7 +129,12 @@ current_state() {
     fi
 }
 
-# $1 = секция: проверка записи манифеста + файлов патча/backup
+# $1 = секция: проверка записи манифеста + файлов патча/backup.
+# Backup OPTIONAL: tracked tree (public release, dsh-overrides/core-patches/backup/
+# is .gitignored) has no backup/ — apply still works (patch --dry-run + node --check +
+# marker grep validate correctness; backup only needed for revert + rollback-on-failure).
+# When backup present: verify md5 sidecar (anti-corruption). When absent: HAS_BACKUP=0,
+# skip md5 check, fail-loud on post-apply node --check / marker miss (no silent rollback).
 verify_section() {
     local section="$1" pkg rel patch backup marker md5
     pkg="$(manifest_value "$section" package)"
@@ -142,25 +147,44 @@ verify_section() {
         && [ -n "$marker" ] && [ -n "$md5" ] \
         || fail_loud "секция [$section] неполная в $MANIFEST"
     [ -f "$CORE_DIR/$patch" ] || fail_loud "файл патча отсутствует: $CORE_DIR/$patch"
-    [ -f "$CORE_DIR/$backup" ] || fail_loud "backup отсутствует: $CORE_DIR/$backup"
-    local want have
-    want="$(awk '{print $1}' "$CORE_DIR/$backup.md5" 2>/dev/null || true)"
-    have="$(md5sum "$CORE_DIR/$backup" | awk '{print $1}')"
-    [ "$want" = "$have" ] || fail_loud "md5 backup не совпадает: $CORE_DIR/$backup повреждён"
+    # Backup optional: public release tree (backup/ gitignored) skips this block.
+    if [ -f "$CORE_DIR/$backup" ]; then
+        local want have
+        want="$(awk '{print $1}' "$CORE_DIR/$backup.md5" 2>/dev/null || true)"
+        have="$(md5sum "$CORE_DIR/$backup" | awk '{print $1}')"
+        [ "$want" = "$have" ] || fail_loud "md5 backup не совпадает: $CORE_DIR/$backup повреждён"
+        return 0
+    fi
+    # No backup file — apply-only mode (revert will fail-loud if attempted).
+    return 1
 }
+
+# HAS_BACKUP[section] set by run_targets after verify_section: 1 if backup present
+# (rollback-on-failure + revert available), 0 if absent (apply-only, fail-loud on errors).
+declare -gA HAS_BACKUP=()
 
 # --- Действия ----------------------------------------------------------------
 OVERALL_RC=0
 run_targets() { # $1 = section, $2 = действие (apply|status|revert)
     local section="$1" action="$2"
-    local pkg rel patchfile backup marker orig_md5
+    local pkg rel patchfile backup marker orig_md5 has_backup=1
     pkg="$(manifest_value "$section" package)"
     rel="$(manifest_value "$section" rel_path)"
     patchfile="$CORE_DIR/$(manifest_value "$section" patch)"
     backup="$CORE_DIR/$(manifest_value "$section" backup)"
     marker="$(manifest_value "$section" marker)"
     orig_md5="$(manifest_value "$section" orig_md5)"
-    verify_section "$section"
+    # verify_section returns 0 if backup present (md5 verified), 1 if absent (apply-only).
+    if ! verify_section "$section"; then
+        has_backup=0
+        if [ "$action" = "revert" ]; then
+            echo "== $section ($pkg $rel): backup отсутствует — revert невозможен (apply-only режим)" >&2
+            OVERALL_RC=2
+            return
+        fi
+        echo "== $section ($pkg $rel): backup отсутствует — apply-only (без rollback-on-failure)"
+    fi
+    HAS_BACKUP["$section"]=$has_backup
 
     local t state pkg_root applied=0 skipped=0 failed=0 rc=0
     echo "== $section ($pkg $rel)"
@@ -189,6 +213,12 @@ run_targets() { # $1 = section, $2 = действие (apply|status|revert)
                 continue
                 ;;
             revert:patched)
+                if [ "$has_backup" -eq 0 ]; then
+                    echo "REFUSED (backup отсутствует, не могу восстановить): $t" >&2
+                    failed=$((failed + 1))
+                    rc=2
+                    continue
+                fi
                 cp "$backup" "$t"
                 node --check "$t" 2>/dev/null || fail_loud "восстановленный файл не проходит node --check: $t"
                 echo "reverted: $t"
@@ -217,15 +247,23 @@ run_targets() { # $1 = section, $2 = действие (apply|status|revert)
         patch -p1 -d "$pkg_root" < "$patchfile" >/dev/null
         # anti-test-theater: синтаксис + маркер после применения
         if ! node --check "$t" 2>/dev/null; then
-            cp "$backup" "$t"
-            echo "FAILED node --check (восстановлен оригинал): $t" >&2
+            if [ "$has_backup" -eq 1 ]; then
+                cp "$backup" "$t"
+                echo "FAILED node --check (восстановлен оригинал): $t" >&2
+            else
+                echo "FAILED node --check (backup отсутствует — файл остался патченым, проверьте патч): $t" >&2
+            fi
             failed=$((failed + 1))
             rc=2
             continue
         fi
         if ! grep -qF -- "$marker" "$t"; then
-            cp "$backup" "$t"
-            echo "FAILED post-check маркера (восстановлен оригинал): $t" >&2
+            if [ "$has_backup" -eq 1 ]; then
+                cp "$backup" "$t"
+                echo "FAILED post-check маркера (восстановлен оригинал): $t" >&2
+            else
+                echo "FAILED post-check маркера (backup отсутствует — файл остался патченым без маркера, проверьте патч): $t" >&2
+            fi
             failed=$((failed + 1))
             rc=2
             continue

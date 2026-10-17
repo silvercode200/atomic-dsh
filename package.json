@@ -1,6 +1,6 @@
 {
   "name": "atomic-dsh",
-  "version": "0.10.0-beta.4-p76.1",
+  "version": "0.10.0-beta.4-p77",
   "description": "atomic dsh — self-contained terminal AI assistant. DeepSeek-powered TUI with 50+ themes, lazy MCP/skills, powerline status.",
   "type": "module",
   "license": "MIT",
