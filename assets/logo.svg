@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="atomic-dsh whale logo">
+  <title>atomic-dsh</title>
+  <!-- Derived from the in-app pixel whale (whaleFrames.js) and LogoV2.js.
+       Side profile, head right, fluke up-left. Single DeepSeek-blue fill,
+       dark negative-space eye + mouth, three-dot spout nod to the splash. -->
+  <g shape-rendering="geometricPrecision">
+    <!-- Spout: three droplets rising above the blowhole (back of head). -->
+    <circle cx="196" cy="84" r="4" fill="#4D6BFE"/>
+    <circle cx="206" cy="70" r="5" fill="#4D6BFE"/>
+    <circle cx="218" cy="58" r="4" fill="#4D6BFE"/>
+    <!-- Body + tail fluke: one solid silhouette, wedge tail pointing up-left. -->
+    <path fill="#4D6BFE" d="M 34,90
+      C 52,94 64,104 78,116
+      C 108,104 148,100 182,106
+      C 210,110 228,126 228,144
+      C 228,164 214,176 192,180
+      C 150,186 100,184 78,172
+      C 64,164 50,160 36,156
+      C 30,144 30,108 34,90 Z"/>
+    <!-- Eye: dark dot on the head, reads on any background. -->
+    <circle cx="204" cy="132" r="5.5" fill="#0d1117"/>
+    <!-- Mouth: a short smile arc under the eye. -->
+    <path fill="none" stroke="#0d1117" stroke-width="3" stroke-linecap="round"
+      d="M 172,170 Q 192,180 208,168"/>
+  </g>
+</svg>

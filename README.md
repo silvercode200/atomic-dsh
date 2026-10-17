@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.png" width="140" alt="atomic-dsh logo"></p>
+
 # atomic-dsh — terminal chat UI for DeepSeek
 
 atomic-dsh is a fork of dsh-tui 0.10.0-beta.4 with the SUBSYS.FF.B patch stack (77 patches) and 9 core patches applied in-tree. The harness and TUI are vendored — there is no runtime dependency on `@deepseek-ai/*`, so a single npm install ships a working client. forkVersion +p77.
