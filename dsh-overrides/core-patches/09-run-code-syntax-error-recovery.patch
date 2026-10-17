@@ -1,0 +1,43 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1344,9 +1344,39 @@
+ 					runController.abort("run_code settled");
+ 					await drainDispatches();
+ 				}
++				// dsh-overrides core 09: run_code failure → tool_result (НЕ throw).
++				// TG-DSH-CODERUN-20261018: relay/model truncates run_code tool_call
++				// (обрезанный code, БЕЗ description) → worker stripTypeScriptTypes
++				// throws SyntaxError → result.error {kind:"exception"} → прежде
++				// throw CodeRunFailedError пробивал runGroup (dispatch reject →
++				// schedulerFailure re-throw) → executeToolCalls (no try-catch,
++				// dsh-agent-loop/lib/index.js:746) → step() (no try-catch) → turn()
++				// catch turnEnds={kind:"error"} → throwError → ход/агент умирает,
++				// модель НЕ получает tool_result → self-correction невозможно,
++				// subagent-spawn'ы внутри программы не стартуют (0 tools, 0s).
++				// Фикс: вернуть isError:true результат — стандартный tool-error
++				// protocol (канон toolErrorResult, index.js:3492-3506; scheduler
++				// normalizeDispatchResult:3451 уже умеет isError returns). Модель
++				// видит синтаксическую ошибку и регенерирует корректный code.
++				// При установленном failctx-патче (out-of-band на v22.23.2 global)
++				// failureMessage оборачивается через dshPatchFailureContext(...)
++				// + программа сохраняется в ~/.dsh/code-run-failures/ — evidence
++				// не теряется; на целях без failctx используется result.error.message.
++				// CodeRunFailedError остаётся в exports (API stability, др. сайты).
+ 				if (result.error) {
+ 					const logsText = result.logs.length > 0 ? `\nCaptured output:\n${result.logs.join("\n")}` : "";
+-					throw new CodeRunFailedError(`code run failed (${result.error.kind}): ${result.error.message}${logsText}`);
++					const failureMessage = `code run failed (${result.error.kind}): ${result.error.message}${logsText}`;
++					return {
++						content: [{ type: "text", text: `Error: ${failureMessage}` }],
++						isError: true,
++						error: {
++							message: failureMessage,
++							info: {
++								name: "CodeRunFailedError",
++								code: result.error.kind
++							}
++						}
++					};
+ 				}
+ 				return {
+ 					logs: result.logs,
