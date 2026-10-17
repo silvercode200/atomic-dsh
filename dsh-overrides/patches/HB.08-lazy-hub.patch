@@ -1,0 +1,449 @@
+# Goal:      /settings MCP & Tools section + lazyCordis.mjs (lazy-config.json
+#            → cordis.patch.yml regeneration hub-side). Wave 1 (bin/dsh-setup.js)
+#            writes lazy-config.json as the canonical input; this patch lets
+#            the /settings hub read it back and toggle its fields, regenerating
+#            cordis.patch.yml from it (the same string emission the wizard uses).
+# Family:    HB.08
+# Status:    live
+# Files:     lib/types/components/lazyCordis.mjs (new),
+#            lib/types/components/hubSettings.js
+# Evidence:  TG-DSH-LAZY-HUB node 2
+# Upstream:  not-applicable
+# Added:     2026-10-17
+--- /dev/null
++++ b/lib/types/components/lazyCordis.mjs
+@@ -0,0 +1,246 @@
++/**
++ * dsh-overrides 77: lazy hub — /settings MCP & Tools section source of truth.
++ *
++ * Wave 1 (bin/dsh-setup.js) writes lazy-config.json as the canonical input;
++ * this module reads it back, lets the /settings hub toggle its fields, and
++ * regenerates cordis.patch.yml from it (the same string emission the wizard
++ * uses — re-applied at runtime so a hub toggle lands in the file the TUI
++ * loads as homePatchPath).
++ *
++ * lazy-config.json schema (canonical, written by dsh-setup.js):
++ *   {
++ *     "manager": <bool>,
++ *     "lazy-skills": <bool>,
++ *     "spot": <bool>,
++ *     "servers": [
++ *       { "name", "mode"|"always-on"|"lazy"|"off", "transport"|"stdio"|"streamable-http",
++ *         "command", "args", "url", "headers",
++ *         "autoActivate", "releaseOnTurnEnd", "schemaDelivery", "routingHints" }
++ *     ]
++ *   }
++ *
++ * cordis.patch.yml = top-level YAML array (the profile-layer patch the TUI
++ * loads as homePatchPath = $DSH_HOME/profiles/dsh-tui/cordis.patch.yml).
++ *
++ * Path resolution mirrors packaged-presets.js (`process.env.DSH_HOME ??
++ * ~/.dsh`). An optional @deepseek-ai/dsh-home-paths import is tried first
++ * (the package is a peer dep — present in some installs); the fallback is
++ * the same expression packaged-presets uses, so the two never disagree.
++ */
++import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
++import { join, dirname } from 'node:path';
++import { homedir } from 'node:os';
++import { createRequire } from 'node:module';
++
++const __require = createRequire(import.meta.url);
++let resolveDshHome = null;
++try {
++    // Optional peer dep — not installed in every layout (pnpm hoist). The
++    // fallback below resolves the same env var, so its absence is benign.
++    ({ resolveDshHome } = __require('@deepseek-ai/dsh-home-paths'));
++} catch {
++    resolveDshHome = null;
++}
++
++/** Resolve $DSH_HOME (env wins; ~/.dsh fallback) — same rule as packaged-presets.js. */
++function dshHome() {
++    if (typeof resolveDshHome === 'function') {
++        try { return resolveDshHome(); } catch { /* fall through */ }
++    }
++    return process.env.DSH_HOME || join(homedir(), '.dsh');
++}
++
++/** Profile-layer cordis.patch.yml path the TUI loads as homePatchPath. */
++export function profileCordisPath() {
++    return join(dshHome(), 'profiles', 'dsh-tui', 'cordis.patch.yml');
++}
++
++/** lazy-config.json path (sits next to cordis.patch.yml in the profile dir). */
++export function profileLazyConfigPath() {
++    return join(dshHome(), 'profiles', 'dsh-tui', 'lazy-config.json');
++}
++
++/** Default config when the file is absent or unparseable. */
++const DEFAULT_CFG = Object.freeze({
++    manager: false,
++    'lazy-skills': true,
++    spot: false,
++    servers: [],
++});
++
++/** Shape guard for a server entry (best-effort; bad entries are dropped, not fatal). */
++function isValidServerEntry(s) {
++    return s !== null && typeof s === 'object' && typeof s.name === 'string' && s.name !== '';
++}
++
++/** Read lazy-config.json; defaults on any read/parse failure. */
++export function readLazyConfig() {
++    try {
++        const txt = readFileSync(profileLazyConfigPath(), 'utf8');
++        const parsed = JSON.parse(txt);
++        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
++            return { ...DEFAULT_CFG, servers: [] };
++        return {
++            manager: Boolean(parsed.manager),
++            'lazy-skills': parsed['lazy-skills'] !== false,
++            spot: Boolean(parsed.spot),
++            servers: Array.isArray(parsed.servers) ? parsed.servers.filter(isValidServerEntry) : [],
++        };
++    } catch {
++        return { ...DEFAULT_CFG, servers: [] };
++    }
++}
++
++/** Persist lazy-config.json (pretty-printed; mkdir -p the profile dir). */
++export function writeLazyConfig(cfg) {
++    const p = profileLazyConfigPath();
++    mkdirSync(dirname(p), { recursive: true });
++    const out = {
++        manager: Boolean(cfg.manager),
++        'lazy-skills': cfg['lazy-skills'] !== false,
++        spot: Boolean(cfg.spot),
++        servers: Array.isArray(cfg.servers) ? cfg.servers.filter(isValidServerEntry) : [],
++    };
++    writeFileSync(p, JSON.stringify(out, null, 2) + '\n');
++    return p;
++}
++
++/** Quote a scalar for YAML emission (mirrors bin/dsh-setup.js yamlScalar). */
++function yamlScalar(s) {
++    if (s === '') return "''";
++    if (typeof s !== 'string') s = String(s);
++    if (/^[\d.-]/.test(s) || s === 'true' || s === 'false' || s === 'null' || /[:#{}\[\],&*?|<>=!%@`]/.test(s)) {
++        return JSON.stringify(s);
++    }
++    return s;
++}
++
++/** Always-on entry: direct @deepseek-ai/dsh-mcp-client (always visible to model). */
++function emitDirectEntry(spec, lines) {
++    lines.push(`    - id: mcp-${spec.name}`);
++    lines.push(`      name: '@deepseek-ai/dsh-mcp-client'`);
++    lines.push(`      config:`);
++    lines.push(`        serverName: ${yamlScalar(spec.name)}`);
++    lines.push(`        transport: ${spec.transport ?? 'stdio'}`);
++    if ((spec.transport ?? 'stdio') === 'stdio') {
++        if (typeof spec.command === 'string' && spec.command !== '') {
++            lines.push(`        command: ${yamlScalar(spec.command)}`);
++        }
++        if (Array.isArray(spec.args) && spec.args.length > 0) {
++            lines.push(`        args:`);
++            for (const a of spec.args) lines.push(`          - ${yamlScalar(a)}`);
++        }
++    } else if (spec.transport === 'streamable-http' && spec.url) {
++        lines.push(`        url: ${yamlScalar(spec.url)}`);
++        if (spec.headers && Object.keys(spec.headers).length > 0) {
++            lines.push(`        headers:`);
++            for (const [k, v] of Object.entries(spec.headers)) {
++                lines.push(`          ${yamlScalar(k)}: ${yamlScalar(v)}`);
++            }
++        }
++    }
++    lines.push(`        failOnStartupError: false`);
++}
++
++/** Lazy entry: @yilinxiao/dsh-mcp-lazy (auto-activate on tool call). */
++function emitLazyEntry(spec, lines) {
++    lines.push(`    - id: mcp-lazy-${spec.name}`);
++    lines.push(`      name: '@yilinxiao/dsh-mcp-lazy'`);
++    lines.push(`      config:`);
++    lines.push(`        transport: ${spec.transport ?? 'stdio'}`);
++    lines.push(`        serverName: ${yamlScalar(spec.name)}`);
++    if ((spec.transport ?? 'stdio') === 'stdio') {
++        if (typeof spec.command === 'string' && spec.command !== '') {
++            lines.push(`        command: ${yamlScalar(spec.command)}`);
++        }
++        if (Array.isArray(spec.args) && spec.args.length > 0) {
++            lines.push(`        args:`);
++            for (const a of spec.args) lines.push(`          - ${yamlScalar(a)}`);
++        }
++    } else if (spec.transport === 'streamable-http' && spec.url) {
++        lines.push(`        url: ${yamlScalar(spec.url)}`);
++        if (spec.headers && Object.keys(spec.headers).length > 0) {
++            lines.push(`        headers:`);
++            for (const [k, v] of Object.entries(spec.headers)) {
++                lines.push(`          ${yamlScalar(k)}: ${yamlScalar(v)}`);
++            }
++        }
++    }
++    lines.push(`        autoActivate: false`);
++    lines.push(`        releaseOnTurnEnd: true`);
++    lines.push(`        schemaDelivery: message`);
++    if (Array.isArray(spec.routingHints) && spec.routingHints.length > 0) {
++        lines.push(`        routingHints: [${spec.routingHints.map(h => yamlScalar(h)).join(', ')}]`);
++    }
++}
++
++/**
++ * Generate cordis.patch.yml text from a lazy-config.json object.
++ * Reuses the wizard's string-emission logic (bin/dsh-setup.js
++ * buildCordisPatch/emitDirectEntry/emitLazyEntry) — same entry shape,
++ * input is lazyConfig instead of wizard answers.
++ * @param {{manager:boolean, 'lazy-skills':boolean, spot:boolean, servers:Array}} cfg
++ * @returns {string}
++ */
++export function generateCordisPatch(cfg) {
++    /** @type {string[]} */
++    const lines = ['# cordis.patch.yml — generated from lazy-config.json by dsh HB.08', ''];
++    const servers = Array.isArray(cfg.servers) ? cfg.servers : [];
++    // Always-on servers — direct @deepseek-ai/dsh-mcp-client entries.
++    const alwaysOn = servers.filter(s => s.mode === 'always-on');
++    if (alwaysOn.length > 0) {
++        lines.push('# Always-on MCP servers (direct stdio, always visible to model)');
++        lines.push('- insert:');
++        for (const spec of alwaysOn) emitDirectEntry(spec, lines);
++        lines.push('');
++    }
++    // Lazy servers (exclude spot — emitted as a separate plugin insert).
++    const lazy = servers.filter(s => s.mode === 'lazy' && s.name !== 'spot');
++    if (lazy.length > 0) {
++        lines.push('# Lazy MCP servers (auto-activate on tool call, release on turn end)');
++        lines.push('- insert:');
++        for (const spec of lazy) emitLazyEntry(spec, lines);
++        lines.push('');
++    }
++    // MCP auto-takeover manager.
++    if (cfg.manager) {
++        lines.push('# MCP auto-takeover manager (hides TaskGate/octa behind lazy proxy)');
++        lines.push('- id: mcp-lazy-manager');
++        lines.push(`  name: '@yilinxiao/dsh-mcp-lazy'`);
++        lines.push(`  config:`);
++        lines.push(`    mode: manager`);
++        lines.push('');
++    } else {
++        lines.push('# MCP auto-takeover manager — OFF (TaskGate/octa stay direct stdio)');
++        lines.push('- id: mcp-lazy-manager');
++        lines.push(`  disabled: true`);
++        lines.push('');
++    }
++    // spot cold-discovery gate.
++    if (cfg.spot) {
++        lines.push('# spot cold-discovery gate enabled');
++        lines.push(`- insert:`);
++        lines.push(`  - id: spot`);
++        lines.push(`    name: './spot/plugin.mjs'`);
++        lines.push('');
++    } else {
++        lines.push('# spot cold-discovery gate — disabled');
++        lines.push('');
++    }
++    return lines.join('\n');
++}
++
++/** Write cordis.patch.yml from cfg (mkdir -p the profile dir first). */
++export function writeProfileCordisPatch(cfg) {
++    const p = profileCordisPath();
++    mkdirSync(dirname(p), { recursive: true });
++    writeFileSync(p, generateCordisPatch(cfg));
++    return p;
++}
++
++/** Mode cycle: always-on → lazy → off → always-on. */
++export function cycleMode(mode) {
++    if (mode === 'always-on') return 'lazy';
++    if (mode === 'lazy') return 'off';
++    return 'always-on';
++}
+--- a/lib/types/components/hubSettings.js
++++ b/lib/types/components/hubSettings.js
+@@ -8,6 +8,14 @@
+ // dsh-overrides 72: hub theme demo — the /theme picker's live preview zone
+ // (patch 64 v2) reused in the Theme row, painted with the CANDIDATE palette.
+ import { ThemePreview } from './ThemePreview.js';
++// dsh-overrides 77: lazy hub — /settings MCP & Tools section. lazyCordis.mjs
++// reads lazy-config.json (the Wave 1 source of truth) and regenerates
++// cordis.patch.yml from it; the row toggles write through it. lazy-skills
++// persists via presetPrefs.js (~/.dsh-tui/agent-preset.json), NOT
++// settings.yaml — the schema has NO agent-presets.default field (memory:
++// dsh-boolean-animations-rejects-whole-section drops unknown-key sections).
++import { readLazyConfig, writeLazyConfig, writeProfileCordisPatch, cycleMode } from './lazyCordis.mjs';
++import { writePresetPref } from '../presetPrefs.js';
+ // dsh-overrides 65: settings/effects self-documenting examples — the demo
+ // registry (HUB_EXAMPLES) for the plain fields, plus the static effect and
+ // minimum-metric examples the custom entries mount below (booleans show on
+@@ -77,5 +85,6 @@
+             { id: 'hub-border', title: 'Border' },
+             { id: 'hub-spinner', title: 'Spinners' },
+             { id: 'hub-progress', title: 'Progress' },
++            { id: 'hub-lazy', title: 'MCP & Tools' },
+         ],
+         fields: [
+@@ -315,6 +324,51 @@
+                 custom: { type: 'effect', key: 'toolProgressBars', demoLines: 2 },
+                 hint: `${getEffectDescription('toolProgressBars')}. Note: the channel does not stream the output of a running tool — the bar appears AFTER completion (the final curl/wget/tqdm parse).`,
+             },
++            // dsh-overrides 77: /settings MCP & Tools — lazy-config.json is
++            // the source of truth (Wave 1, bin/dsh-setup.js writes it; this
++            // hub reads it back and the row toggles write through lazyCordis).
++            // lazy-skills persists via presetPrefs.js (~/.dsh-tui/agent-preset.json)
++            // — settings.yaml has NO agent-presets.default field.
++            {
++                path: ['hub', 'lazy', 'manager'],
++                label: 'MCP manager (auto-takeover)',
++                kind: 'custom',
++                group: 'hub-lazy',
++                custom: { type: 'lazy-toggle', key: 'manager', demoLines: 1 },
++                hint: 'Lazy MCP auto-takeover: ON — TaskGate/octa wrapped behind @yilinxiao/dsh-mcp-lazy (mode:manager); OFF — they stay direct stdio (manager entry disabled:true).',
++            },
++            {
++                path: ['hub', 'lazy', 'lazy-skills'],
++                label: 'lazy-skills preset',
++                kind: 'custom',
++                group: 'hub-lazy',
++                custom: { type: 'lazy-skills', demoLines: 1 },
++                hint: 'Toggle agent-preset.json between code-lazy (lazy MCP skills surface) and dsh-default. Persists through presetPrefs.js, NOT settings.yaml.',
++            },
++            {
++                path: ['hub', 'lazy', 'spot'],
++                label: 'spot cold-discovery',
++                kind: 'custom',
++                group: 'hub-lazy',
++                custom: { type: 'lazy-toggle', key: 'spot', demoLines: 1 },
++                hint: 'spot cold-discovery gate: ON — ./spot/plugin.mjs inserts (lazy activation); OFF — omitted (the gate is disabled at the cordis layer).',
++            },
++            ...readLazyConfig().servers.map(srv => ({
++                path: ['hub', 'lazy', srv.name],
++                label: srv.name,
++                kind: 'custom',
++                group: 'hub-lazy',
++                custom: { type: 'lazy-server', name: srv.name, demoLines: 1 },
++                hint: `MCP server ${srv.name} (${srv.transport ?? 'stdio'}): mode cycle always-on → lazy → off. Enter toggles.`,
++            })),
++            {
++                path: ['hub', 'lazy', 'hint'],
++                label: '— restart dsh to apply MCP changes —',
++                kind: 'custom',
++                group: 'hub-lazy',
++                custom: { type: 'lazy-hint', demoLines: 0 },
++                hint: 'cordis.patch.yml is regenerated on every toggle; dsh loads it on next start (homePatchPath = $DSH_HOME/profiles/dsh-tui/cordis.patch.yml).',
++            },
+         ],
+     };
+ }
+@@ -397,6 +451,15 @@
+     // dsh-overrides 56: the invariant-8 minimum metric row.
+     if (custom.type === 'minimumMetric')
+         return _jsx(MinimumMetricEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
++    // dsh-overrides 77: lazy hub — MCP & Tools section rows.
++    if (custom.type === 'lazy-toggle')
++        return _jsx(LazyToggleEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
++    if (custom.type === 'lazy-skills')
++        return _jsx(LazySkillsEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
++    if (custom.type === 'lazy-server')
++        return _jsx(LazyServerEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
++    if (custom.type === 'lazy-hint')
++        return _jsx(LazyHintEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
+     return _jsx(EffectEntry, { field: field, focused: focused, channel: channel, bump: bump, rowSlot: rowSlot });
+ }
+ /**
+@@ -593,6 +656,95 @@
+     const demo = _jsx(MinimumMetricExample, { current: current });
+     return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 2, overflow: "hidden", children: demo }) : null] }));
+ }
++/**
++ * dsh-overrides 77: lazy-toggle — manager or spot row. Enter/space flips the
++ * boolean in lazy-config.json and regenerates cordis.patch.yml (the TUI
++ * loads it as homePatchPath on next start). No live MCP reload — the hint
++ * row reminds the user to restart dsh.
++ */
++function LazyToggleEntry({ field, focused, channel, bump, rowSlot }) {
++    const toggleKey = field.custom?.key;
++    const cfg = readLazyConfig();
++    const on = toggleKey !== undefined && Boolean(cfg[toggleKey]);
++    useInput((input, k) => {
++        if (!focused || toggleKey === undefined)
++            return;
++        if (k.return || (input === ' ' && !k.ctrl)) {
++            const fresh = readLazyConfig();
++            fresh[toggleKey] = !Boolean(fresh[toggleKey]);
++            writeLazyConfig(fresh);
++            writeProfileCordisPatch(fresh);
++            bump();
++        }
++    });
++    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, wrap: "truncate-end", children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsx(Text, { color: on ? 'success' : 'inactive', bold: focused, children: on ? '[✓] on' : '[  ] off' })] }));
++    const desc = toggleKey === 'manager'
++        ? (on ? 'cordis: mode: manager (TaskGate/octa hidden behind lazy proxy)' : 'cordis: disabled: true (direct stdio)')
++        : (on ? 'cordis: ./spot/plugin.mjs insert' : 'cordis: # spot disabled (omitted)');
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: _jsx(Text, { dimColor: true, wrap: "truncate-end", children: desc }) }) : null] }));
++}
++/**
++ * dsh-overrides 77: lazy-skills toggle. Persists through presetPrefs.js
++ * (~/.dsh-tui/agent-preset.json: code-lazy ↔ dsh-default), NOT settings.yaml
++ * — the schema has NO agent-presets.default field (memory:
++ * dsh-boolean-animations-rejects-whole-section drops unknown-key sections).
++ * The lazy-config.json mirror is also updated for cordis.patch.yml regen.
++ */
++function LazySkillsEntry({ field, focused, channel, bump, rowSlot }) {
++    const cfg = readLazyConfig();
++    const on = cfg['lazy-skills'] !== false;
++    useInput((input, k) => {
++        if (!focused)
++            return;
++        if (k.return || (input === ' ' && !k.ctrl)) {
++            const newVal = !on;
++            const ok = writePresetPref(newVal ? 'code-lazy' : 'dsh-default');
++            if (ok) {
++                const fresh = readLazyConfig();
++                fresh['lazy-skills'] = newVal;
++                writeLazyConfig(fresh);
++                writeProfileCordisPatch(fresh);
++                bump();
++            }
++        }
++    });
++    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, wrap: "truncate-end", children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: focused ? 'suggestion' : undefined, children: on ? 'code-lazy' : 'dsh-default' }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" })] })] }));
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: _jsx(Text, { dimColor: true, wrap: "truncate-end", children: "~/.dsh-tui/agent-preset.json (presetPrefs.js — settings.yaml has no agent-presets.default field)" }) }) : null] }));
++}
++/**
++ * dsh-overrides 77: per-MCP-server mode cycle (always-on → lazy → off →
++ * always-on). Writes the new mode into lazy-config.json and regenerates
++ * cordis.patch.yml. always-on — direct @deepseek-ai/dsh-mcp-client entry;
++ * lazy — @yilinxiao/dsh-mcp-lazy entry (auto-activate on tool call,
++ * release on turn end); off — omitted entirely.
++ */
++function LazyServerEntry({ field, focused, channel, bump, rowSlot }) {
++    const name = field.custom?.name;
++    const cfg = readLazyConfig();
++    const server = name !== undefined ? cfg.servers.find(s => s.name === name) : undefined;
++    const mode = server?.mode ?? 'off';
++    useInput((input, k) => {
++        if (!focused || name === undefined)
++            return;
++        if (k.return || (input === ' ' && !k.ctrl)) {
++            const fresh = readLazyConfig();
++            const srv = fresh.servers.find(s => s.name === name);
++            if (srv !== undefined) {
++                srv.mode = cycleMode(srv.mode ?? 'off');
++                writeLazyConfig(fresh);
++                writeProfileCordisPatch(fresh);
++                bump();
++            }
++        }
++    });
++    const row = (_jsxs(Box, { flexShrink: 1, children: [_jsx(Text, { color: focused ? 'suggestion' : undefined, bold: focused, children: pointer(focused) }), _jsx(Text, { bold: focused, wrap: "truncate-end", children: field.label }), _jsx(Box, { flexGrow: 1 }), _jsxs(Text, { children: [_jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: "‹ " }), _jsx(Text, { color: mode === 'always-on' ? 'success' : mode === 'lazy' ? 'suggestion' : 'inactive', bold: focused, children: mode }), _jsx(Text, { color: focused ? 'suggestion' : 'subtle', children: " ›" })] })] }));
++    return (_jsxs(React.Fragment, { children: [rowSlot(row), focused ? _jsx(Box, { paddingLeft: 4, height: 1, overflow: "hidden", children: _jsx(Text, { dimColor: true, wrap: "truncate-end", children: "enter cycles always-on → lazy → off · cordis.patch.yml regenerated" }) }) : null] }));
++}
++/** dsh-overrides 77: hint row — the restart-dsh reminder (no interaction). */
++function LazyHintEntry({ field, focused, channel, bump, rowSlot }) {
++    const row = _jsx(Box, { flexShrink: 1, children: _jsx(Text, { dimColor: true, wrap: "truncate-end", children: field.label }) });
++    return _jsx(React.Fragment, { children: rowSlot(row) });
++}
+ // ── Demos for the plain (settings-backed) fields ────────────────────────
+ // dsh-overrides 65: the demo widgets moved to SettingsExamples.js (the
+ // self-documenting examples wave — booleans show on AND off, enums a

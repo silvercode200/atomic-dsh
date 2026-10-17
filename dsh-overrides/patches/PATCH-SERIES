@@ -83,3 +83,4 @@ TH.04-dim-contrast-floor.patch
 CH.05-inline-chrome-overlay.patch
 MS.01.4-yoga-insert-invalidate.patch
 TH.05.1-saturation-option.patch
+HB.08-lazy-hub.patch

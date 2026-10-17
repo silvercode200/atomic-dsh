@@ -471,6 +471,7 @@ declare -A MARKERS=(
   [CH.05-inline-chrome-overlay.patch]='DSH-P75-CHROME-OVERLAY'
   [MS.01.4-yoga-insert-invalidate.patch]='DSH-P76-YOGA-INSERT-INVALIDATE'
   [TH.05.1-saturation-option.patch]='DSH-P75-SATURATION-OPTION'
+  [HB.08-lazy-hub.patch]='dsh-overrides 77: lazy hub'
 )
 
 # Целевой файл для проверки маркера (относительно TUI_BASE).
@@ -552,6 +553,7 @@ marker_file() { # $1 = patch file name
     CH.05-inline-chrome-overlay.patch) printf '%s' 'lib/types/screens/Chat.js' ;;
     MS.01.4-yoga-insert-invalidate.patch) printf '%s' 'lib/types/native-ts/yoga-layout/index.js' ;;
     TH.05.1-saturation-option.patch) printf '%s' 'lib/types/components/Spinner/spinnerUtils.js' ;;
+    HB.08-lazy-hub.patch)            printf '%s' 'lib/types/components/lazyCordis.mjs' ;;
     *) printf '%s' '' ;;
   esac
 }
