@@ -1,188 +1,156 @@
-# atomic dsh — self-contained DeepSeek harness TUI
+# atomic-dsh — terminal chat UI for DeepSeek
 
-atomic dsh — self-contained, vendored terminal AI assistant built on dsh-tui 0.10.0-beta.4. Harness and TUI patched in-tree (no runtime dependency on `@deepseek-ai/*`), bundled with lazy MCP / lazy skills / spot plugins, 50+ themes, and a first-run setup wizard.
+atomic-dsh is a fork of dsh-tui 0.10.0-beta.4 with the SUBSYS.FF.B patch stack (77 patches) and 9 core patches applied in-tree. The harness and TUI are vendored — there is no runtime dependency on `@deepseek-ai/*`, so a single npm install ships a working client. forkVersion +p77.
 
-Ключевые возможности:
-- **Beautiful UI**: 50+ themes with live-preview (fullscreen preview), animated powerline status bar, 58 spinners, escape overlay effects
-- **Lazy MCP + lazy skills**: ~94% tool-schema token cut (9727→581 per turn), activate/deactivate MCP on-demand, skill_search/skill_load
-- **Robust & stable**: answers don't get cut off, survives flaky connections / SSHFS / session restarts / stream drops, no freezes or loops
-- **Recursive task tree** with subagent cards
-- **Works in any terminal**: kitty, WezTerm, Termux, zellij
-- **Setup wizard**: configure your own provider/key
+## Status
 
-## Требования
+- 77 SUBSYS.FF.B patches over dsh-tui 0.10.0-beta.4 (`PATCH-SERIES`) + 9 core patches on `@deepseek-ai/*` packages
+- 50+ themes (signature = true black, `#000000`, WCAG AA text contrast)
+- 58 spinners, animated powerline status bar, escape overlay effects
+- Recursive task tree with subagent cards
+- Stream stall detection + retry budget — answers don't truncate on flaky connections
+- Works in kitty, WezTerm, Termux, zellij
 
-- **Node ≥ 22** — ниже даёт engine error при установке dsh
-- **pnpm** — для `dsh plugin` (активировать: `corepack enable`)
+## Requirements
 
-## Быстрый старт
+- **Node ≥ 22** — lower fails with an engine error during install
+- **pnpm** (enable with `corepack enable`) — only needed for `dsh plugin`
 
-### 1. Установка harness CLI
-
-```bash
-npm install -g @deepseek-ai/dsh
-corepack enable
-```
-
-### 2. Установка TUI
+## Install
 
 ```bash
-npm install -g --ignore-scripts @deepseek-harness-tui/dsh-tui
-dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@0.10.0-beta.4 -w
+npm i -g atomic-dsh && dsh-setup && dsh
 ```
 
-Флаг `--ignore-scripts` нужен из-за бага protobufjs postinstall в npm 11.
+`dsh-setup` runs the first-run wizard: provider, API key, model routing. Output lands in `~/.dsh/settings.yaml`. `dsh` boots the TUI; on first run it auto-initializes the config.
 
-### 3. Применение патч-стека
+### From source (contributors)
+
+The npm package ships pre-patched. To build from the upstream sources instead:
 
 ```bash
 git clone <repo-url> && cd deepseek_harness
 bash scripts/apply-dsh-overrides.sh
 ```
 
-Скрипт идемпотентен по маркерам — безопасно запускать повторно. Проверка целостности:
+The script is idempotent on markers — re-running is safe. Integrity check:
 
 ```bash
 bash scripts/apply-dsh-overrides.sh --verify
 ```
 
-### 4. Запуск
+## Lazy mode
 
-```bash
-dsh --profile dsh-tui
-```
+`/settings` has an **MCP & Tools** section with toggles that control how MCP servers and skills enter the model's context. The default behaviour loads every MCP server and every skill schema up front, so the tool-schema block grows with each addition. Lazy mode flips that: servers and skills load on demand instead of all at once — tool schemas stay ~94% smaller (9727 → 581 tokens per turn).
 
-Первый запуск авто-инициализирует конфигурацию. Провайдеры и модели настраиваются в `settings.yaml`.
+Four toggles:
 
-## Структура
-
-```
-deepseek_harness/
-├── dsh-overrides/
-│   ├── patches/              # 76 .patch SUBSYS.FF.B + PATCH-SERIES
-│   ├── core-patches/         # патчи на @deepseek-ai/* пакеты
-│   ├── themes/               # 50+ themes (signature.json = true black)
-│   ├── PATCH-MAP.md          # карта old-ID → SUBSYS.FF.B
-│   └── settings/             # settings.yaml.example, appearance.json
-├── scripts/
-│   ├── apply-dsh-overrides.sh    # применение стека (--verify для I1)
-│   ├── colab-dsh-up.sh           # деплой стека на test-VM
-│   ├── dsh-drift-detect.sh       # детектор ручных правок (I2)
-│   ├── patch-stack-lint.sh       # линтер шапок DEP-3
-│   ├── patch-stack-regen.sh      # реген ветви из live diff
-│   └── generate-pristine-manifest.sh
-├── tests/
-│   ├── colab/dsh-tui-inline.yaml # golden-сьют v10
-│   └── patch-stack/test-series-apply.sh
-├── tools/
-│   └── dsh-fake-llm/             # сервер :8787, сценарии для тестов TUI
-└── README.md
-```
-
-## Патч-стек SUBSYS.FF.B
-
-Стек из 76 патчей с иерархической нумерацией: `подсистема.семья.ветвь` (например `IL.03.1`). Формат DEP-3, метаданные в шапке каждого патча.
-
-### 12 кодов подсистем
-
-| Код | Домен |
+| Toggle | What it does |
 |---|---|
-| IL | inline-рендер, скроллбек, log-update |
-| SB | статус-бар / футер-слоты |
-| CH | Chat-компоновка: пустой экран, интро, fs-футер |
-| MS | MessageList / высоты сообщений |
-| TG | тодо-панель / субагент-карточки |
-| HB | хабы и панели настроек |
-| EF | эффекты / анимации / спиннеры |
-| TH | темы / аппеаранс / превью |
-| PR | провайдер / модель / канал |
-| PI | промпт-инпут |
-| TR | терминал-инфра / клавиатура / трейс |
-| ID | идентификация форка: лого, версия, update-notice |
+| **manager** | ON wraps TaskGate/octa behind `@yilinxiao/dsh-mcp-lazy` (`mode: manager`). The manager registers two control-tools — `activate` and `deactivate` — plus a router, so the model pulls a server in only when it actually calls a tool from it. OFF leaves TaskGate/octa as direct stdio entries (the manager entry is `disabled: true`). |
+| **lazy-skills** | Switches `~/.dsh-tui/agent-preset.json` between `code-lazy` and `dsh-default`. Under `code-lazy`, skills surface through lazy MCP instead of loading all schemas into context up front. Persists via `presetPrefs.js` — `settings.yaml` has no `agent-presets.default` field. |
+| **spot** | ON inserts `./spot/plugin.mjs` (cold-discovery gate, lazy activation). OFF omits it. |
+| **per-server mode** | Each MCP server in `lazy-config.json` cycles `always-on → lazy → off → always-on`. `always-on` = direct `@deepseek-ai/dsh-mcp-client` entry (always visible to the model). `lazy` = `@yilinxiao/dsh-mcp-lazy` entry (auto-activate on tool call, release on turn end). `off` = omitted entirely. |
 
-### Порядок применения
+Changes apply after restarting dsh. `cordis.patch.yml` is regenerated from `lazy-config.json` on every toggle; dsh loads it as `homePatchPath` at boot. The hint row in the hub reminds you to restart.
 
-Серия определена в `dsh-overrides/patches/PATCH-SERIES` — одна строка = один патч, порядок строгий. Карта маппинга old-ID → SUBSYS.FF.B — в `dsh-overrides/PATCH-MAP.md`.
+`activate` / `deactivate` are the runtime control-tools the lazy manager exposes — the model uses them mid-turn to bring a server into context or release it once the turn ends.
 
-### Инварианты
+## Themes
 
-| # | Инвариант | Инструмент |
+50+ themes in `dsh-overrides/themes/`. The signature theme (`signature.json`):
+
+- True black background: `appBackground: #000000`
+- WCAG AA-adjusted colours — text contrast checked ≥ 4.5:1
+- Background renders from the theme (env > settings > theme)
+
+`/theme` in the TUI opens the picker: filter-search by name, 8 swatches for quick select, live preview.
+
+## Patch stack SUBSYS.FF.B
+
+77 patches with hierarchical numbering `subsystem.family.branch` (e.g. `IL.03.1`). DEP-3 format, metadata in each patch header.
+
+### 12 subsystem codes
+
+| Code | Domain |
+|---|---|
+| IL | inline render, scrollback, log-update |
+| SB | status bar / footer slots |
+| CH | chat layout: empty screen, intro, fs footer |
+| MS | MessageList / message heights |
+| TG | todo panel / subagent cards |
+| HB | hubs and settings panels |
+| EF | effects / animations / spinners |
+| TH | themes / appearance / preview |
+| PR | provider / model / channel |
+| PI | prompt input |
+| TR | terminal infra / keyboard / trace |
+| ID | fork identification: logo, version, update-notice |
+
+Apply order is fixed in `dsh-overrides/patches/PATCH-SERIES` — one line per patch, strict order. The old-ID → SUBSYS.FF.B map lives in `dsh-overrides/PATCH-MAP.md`.
+
+### Invariants
+
+| # | Invariant | Tool |
 |---|---|---|
-| I1 | Pristine-hash: sha256 upstream до/после revert-all совпадает | `apply-dsh-overrides.sh --verify` |
-| I2 | Ноль ручных правок live вне патчей | `dsh-drift-detect.sh` |
+| I1 | Pristine-hash: sha256 upstream matches before/after revert-all | `apply-dsh-overrides.sh --verify` |
+| I2 | Zero live edits outside patches | `dsh-drift-detect.sh` |
 | I3 | Fresh-apply: revert-all → apply-all, failed=0 | `apply-dsh-overrides.sh` |
-| I4 | Golden-gate: сьют GREEN перед merge | `tests/colab/dsh-tui-inline.yaml` |
-| I5 | Метаданные в шапках: DEP-3 / Family / Status / series ↔ files | `patch-stack-lint.sh` |
-
-### Тест патч-стека
+| I4 | Golden-gate: suite GREEN before merge | `tests/colab/dsh-tui-inline.yaml` |
+| I5 | Metadata in headers: DEP-3 / Family / Status / series↔files | `patch-stack-lint.sh` |
 
 ```bash
 bash tests/patch-stack/test-series-apply.sh
+# 13+ asserts: series order, PATCH-SERIES↔files match, apply idempotency
 ```
 
-13+ ассертов: порядок серии, соответствие PATCH-SERIES ↔ файлам, идемпотентность apply.
+## Testing
 
-## Темы
+### Golden suite
 
-50+ themes в `dsh-overrides/themes/`. Signature-тема — `signature.json`:
+`tests/colab/dsh-tui-inline.yaml` v10 — frozen E2E set, 20 detectors, 97 substeps.
 
-- **True black фон**: `appBackground: #000000`
-- **WCAG AA_adjusted**: цвета проверены на контраст ≥4.5:1 для текста
-- **Рендеринг из темы**: фон берётся из `appBackground` (env > settings > theme)
-
-Пикер тем — команда `/theme` в TUI:
-- Фильтр-поиск по имени
-- 8 свотчей быстрого выбора
-- Превью темы в реальном времени
-
-## Тестирование
-
-### Golden-сьют
-
-`tests/colab/dsh-tui-inline.yaml` v10 — замороженный E2E-набор: 20 детекторов, 97 substeps.
-
-| Категория | Детекторы | Что проверяют |
+| Category | Detectors | What they check |
 |---|---|---|
-| Baseline | `mode_inline` | inline-рендер базовый |
-| E1 scrollback | `e1_garbage_long`, `e1_garbage_resize`, `e1_garbage_shorts`, `e1_focus_probe` | чистота скроллбека от копий хрома |
-| E2 slash-menu | `e2_slash_menu_w47`, `e2_slash_menu_w180` | рендер slash-меню на узких/широких терминалах |
-| E5 contrast | `e5_color_contrast` | WCAG-контраст текста |
-| Status bar | `sweep_statusbar_invariants`, `sweep_w47_minimum` | инварианты статус-бара на разных ширинах |
-| Geometry | `geometry_fuzz` | стресс viewport-геометрии |
-| Scenario | `scenario_smoke` | end-to-end сценарий |
-| Cards | `cards_render` | рендер субагент-карточек |
-| Stream | `stream_stall` | обнаружение зависания стрима |
-| Animations | `animations_gate` | гейт эффектов/анимаций |
-| Scroll | `scroll_jitter` | дрожание высот при скролле |
-| E7 todo | `e7_todo_scrollback` | todo-панель в скроллбеке |
-| Compaction | `compact_visible` | видимость фазы компакта |
-| Exit | `exit_clean` | чистый выход |
-| Blank/flicker | `blank_spike` | обнаружение пустых зон и морганий |
+| Baseline | `mode_inline` | inline render base |
+| E1 scrollback | `e1_garbage_long`, `e1_garbage_resize`, `e1_garbage_shorts`, `e1_focus_probe` | scrollback free of chrome copies |
+| E2 slash-menu | `e2_slash_menu_w47`, `e2_slash_menu_w180` | slash menu at narrow/wide widths |
+| E5 contrast | `e5_color_contrast` | WCAG text contrast |
+| Status bar | `sweep_statusbar_invariants`, `sweep_w47_minimum` | status bar invariants across widths |
+| Geometry | `geometry_fuzz` | viewport geometry stress |
+| Scenario | `scenario_smoke` | end-to-end scenario |
+| Cards | `cards_render` | subagent card rendering |
+| Stream | `stream_stall` | stream stall detection |
+| Animations | `animations_gate` | effects/animations gate |
+| Scroll | `scroll_jitter` | height jitter on scroll |
+| E7 todo | `e7_todo_scrollback` | todo panel in scrollback |
+| Compaction | `compact_visible` | compaction phase visibility |
+| Exit | `exit_clean` | clean exit |
+| Blank/flicker | `blank_spike` | blank zones and flicker |
 
 ### Fake-LLM
 
-`tools/dsh-fake-llm/` — сервер на :8787, эмулирует модель для тестирования TUI без реального API. Сценарии: streaming, tool-use, субагенты, ошибки.
+`tools/dsh-fake-llm/` — server on :8787 that emulates the model so the TUI can be tested without a real API. Scenarios: streaming, tool-use, subagents, errors.
 
-### Запуск golden-сьюта
+### Running the golden suite
 
 ```bash
-# 1. Деплой стека на test-VM
-bash scripts/colab-dsh-up.sh --target current
-
-# 2. Прогон сьюта через тест-раннер с tests/colab/dsh-tui-inline.yaml
-# Зелёный порог: 20/20 детекторов PASS
+bash scripts/colab-dsh-up.sh --target current   # deploy the stack to the test VM
+# then run tests/colab/dsh-tui-inline.yaml through the test runner
+# green threshold: 20/20 detectors PASS
 ```
 
-## Конфигурация
+## Configuration
 
 ### settings.yaml
 
-Основной конфиг TUI:
-- `llm-pi-ai.providers` — роуты провайдеров (api, apiKeyEnv, baseURL, models)
-- `agent-default-model` — модель по умолчанию
-- `compaction-basic` — автокомпакт (`thresholdRatio`)
+Main TUI config (`~/.dsh/settings.yaml`):
 
-Пример:
+- `llm-pi-ai.providers` — provider routes (api, apiKeyEnv, baseURL, models)
+- `agent-default-model` — default model
+- `compaction-basic` — auto-compaction (`thresholdRatio`)
+
+Example:
 
 ```yaml
 llm-pi-ai:
@@ -205,40 +173,66 @@ agent-default-model: bg/glm-5.3
 
 ### appearance.json
 
-Тумблеры эффектов и настройки тем:
-- `animationsMode` — гейт эффектов (spinnerRainbow, inputBreathe, todoPulse и др.)
-- `appBackground` — цвет фона (env > settings > theme)
+Effect toggles and theme settings:
 
-### Переменные окружения
+- `animationsMode` — effects gate (spinnerRainbow, inputBreathe, todoPulse, etc.)
+- `appBackground` — background colour (env > settings > theme)
 
-| Переменная | Назначение |
+### Environment variables
+
+| Variable | Purpose |
 |---|---|
-| `DSH_TUI_GEOMETRY_TRACE` | Трейс геометрии кадров (always-on); ротация 8 МБ. `=0` — kill-switch, `=<file>` — оверрайд пути лога |
-| `DSH_TUI_SYNC_OUTPUT` | Синхронизированный вывод для терминалов с flicker |
-| `DSH_RETRY_BUDGET_MIN` | Минимальный бюджет ретраев запросов |
+| `DSH_TUI_GEOMETRY_TRACE` | Frame geometry trace (always-on); 8 MB rotation. `=0` kill-switch, `=<file>` override log path |
+| `DSH_TUI_SYNC_OUTPUT` | Synced output for terminals with flicker |
+| `DSH_RETRY_BUDGET_MIN` | Minimum retry budget for requests |
 
-Секреты (`DSH_BG_API_KEY`, `DSH_CLI_AUTH_TOKEN`) хранятся в credentials-файле, не коммитятся.
+Secrets (`DSH_BG_API_KEY`, `DSH_CLI_AUTH_TOKEN`) live in the credentials file, never committed.
 
-## Контрибьюторам
+## Layout
 
-### Правила патч-стека
+```
+deepseek_harness/
+├── dsh-overrides/
+│   ├── patches/              # 77 SUBSYS.FF.B .patch + PATCH-SERIES
+│   ├── core-patches/         # 9 patches on @deepseek-ai/* packages
+│   ├── themes/               # 50+ themes (signature.json = true black)
+│   ├── PATCH-MAP.md          # old-ID → SUBSYS.FF.B map
+│   └── settings/             # settings.yaml.example, appearance.json
+├── scripts/
+│   ├── apply-dsh-overrides.sh    # apply the stack (--verify for I1)
+│   ├── colab-dsh-up.sh           # deploy the stack to test VM
+│   ├── dsh-drift-detect.sh       # live-edit detector (I2)
+│   ├── patch-stack-lint.sh       # DEP-3 header linter
+│   ├── patch-stack-regen.sh      # regen a branch from live diff
+│   └── generate-pristine-manifest.sh
+├── tests/
+│   ├── colab/dsh-tui-inline.yaml # golden suite v10
+│   └── patch-stack/test-series-apply.sh
+├── tools/
+│   └── dsh-fake-llm/             # :8787 server, TUI test scenarios
+└── README.md
+```
 
-1. **Никогда не правь live-файлы вне патчей** (I2). Любое изменение upstream-файла — через новый или отредактированный `.patch`.
-2. **После правки патча: revert-all → apply-all** (I3). Проверь `failed=0` в выводе `apply-dsh-overrides.sh`.
-3. **Golden-gate перед merge** (I4). Сьют должен быть GREEN на test-VM.
-4. **DEP-3 шапки обязательны** (I5). Каждый патч содержит: `Subsystem`, `Family`, `Status`, соответствие `PATCH-SERIES` ↔ файлам.
-5. **Новый патч = новая запись** в `PATCH-SERIES` + marker в `apply-dsh-overrides.sh`.
+## Contributors
+
+### Patch-stack rules
+
+1. Never edit live files outside patches (I2). Any change to an upstream file goes through a new or edited `.patch`.
+2. After editing a patch: revert-all → apply-all (I3). Check `failed=0` in `apply-dsh-overrides.sh` output.
+3. Golden-gate before merge (I4). Suite must be GREEN on the test VM.
+4. DEP-3 headers mandatory (I5). Each patch carries `Subsystem`, `Family`, `Status`, and the series↔files mapping.
+5. New patch = new entry in `PATCH-SERIES` + a marker in `apply-dsh-overrides.sh`.
 
 ### TDD
 
-Нетривиальная логика (ветвление, парсинг, вычисления) — сначала тесты (red), потом реализация (green). Тесты в `tests/`. Проверка синтаксиса через `node --check` после каждого изменения.
+Non-trivial logic (branching, parsing, calculations) — write tests first (red), then the implementation (green). Tests live in `tests/`. Run `node --check` after every change.
 
 ### Git
 
-- Коммить после каждого шага
-- Не коммитить секреты, `.env`, токены, большие логи
-- Push origin после завершения волны правок
+- Commit after each step.
+- Never commit secrets, `.env`, tokens, large logs.
+- Push origin after a wave of changes lands.
 
 ---
 
-*forkVersion: +p76 · upstream: @deepseek-harness-tui/dsh-tui@0.10.0-beta.4 · 12 подсистем SUBSYS.FF.B*
+forkVersion +p77 · upstream dsh-tui 0.10.0-beta.4 · 12 SUBSYS.FF.B subsystems · 9 core patches
